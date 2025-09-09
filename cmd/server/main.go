@@ -12,6 +12,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/httpserver"
 	"github.com/taoyao-code/iot-server/internal/logging"
 	"github.com/taoyao-code/iot-server/internal/metrics"
+	"github.com/taoyao-code/iot-server/internal/migrate"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"github.com/taoyao-code/iot-server/internal/tcpserver"
 
@@ -65,6 +66,15 @@ func main() {
 	} else {
 		ready.SetDBReady(true)
 		defer dbpool.Close()
+
+		// 8) 自动迁移（可选）
+		if cfg.Database.AutoMigrate {
+			if err = (migrate.Runner{Dir: "db/migrations"}).Up(context.Background(), dbpool); err != nil {
+				log.Error("db migrate error", zap.Error(err))
+			} else {
+				log.Info("db migrations applied")
+			}
+		}
 	}
 
 	// 信号处理，优雅关闭

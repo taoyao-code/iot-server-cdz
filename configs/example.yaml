@@ -33,6 +33,7 @@ database:
   maxOpenConns: 20
   maxIdleConns: 10
   connMaxLifetime: 1h
+  autoMigrate: false
 gateway:
   listen: "0.0.0.0:9000" # 设备 TCP 监听地址
   read_buffer_bytes: 32768 # 读缓冲（字节）

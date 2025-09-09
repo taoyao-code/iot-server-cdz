@@ -65,6 +65,7 @@ type DatabaseConfig struct {
 	MaxOpenConns    int           `mapstructure:"maxOpenConns"`
 	MaxIdleConns    int           `mapstructure:"maxIdleConns"`
 	ConnMaxLifetime time.Duration `mapstructure:"connMaxLifetime"`
+	AutoMigrate     bool          `mapstructure:"autoMigrate"`
 }
 
 // Config 顶层配置结构
@@ -149,4 +150,5 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.maxOpenConns", 20)
 	v.SetDefault("database.maxIdleConns", 10)
 	v.SetDefault("database.connMaxLifetime", "1h")
+	v.SetDefault("database.autoMigrate", false)
 }
