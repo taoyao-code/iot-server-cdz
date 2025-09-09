@@ -19,6 +19,13 @@ type HTTPConfig struct {
 	Addr         string        `mapstructure:"addr"`
 	ReadTimeout  time.Duration `mapstructure:"readTimeout"`
 	WriteTimeout time.Duration `mapstructure:"writeTimeout"`
+	Pprof        HTTPPprof     `mapstructure:"pprof"`
+}
+
+// HTTPPprof HTTP pprof 配置
+type HTTPPprof struct {
+	Enable bool   `mapstructure:"enable"`
+	Prefix string `mapstructure:"prefix"`
 }
 
 // TCPConfig TCP 网关配置
@@ -118,6 +125,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("http.addr", ":8080")
 	v.SetDefault("http.readTimeout", "5s")
 	v.SetDefault("http.writeTimeout", "10s")
+	v.SetDefault("http.pprof.enable", false)
+	v.SetDefault("http.pprof.prefix", "/debug/pprof")
 
 	v.SetDefault("tcp.addr", ":7000")
 	v.SetDefault("tcp.readTimeout", "5s")

@@ -7,6 +7,9 @@ http:
   addr: ":8080"
   readTimeout: 5s
   writeTimeout: 10s
+  pprof:
+    enable: false
+    prefix: /debug/pprof
 
 tcp:
   addr: ":7001"

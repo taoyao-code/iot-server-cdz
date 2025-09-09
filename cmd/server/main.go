@@ -8,9 +8,11 @@ import (
 	"time"
 
 	cfgpkg "github.com/taoyao-code/iot-server/internal/config"
+	"github.com/taoyao-code/iot-server/internal/health"
 	"github.com/taoyao-code/iot-server/internal/httpserver"
 	"github.com/taoyao-code/iot-server/internal/logging"
 	"github.com/taoyao-code/iot-server/internal/metrics"
+	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"github.com/taoyao-code/iot-server/internal/tcpserver"
 
 	"go.uber.org/zap"
@@ -36,10 +38,13 @@ func main() {
 	reg := metrics.NewRegistry()
 	metricsHandler := metrics.Handler(reg)
 
-	// 4) HTTP 服务
-	httpSrv := httpserver.New(cfg.HTTP, cfg.Metrics.Path, metricsHandler, func() bool { return true })
+	// 4) 就绪聚合
+	ready := health.New()
 
-	// 5) TCP 网关
+	// 5) HTTP 服务
+	httpSrv := httpserver.New(cfg.HTTP, cfg.Metrics.Path, metricsHandler, ready.Ready)
+
+	// 6) TCP 网关
 	tcpSrv := tcpserver.New(cfg.TCP)
 
 	// 并行启动
@@ -50,6 +55,16 @@ func main() {
 	}()
 	if err := tcpSrv.Start(); err != nil {
 		log.Fatal("tcp server start error", zap.Error(err))
+	}
+	ready.SetTCPReady(true)
+
+	// 7) 数据库连接
+	dbpool, err := pgstorage.NewPool(context.Background(), cfg.Database.DSN, cfg.Database.MaxOpenConns, cfg.Database.MaxIdleConns, cfg.Database.ConnMaxLifetime)
+	if err != nil {
+		log.Error("db connect error", zap.Error(err))
+	} else {
+		ready.SetDBReady(true)
+		defer dbpool.Close()
 	}
 
 	// 信号处理，优雅关闭

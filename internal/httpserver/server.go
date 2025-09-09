@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"net/http"
+	"net/http/pprof"
 
 	"github.com/gin-gonic/gin"
 	cfgpkg "github.com/taoyao-code/iot-server/internal/config"
@@ -33,6 +34,24 @@ func New(cfg cfgpkg.HTTPConfig, metricsPath string, metricsHandler http.Handler,
 	}
 	if metricsHandler != nil {
 		r.GET(metricsPath, gin.WrapH(metricsHandler))
+	}
+
+	// pprof（可选）
+	if cfg.Pprof.Enable {
+		prefix := cfg.Pprof.Prefix
+		if prefix == "" {
+			prefix = "/debug/pprof"
+		}
+		r.GET(prefix, gin.WrapH(http.HandlerFunc(pprof.Index)))
+		r.GET(prefix+"/cmdline", gin.WrapH(http.HandlerFunc(pprof.Cmdline)))
+		r.GET(prefix+"/profile", gin.WrapH(http.HandlerFunc(pprof.Profile)))
+		r.GET(prefix+"/symbol", gin.WrapH(http.HandlerFunc(pprof.Symbol)))
+		r.GET(prefix+"/trace", gin.WrapH(http.HandlerFunc(pprof.Trace)))
+		r.GET(prefix+"/heap", gin.WrapH(pprof.Handler("heap")))
+		r.GET(prefix+"/goroutine", gin.WrapH(pprof.Handler("goroutine")))
+		r.GET(prefix+"/threadcreate", gin.WrapH(pprof.Handler("threadcreate")))
+		r.GET(prefix+"/block", gin.WrapH(pprof.Handler("block")))
+		r.GET(prefix+"/allocs", gin.WrapH(pprof.Handler("allocs")))
 	}
 
 	srv := &http.Server{
