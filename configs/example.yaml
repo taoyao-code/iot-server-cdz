@@ -1,0 +1,84 @@
+# 集中配置清单（示例）。实际环境请以 ENV 覆盖敏感项。
+
+gateway:
+  listen: "0.0.0.0:9000" # 设备 TCP 监听地址
+  read_buffer_bytes: 32768 # 读缓冲（字节）
+  write_buffer_bytes: 32768 # 写缓冲（字节）
+  throttle_ms: 500 # 单设备下行节流（毫秒）
+  ack_timeout_ms: 15000 # 等待设备应答超时（毫秒）
+  retry_max: 1 # 下行重发次数
+  dead_retention_days: 7 # dead 队列保留天数
+  ip_whitelist: [] # 允许的源IP（CIDR或IP），为空表示不限制
+  device_whitelist: [] # 允许的设备（phyId/ICCID前缀），为空表示不限制
+
+session:
+  heartbeat_timeout_sec: 360 # 心跳超时判定（秒）
+  ack_grace_sec: 30 # ACK 宽限（秒）
+  hash_ring:
+    replicas: 128 # 一致性哈希虚拟节点数
+  token_bucket:
+    qps_per_device: 0 # 0 表示关闭设备级限速
+    global_qps: 0 # 0 表示关闭全局限速
+
+protocol:
+  legacy_01_enabled: false # AP3000：是否兼容01心跳
+  heartbeat_interval_sec: 180 # 心跳摘要窗口（秒）
+  ff_port_enabled: true # 是否启用FF智能端口
+  skip_short_check_mode: 2 # 短路检测策略：0=不检测，1=跳过，2=正常
+  max_duration_sec: 36000 # 充电最长时长上限（秒）
+  max_kwh: 9999 # 充电电量上限（0.01度）
+
+order:
+  timeout_sec: 900 # 订单等待回执/活动窗口（秒）
+
+upgrade:
+  batch_size: 50 # 升级批次设备数
+  window_size: 5 # 并发窗口
+  max_retries: 3 # 分片最大重试
+
+pg:
+  dsn: "postgres://user:pass@127.0.0.1:5432/iot?sslmode=disable" # 使用ENV覆盖
+  max_open: 50
+  max_idle: 10
+  conn_max_lifetime: "30m"
+  partitions:
+    keep_days: 30 # 日分区保留天数
+  batch:
+    max_rows: 500
+    max_bytes: 1048576 # 1MB
+
+wal:
+  scan_interval_sec: 5 # 冷启/定期续发扫描周期
+  dead_retention_days: 7
+
+metrics:
+  sample_ratio: 1.0 # 指标采样率
+  alerts:
+    enabled: true
+    thresholds:
+      p99_ms: 200
+      success_rate_min: 0.99 # 82成功率下限
+      resend_rate_max: 0.03 # 重发率上限
+      db_write_fail_rate_max: 0.001
+      queue_backlog_max: 10000
+
+thirdparty:
+  push:
+    webhook_url: ""
+    secret: "" # 使用ENV注入
+    max_retries: 5
+    backoff: "100ms,200ms,500ms,1s,2s"
+  auth:
+    api_keys: [] # 使用ENV注入
+  ip_whitelist: []
+
+security:
+  audit:
+    enabled: true
+    mask_fields: ["ICCID", "IMEI", "UID"]
+
+http:
+  listen: "0.0.0.0:8080" # 管理/第三方API监听（gin）
+  read_timeout: "5s"
+  write_timeout: "10s"
+  idle_timeout: "60s"
