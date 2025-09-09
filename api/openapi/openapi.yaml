@@ -1,0 +1,25 @@
+openapi: 3.0.3
+info:
+  title: iot-server API
+  version: 0.1.0
+paths:
+  /healthz:
+    get:
+      summary: 健康检查
+      responses:
+        "200":
+          description: ok
+  /readyz:
+    get:
+      summary: 就绪检查
+      responses:
+        "200":
+          description: ready
+        "503":
+          description: not ready
+  /metrics:
+    get:
+      summary: Prometheus 指标
+      responses:
+        "200":
+          description: metrics

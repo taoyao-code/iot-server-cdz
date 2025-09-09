@@ -1,5 +1,35 @@
 # 集中配置清单（示例）。实际环境请以 ENV 覆盖敏感项。
+app:
+  name: iot-server
+  env: dev
 
+http:
+  addr: ":8080"
+  readTimeout: 5s
+  writeTimeout: 10s
+
+tcp:
+  addr: ":7001"
+  readTimeout: 5s
+  writeTimeout: 10s
+  maxConnections: 5000
+  connectionBacklog: 1024
+
+logging:
+  level: info
+  format: json # json|console
+  file:
+    filename: logs/iot-server.log
+    maxSize: 100
+    maxBackups: 7
+    maxAge: 30
+    compress: true
+
+database:
+  dsn: postgres://postgres:postgres@localhost:5432/iot?sslmode=disable
+  maxOpenConns: 20
+  maxIdleConns: 10
+  connMaxLifetime: 1h
 gateway:
   listen: "0.0.0.0:9000" # 设备 TCP 监听地址
   read_buffer_bytes: 32768 # 读缓冲（字节）
@@ -52,6 +82,8 @@ wal:
   dead_retention_days: 7
 
 metrics:
+  enable: true
+  path: /metrics
   sample_ratio: 1.0 # 指标采样率
   alerts:
     enabled: true
@@ -76,9 +108,3 @@ security:
   audit:
     enabled: true
     mask_fields: ["ICCID", "IMEI", "UID"]
-
-http:
-  listen: "0.0.0.0:8080" # 管理/第三方API监听（gin）
-  read_timeout: "5s"
-  write_timeout: "10s"
-  idle_timeout: "60s"
