@@ -1,0 +1,26 @@
+---
+globs: docs/架构/**,docs/协议/**
+description: 架构与协议文档的阅读路径与实现映射建议
+---
+
+## 阅读路径
+
+1. 先读 [docs/架构/架构设计.md](mdc:docs/架构/架构设计.md) 获取整体蓝图。
+2. 根据关注点选择专题：
+   - 通讯与路由：[docs/架构/会话与路由.md](mdc:docs/架构/会话与路由.md)
+   - 接入与协议扩展：[docs/架构/接入网关.md](mdc:docs/架构/接入网关.md)、[docs/架构/协议插件.md](mdc:docs/架构/协议插件.md)
+   - 数据与持久化：[docs/架构/持久化-PG.md](mdc:docs/架构/持久化-PG.md)
+   - 运营可观测性：[docs/架构/管理与观测.md](mdc:docs/架构/管理与观测.md)
+   - 对外与集成：[docs/架构/第三方对接.md](mdc:docs/架构/第三方对接.md)
+
+## 协议实现提示
+
+- 设备/主机协议差异需在设计中抽象为协议插件或适配层：
+  - 设备侧协议示例： [docs/协议/AP3000-设备与服务器通信协议.md](mdc:docs/协议/AP3000-设备与服务器通信协议.md)
+  - 主机对接： [docs/协议/主机-服务器通信协议.md](mdc:docs/协议/主机-服务器通信协议.md)
+  - 解析规则统一： [docs/协议/protocol_parsing_standard.md](mdc:docs/协议/protocol_parsing_standard.md)
+
+## 变更与追踪
+
+- 新增协议或扩展，请更新 `docs/协议` 目录并在此文件补充链接。
+- 若引入代码实现，请在相关文档中标注代码路径，便于 AI 导航。

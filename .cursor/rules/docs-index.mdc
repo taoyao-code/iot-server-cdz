@@ -1,0 +1,41 @@
+---
+globs: docs/**
+description: 为 docs 下文档提供索引、优先阅读顺序与交叉引用
+---
+
+## 文档索引与优先顺序
+
+- 架构总览：优先阅读 [docs/架构/架构设计.md](mdc:docs/架构/架构设计.md)
+- 体系与能力：
+  - 会话与路由：[docs/架构/会话与路由.md](mdc:docs/架构/会话与路由.md)
+  - 接入网关：[docs/架构/接入网关.md](mdc:docs/架构/接入网关.md)
+  - 协议插件：[docs/架构/协议插件.md](mdc:docs/架构/协议插件.md)
+  - 持久化（PG）：[docs/架构/持久化-PG.md](mdc:docs/架构/持久化-PG.md)
+  - 领域服务：[docs/架构/领域服务.md](mdc:docs/架构/领域服务.md)
+  - 管理与观测：[docs/架构/管理与观测.md](mdc:docs/架构/管理与观测.md)
+  - 第三方对接：[docs/架构/第三方对接.md](mdc:docs/架构/第三方对接.md)
+
+- 协议相关：
+  - 设备协议（示例：AP3000）：[docs/协议/AP3000-设备与服务器通信协议.md](mdc:docs/协议/AP3000-设备与服务器通信协议.md)
+  - 主机-服务器协议：[docs/协议/主机-服务器通信协议.md](mdc:docs/协议/主机-服务器通信协议.md)
+  - 解析标准与对接：
+    - [docs/协议/protocol_parsing_standard.md](mdc:docs/协议/protocol_parsing_standard.md)
+    - [docs/协议/对接硬件.md](mdc:docs/协议/对接硬件.md)
+    - [docs/协议/设备对接指引-组网设备2024(1).txt](mdc:docs/协议/设备对接指引-组网设备2024(1).txt)
+
+- 计划与实施：
+  - 阶段实施计划：[docs/实施计划.md](mdc:docs/实施计划.md)
+  - 分专题计划：
+    - [docs/计划/会话与路由.md](mdc:docs/计划/会话与路由.md)
+    - [docs/计划/协议插件.md](mdc:docs/计划/协议插件.md)
+    - [docs/计划/持久化-PG.md](mdc:docs/计划/持久化-PG.md)
+    - [docs/计划/接入网关.md](mdc:docs/计划/接入网关.md)
+    - [docs/计划/第三方对接.md](mdc:docs/计划/第三方对接.md)
+    - [docs/计划/管理与观测.md](mdc:docs/计划/管理与观测.md)
+    - [docs/计划/领域服务.md](mdc:docs/计划/领域服务.md)
+
+## 使用建议
+
+1. 新增文档请根据上述分类放置，并在本规则中补充索引。
+2. 交叉引用时优先使用 `(mdc:...)` 形式，确保 AI 能跟随。
+3. 若文档与实现代码建立映射关系，请在文档内标注文件路径。

@@ -1,0 +1,20 @@
+---
+globs: configs/*.yaml,configs/*.yml
+description: 配置文件命名、示例与扩展约定
+---
+
+## 配置示例
+
+- 示例文件：[configs/example.yaml](mdc:configs/example.yaml)
+- 新增配置请以 `example.yaml` 为参考，保持键名风格与分层结构一致。
+
+## 约定
+
+- 优先使用 `.yaml` 后缀，`.yml` 兼容。
+- 避免在配置中写入敏感凭证；使用环境变量或密钥管理。
+- 对应的实现或脚本应在 README 或文档中注明配置键的含义与默认值。
+
+## 变更指引
+
+- 修改配置结构时，同步更新示例文件与相关文档（如 `docs/架构/接入网关.md`）。
+- 若引入新的子系统配置，请在 `overview.mdc` 中补充指引入口。
