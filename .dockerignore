@@ -1,0 +1,13 @@
+.git
+.gitignore
+.cursor
+**/.DS_Store
+**/node_modules
+**/bin
+**/*.log
+**/*.tmp
+**/.idea
+**/.vscode
+**/.env*
+
+
