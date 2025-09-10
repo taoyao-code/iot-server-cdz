@@ -36,3 +36,16 @@ func (m *Manager) IsOnline(phyID string, now time.Time) bool {
 	}
 	return now.Sub(ts) <= m.timeout
 }
+
+// OnlineCount 返回当前在线设备数量
+func (m *Manager) OnlineCount(now time.Time) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	count := 0
+	for _, ts := range m.lastSeen {
+		if now.Sub(ts) <= m.timeout {
+			count++
+		}
+	}
+	return count
+}

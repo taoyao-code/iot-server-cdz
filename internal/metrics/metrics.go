@@ -29,6 +29,8 @@ type AppMetrics struct {
 	TCPBytesReceived prometheus.Counter
 	AP3000ParseTotal *prometheus.CounterVec // labels: result=ok|error
 	AP3000RouteTotal *prometheus.CounterVec // labels: cmd
+	OnlineGauge      prometheus.Gauge       // 当前在线设备数
+	HeartbeatTotal   prometheus.Counter     // 心跳计数
 }
 
 // NewAppMetrics 注册并返回业务指标
@@ -50,7 +52,15 @@ func NewAppMetrics(reg *prometheus.Registry) *AppMetrics {
 			Name: "ap3000_route_total",
 			Help: "AP3000 routed frames by command.",
 		}, []string{"cmd"}),
+		OnlineGauge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "session_online_count",
+			Help: "Current number of online devices.",
+		}),
+		HeartbeatTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "session_heartbeat_total",
+			Help: "Total heartbeats observed.",
+		}),
 	}
-	reg.MustRegister(m.TCPAccepted, m.TCPBytesReceived, m.AP3000ParseTotal, m.AP3000RouteTotal)
+	reg.MustRegister(m.TCPAccepted, m.TCPBytesReceived, m.AP3000ParseTotal, m.AP3000RouteTotal, m.OnlineGauge, m.HeartbeatTotal)
 	return m
 }

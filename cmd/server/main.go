@@ -50,8 +50,13 @@ func main() {
 	// 会话管理
 	sess := session.New(6 * time.Minute)
 
-	// 5) HTTP 服务
-	httpSrv := httpserver.New(cfg.HTTP, cfg.Metrics.Path, metricsHandler, ready.Ready)
+	// 5) HTTP 服务（ready 由闭包计算）
+	readyFn := func() bool {
+		// 占位阈值：在线数量>=0，即只要 DB/TCP Ready 则返回 ready；
+		// 后续可从配置读取阈值
+		return ready.Ready()
+	}
+	httpSrv := httpserver.New(cfg.HTTP, cfg.Metrics.Path, metricsHandler, readyFn)
 
 	// 6) TCP 网关
 	tcpSrv := tcpserver.New(cfg.TCP)
@@ -63,10 +68,14 @@ func main() {
 	var handlerSet *ap3000.Handlers // repo 初始化后再赋值
 	router.Register(0x20, func(f *ap3000.Frame) error {
 		sess.OnHeartbeat(f.PhyID, time.Now())
+		appm.HeartbeatTotal.Inc()
+		appm.OnlineGauge.Set(float64(sess.OnlineCount(time.Now())))
 		return handlerSet.HandleRegister(context.Background(), f)
 	})
 	router.Register(0x21, func(f *ap3000.Frame) error {
 		sess.OnHeartbeat(f.PhyID, time.Now())
+		appm.HeartbeatTotal.Inc()
+		appm.OnlineGauge.Set(float64(sess.OnlineCount(time.Now())))
 		return handlerSet.HandleHeartbeat(context.Background(), f)
 	})
 	router.Register(0x22, func(f *ap3000.Frame) error { return handlerSet.HandleGeneric(context.Background(), f) })
