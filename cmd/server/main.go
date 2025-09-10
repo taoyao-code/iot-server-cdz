@@ -16,6 +16,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/migrate"
 	"github.com/taoyao-code/iot-server/internal/outbound"
 	"github.com/taoyao-code/iot-server/internal/protocol/ap3000"
+	"github.com/taoyao-code/iot-server/internal/session"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"github.com/taoyao-code/iot-server/internal/tcpserver"
 
@@ -46,6 +47,9 @@ func main() {
 	// 4) 就绪聚合
 	ready := health.New()
 
+	// 会话管理
+	sess := session.New(6 * time.Minute)
+
 	// 5) HTTP 服务
 	httpSrv := httpserver.New(cfg.HTTP, cfg.Metrics.Path, metricsHandler, ready.Ready)
 
@@ -57,8 +61,14 @@ func main() {
 	router := ap3000.NewTable()
 	// 占位：注册常用指令
 	var handlerSet *ap3000.Handlers // repo 初始化后再赋值
-	router.Register(0x20, func(f *ap3000.Frame) error { return handlerSet.HandleRegister(context.Background(), f) })
-	router.Register(0x21, func(f *ap3000.Frame) error { return handlerSet.HandleHeartbeat(context.Background(), f) })
+	router.Register(0x20, func(f *ap3000.Frame) error {
+		sess.OnHeartbeat(f.PhyID, time.Now())
+		return handlerSet.HandleRegister(context.Background(), f)
+	})
+	router.Register(0x21, func(f *ap3000.Frame) error {
+		sess.OnHeartbeat(f.PhyID, time.Now())
+		return handlerSet.HandleHeartbeat(context.Background(), f)
+	})
 	router.Register(0x22, func(f *ap3000.Frame) error { return handlerSet.HandleGeneric(context.Background(), f) })
 	router.Register(0x12, func(f *ap3000.Frame) error { return handlerSet.HandleGeneric(context.Background(), f) })
 	router.Register(0x82, func(f *ap3000.Frame) error { return handlerSet.HandleGeneric(context.Background(), f) })
