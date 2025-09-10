@@ -12,14 +12,16 @@ import (
 
 // Server TCP 网关最小实现
 type Server struct {
-	cfg     cfgpkg.TCPConfig
-	ln      net.Listener
-	wg      sync.WaitGroup
-	stopC   chan struct{}
-	handler func([]byte)
+	cfg         cfgpkg.TCPConfig
+	ln          net.Listener
+	wg          sync.WaitGroup
+	stopC       chan struct{}
+	handler     func([]byte)
+	connHandler func(*ConnContext)
 	// 可选指标回调
 	onAccept    func()
 	onRecvBytes func(n int)
+	nextConnID  uint64
 }
 
 // New 创建 TCP 网关
@@ -29,6 +31,9 @@ func New(cfg cfgpkg.TCPConfig) *Server {
 
 // SetHandler 设置上行报文处理回调（raw bytes）
 func (s *Server) SetHandler(h func([]byte)) { s.handler = h }
+
+// SetConnHandler 设置连接级回调（提供写能力与生命周期）
+func (s *Server) SetConnHandler(h func(*ConnContext)) { s.connHandler = h }
 
 // SetMetricsCallbacks 设置指标回调
 func (s *Server) SetMetricsCallbacks(onAccept func(), onRecvBytes func(int)) {
@@ -62,6 +67,20 @@ func (s *Server) Start() error {
 				s.onAccept()
 			}
 
+			if s.connHandler != nil {
+				// 新接口：连接上下文 + 读写分离
+				s.wg.Add(1)
+				go func(c net.Conn) {
+					defer s.wg.Done()
+					ctx := newConnContext(s, c)
+					// 允许上层为该连接安装专属 onRead/绑定会话等
+					s.connHandler(ctx)
+					ctx.run()
+				}(conn)
+				continue
+			}
+
+			// 兼容旧接口（raw bytes handler）
 			s.wg.Add(1)
 			go func(c net.Conn) {
 				defer s.wg.Done()

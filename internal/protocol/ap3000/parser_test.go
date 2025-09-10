@@ -21,8 +21,11 @@ func makeFrame(phy string, msgID uint16, cmd byte, data []byte) []byte {
 	buf = append(buf, mid...)
 	buf = append(buf, cmd)
 	buf = append(buf, data...)
-	// 简化：sum 恒为 0
-	buf = append(buf, 0x00, 0x00)
+	// 计算校验和（低16位），覆盖除末尾校验字段以外的所有字节
+	s := checksum16(buf)
+	sb := make([]byte, 2)
+	binary.LittleEndian.PutUint16(sb, s)
+	buf = append(buf, sb...)
 	return buf
 }
 

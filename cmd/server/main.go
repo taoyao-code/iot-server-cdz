@@ -62,7 +62,7 @@ func main() {
 	tcpSrv := tcpserver.New(cfg.TCP)
 	tcpSrv.SetMetricsCallbacks(func() { appm.TCPAccepted.Inc() }, func(n int) { appm.TCPBytesReceived.Add(float64(n)) })
 
-	// 接线：读取到的原始数据，尝试按 AP3000 解析并路由（占位实现）
+	// 接线：读取到的原始数据，尝试按 AP3000 解析并路由
 	router := ap3000.NewTable()
 	// 占位：注册常用指令
 	var handlerSet *ap3000.Handlers // repo 初始化后再赋值
@@ -84,14 +84,31 @@ func main() {
 	router.Register(0x03, func(f *ap3000.Frame) error { return handlerSet.HandleGeneric(context.Background(), f) })
 	router.Register(0x06, func(f *ap3000.Frame) error { return handlerSet.HandleGeneric(context.Background(), f) })
 
-	tcpSrv.SetHandler(func(raw []byte) {
-		if fr, err := ap3000.Parse(raw); err == nil {
-			appm.AP3000ParseTotal.WithLabelValues("ok").Inc()
-			appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", fr.Cmd)).Inc()
-			_ = router.Route(fr)
-		} else {
-			appm.AP3000ParseTotal.WithLabelValues("error").Inc()
-		}
+	// 使用连接级处理器 + 流式解码器
+	tcpSrv.SetConnHandler(func(cc *tcpserver.ConnContext) {
+		dec := ap3000.NewStreamDecoder(1024)
+		var boundPhy string
+		cc.SetOnRead(func(b []byte) {
+			frames, _ := dec.Feed(b)
+			for _, fr := range frames {
+				// 绑定连接与物理ID（注册/心跳）
+				if fr.Cmd == 0x20 || fr.Cmd == 0x21 {
+					if boundPhy != fr.PhyID {
+						boundPhy = fr.PhyID
+						sess.Bind(fr.PhyID, cc)
+					}
+				}
+				appm.AP3000ParseTotal.WithLabelValues("ok").Inc()
+				appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", fr.Cmd)).Inc()
+				_ = router.Route(fr)
+			}
+		})
+		go func() {
+			<-cc.Done()
+			if boundPhy != "" {
+				sess.UnbindByPhy(boundPhy)
+			}
+		}()
 	})
 
 	// 并行启动
