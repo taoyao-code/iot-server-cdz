@@ -2,13 +2,17 @@ package ap3000
 
 import (
 	"context"
-
-	pgrepo "github.com/taoyao-code/iot-server/internal/storage/pg"
 )
+
+// repoAPI 抽象便于单测替换
+type repoAPI interface {
+	EnsureDevice(ctx context.Context, phyID string) (int64, error)
+	InsertCmdLog(ctx context.Context, deviceID int64, msgID int, cmd int, direction int16, payload []byte, success bool) error
+}
 
 // Handlers 最小处理器集合（示例：记录心跳/注册与指令日志）
 type Handlers struct {
-	Repo *pgrepo.Repository
+	Repo repoAPI
 }
 
 func (h *Handlers) HandleRegister(ctx context.Context, f *Frame) error {
