@@ -22,3 +22,35 @@ func NewRegistry() *prometheus.Registry {
 func Handler(reg *prometheus.Registry) http.Handler {
 	return promhttp.HandlerFor(reg, promhttp.HandlerOpts{Registry: reg})
 }
+
+// AppMetrics 自定义业务指标
+type AppMetrics struct {
+	TCPAccepted      prometheus.Counter
+	TCPBytesReceived prometheus.Counter
+	AP3000ParseTotal *prometheus.CounterVec // labels: result=ok|error
+	AP3000RouteTotal *prometheus.CounterVec // labels: cmd
+}
+
+// NewAppMetrics 注册并返回业务指标
+func NewAppMetrics(reg *prometheus.Registry) *AppMetrics {
+	m := &AppMetrics{
+		TCPAccepted: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "tcp_accept_total",
+			Help: "Total accepted TCP connections.",
+		}),
+		TCPBytesReceived: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "tcp_bytes_received_total",
+			Help: "Total bytes received over TCP.",
+		}),
+		AP3000ParseTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "ap3000_parse_total",
+			Help: "AP3000 frame parse attempts.",
+		}, []string{"result"}),
+		AP3000RouteTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "ap3000_route_total",
+			Help: "AP3000 routed frames by command.",
+		}, []string{"cmd"}),
+	}
+	reg.MustRegister(m.TCPAccepted, m.TCPBytesReceived, m.AP3000ParseTotal, m.AP3000RouteTotal)
+	return m
+}

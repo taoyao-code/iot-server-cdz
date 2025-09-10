@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +14,8 @@ import (
 	"github.com/taoyao-code/iot-server/internal/logging"
 	"github.com/taoyao-code/iot-server/internal/metrics"
 	"github.com/taoyao-code/iot-server/internal/migrate"
+	"github.com/taoyao-code/iot-server/internal/outbound"
+	"github.com/taoyao-code/iot-server/internal/protocol/ap3000"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"github.com/taoyao-code/iot-server/internal/tcpserver"
 
@@ -38,6 +41,7 @@ func main() {
 	// 3) 指标注册与处理器
 	reg := metrics.NewRegistry()
 	metricsHandler := metrics.Handler(reg)
+	appm := metrics.NewAppMetrics(reg)
 
 	// 4) 就绪聚合
 	ready := health.New()
@@ -47,6 +51,29 @@ func main() {
 
 	// 6) TCP 网关
 	tcpSrv := tcpserver.New(cfg.TCP)
+	tcpSrv.SetMetricsCallbacks(func() { appm.TCPAccepted.Inc() }, func(n int) { appm.TCPBytesReceived.Add(float64(n)) })
+
+	// 接线：读取到的原始数据，尝试按 AP3000 解析并路由（占位实现）
+	router := ap3000.NewTable()
+	// 占位：注册常用指令
+	var handlerSet *ap3000.Handlers // repo 初始化后再赋值
+	router.Register(0x20, func(f *ap3000.Frame) error { return handlerSet.HandleRegister(context.Background(), f) })
+	router.Register(0x21, func(f *ap3000.Frame) error { return handlerSet.HandleHeartbeat(context.Background(), f) })
+	router.Register(0x22, func(f *ap3000.Frame) error { return handlerSet.HandleGeneric(context.Background(), f) })
+	router.Register(0x12, func(f *ap3000.Frame) error { return handlerSet.HandleGeneric(context.Background(), f) })
+	router.Register(0x82, func(f *ap3000.Frame) error { return handlerSet.HandleGeneric(context.Background(), f) })
+	router.Register(0x03, func(f *ap3000.Frame) error { return handlerSet.HandleGeneric(context.Background(), f) })
+	router.Register(0x06, func(f *ap3000.Frame) error { return handlerSet.HandleGeneric(context.Background(), f) })
+
+	tcpSrv.SetHandler(func(raw []byte) {
+		if fr, err := ap3000.Parse(raw); err == nil {
+			appm.AP3000ParseTotal.WithLabelValues("ok").Inc()
+			appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", fr.Cmd)).Inc()
+			_ = router.Route(fr)
+		} else {
+			appm.AP3000ParseTotal.WithLabelValues("error").Inc()
+		}
+	})
 
 	// 并行启动
 	go func() {
@@ -65,6 +92,8 @@ func main() {
 		log.Error("db connect error", zap.Error(err))
 	} else {
 		ready.SetDBReady(true)
+		repo := &pgstorage.Repository{Pool: dbpool}
+		handlerSet = &ap3000.Handlers{Repo: repo}
 		defer dbpool.Close()
 
 		// 8) 自动迁移（可选）
@@ -75,6 +104,12 @@ func main() {
 				log.Info("db migrations applied")
 			}
 		}
+
+		// 9) 启动下行 worker（占位）
+		wctx, wcancel := context.WithCancel(context.Background())
+		defer wcancel()
+		outw := outbound.New(dbpool)
+		go outw.Run(wctx)
 	}
 
 	// 信号处理，优雅关闭

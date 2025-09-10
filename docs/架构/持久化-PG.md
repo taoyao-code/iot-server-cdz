@@ -39,6 +39,18 @@
 - `pg.batch.max_rows`、`pg.batch.max_bytes`
 - `wal.scan_interval_sec`、`wal.dead_retention_days`
 
+### 9. 实现映射（代码路径与自动迁移）
+
+- 代码路径：
+  - 连接池：`internal/storage/pg/pool.go`
+  - 迁移执行器：`internal/migrate/runner.go`（扫描 `db/migrations/*_up.sql`）
+  - 迁移脚本：`db/migrations/0001_init_{up,down}.sql`
+  - 主程序接线：`cmd/server/main.go`（`database.autoMigrate` 控制）
+
+- 配置键（对应 `configs/example.yaml`）：
+  - `database.dsn`, `database.maxOpenConns`, `database.maxIdleConns`, `database.connMaxLifetime`
+  - `database.autoMigrate`（默认 false）
+
 ### 9. 运维要点
 
 - 定期 VACUUM/ANALYZE；检查膨胀与热点索引；监控复制与磁盘空间。
