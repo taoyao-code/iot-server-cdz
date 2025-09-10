@@ -9,6 +9,9 @@ type fakeRepo struct {
 	ensureDeviceID int64
 	error          error
 	logs           int
+	upserts        int
+	lastPort       int
+	lastStatus     int
 }
 
 func (f *fakeRepo) EnsureDevice(ctx context.Context, phyID string) (int64, error) {
@@ -20,15 +23,25 @@ func (f *fakeRepo) InsertCmdLog(ctx context.Context, deviceID int64, msgID int, 
 	return f.error
 }
 
+func (f *fakeRepo) UpsertPortState(ctx context.Context, deviceID int64, portNo int, status int, powerW *int) error {
+	f.upserts++
+	f.lastPort = portNo
+	f.lastStatus = status
+	return f.error
+}
+
 func TestHandlers_RegisterAndHeartbeat(t *testing.T) {
 	fr := &fakeRepo{ensureDeviceID: 42}
 	h := &Handlers{Repo: fr}
-	f := &Frame{PhyID: "ABC", MsgID: 0x1234, Cmd: 0x20, Data: []byte{0x01}}
+	f := &Frame{PhyID: "ABC", MsgID: 0x1234, Cmd: 0x20, Data: []byte{2, 1}}
 	if err := h.HandleRegister(context.Background(), f); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if fr.logs != 1 {
 		t.Fatalf("expected 1 log, got %d", fr.logs)
+	}
+	if fr.upserts != 1 || fr.lastPort != 2 || fr.lastStatus != 1 {
+		t.Fatalf("upsert not called or wrong data")
 	}
 	f.Cmd = 0x21
 	if err := h.HandleHeartbeat(context.Background(), f); err != nil {
