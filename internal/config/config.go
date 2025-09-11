@@ -68,14 +68,35 @@ type DatabaseConfig struct {
 	AutoMigrate     bool          `mapstructure:"autoMigrate"`
 }
 
+// ThirdpartyPushConfig 第三方推送配置
+type ThirdpartyPushConfig struct {
+	WebhookURL string `mapstructure:"webhook_url"`
+	Secret     string `mapstructure:"secret"`
+	MaxRetries int    `mapstructure:"max_retries"`
+	Backoff    string `mapstructure:"backoff"`
+}
+
+// ThirdpartyAuthConfig 第三方鉴权（入站）
+type ThirdpartyAuthConfig struct {
+	APIKeys []string `mapstructure:"api_keys"`
+}
+
+// ThirdpartyConfig 第三方集成配置
+type ThirdpartyConfig struct {
+	Push        ThirdpartyPushConfig `mapstructure:"push"`
+	Auth        ThirdpartyAuthConfig `mapstructure:"auth"`
+	IPWhitelist []string             `mapstructure:"ip_whitelist"`
+}
+
 // Config 顶层配置结构
 type Config struct {
-	App      AppConfig      `mapstructure:"app"`
-	HTTP     HTTPConfig     `mapstructure:"http"`
-	TCP      TCPConfig      `mapstructure:"tcp"`
-	Logging  LoggingConfig  `mapstructure:"logging"`
-	Metrics  MetricsConfig  `mapstructure:"metrics"`
-	Database DatabaseConfig `mapstructure:"database"`
+	App        AppConfig        `mapstructure:"app"`
+	HTTP       HTTPConfig       `mapstructure:"http"`
+	TCP        TCPConfig        `mapstructure:"tcp"`
+	Logging    LoggingConfig    `mapstructure:"logging"`
+	Metrics    MetricsConfig    `mapstructure:"metrics"`
+	Database   DatabaseConfig   `mapstructure:"database"`
+	Thirdparty ThirdpartyConfig `mapstructure:"thirdparty"`
 }
 
 // Load 从 YAML/TOML/JSON 文件与环境变量加载配置。
@@ -151,4 +172,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.maxIdleConns", 10)
 	v.SetDefault("database.connMaxLifetime", "1h")
 	v.SetDefault("database.autoMigrate", false)
+
+	// thirdparty defaults
+	v.SetDefault("thirdparty.push.webhook_url", "")
+	v.SetDefault("thirdparty.push.secret", "")
+	v.SetDefault("thirdparty.push.max_retries", 5)
+	v.SetDefault("thirdparty.push.backoff", "100ms,200ms,500ms,1s,2s")
 }

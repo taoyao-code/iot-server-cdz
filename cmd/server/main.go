@@ -22,6 +22,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/session"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"github.com/taoyao-code/iot-server/internal/tcpserver"
+	"github.com/taoyao-code/iot-server/internal/thirdparty"
 
 	"go.uber.org/zap"
 )
@@ -215,7 +216,16 @@ func main() {
 	} else {
 		ready.SetDBReady(true)
 		repo = &pgstorage.Repository{Pool: dbpool}
-		handlerSet = &ap3000.Handlers{Repo: repo}
+		// 可选第三方推送器注入（依据配置 thirdparty.push.webhook_url/secret）
+		var pusher interface {
+			SendJSON(ctx context.Context, endpoint string, payload any) (int, []byte, error)
+		}
+		var pushURL string
+		if cfg.Thirdparty.Push.WebhookURL != "" && cfg.Thirdparty.Push.Secret != "" {
+			pusher = thirdparty.NewPusher(nil, "", cfg.Thirdparty.Push.Secret)
+			pushURL = cfg.Thirdparty.Push.WebhookURL
+		}
+		handlerSet = &ap3000.Handlers{Repo: repo, Pusher: pusher, PushURL: pushURL}
 		defer dbpool.Close()
 
 		// 8) 自动迁移（可选）

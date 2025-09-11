@@ -2,6 +2,7 @@ package ap3000
 
 import (
 	"context"
+	"time"
 )
 
 // repoAPI 抽象便于单测替换
@@ -17,6 +18,11 @@ type repoAPI interface {
 // Handlers 最小处理器集合（示例：记录心跳/注册与指令日志）
 type Handlers struct {
 	Repo repoAPI
+	// 可选：第三方推送
+	Pusher interface {
+		SendJSON(ctx context.Context, endpoint string, payload any) (int, []byte, error)
+	}
+	PushURL string
 }
 
 func (h *Handlers) HandleRegister(ctx context.Context, f *Frame) error {
@@ -59,10 +65,28 @@ func (h *Handlers) Handle03(ctx context.Context, f *Frame) error {
 		return err
 	}
 	s, derr := Decode03(f.Data)
-	if derr == nil && s != nil {
+	success := derr == nil && s != nil
+	if success {
 		_ = h.Repo.SettleOrder(ctx, devID, s.Port, s.OrderHex, s.DurationSec, s.Kwh01, s.Reason)
+		// 异步第三方推送（可选）
+		if h.Pusher != nil && h.PushURL != "" {
+			payload := map[string]any{
+				"event":       "charge.settlement",
+				"devicePhyId": f.PhyID,
+				"timestamp":   time.Now().Unix(),
+				"nonce":       f.PhyID,
+				"data": map[string]any{
+					"port":        s.Port,
+					"order":       s.OrderHex,
+					"durationSec": s.DurationSec,
+					"kwh01":       s.Kwh01,
+					"reason":      s.Reason,
+				},
+			}
+			go func() { _, _, _ = h.Pusher.SendJSON(context.Background(), h.PushURL, payload) }()
+		}
 	}
-	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, f.Data, derr == nil)
+	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, f.Data, success)
 }
 
 // Handle06 功率心跳：更新订单进度与端口状态

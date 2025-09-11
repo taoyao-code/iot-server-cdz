@@ -23,3 +23,47 @@ paths:
       responses:
         "200":
           description: metrics
+  /thirdparty/events/test-sign:
+    post:
+      summary: 第三方回调签名验证（回环）
+      description: 仅用于联调验签；生产不启用
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: ok
+components:
+  securitySchemes:
+    ApiKeyHmac:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+  schemas:
+    ThirdpartyEvent:
+      type: object
+      required: [event, devicePhyId, timestamp, data, nonce]
+      properties:
+        event:
+          type: string
+          description: 事件类型，例如 charge.settlement, device.heartbeat
+        devicePhyId:
+          type: string
+        timestamp:
+          type: integer
+        nonce:
+          type: string
+          description: 随机字符串，防重放
+        data:
+          type: object
+          additionalProperties: true
+  x-signature:
+    algorithm: HMAC-SHA256
+    header:
+      - X-Api-Key: 平台分配的API Key
+      - X-Signature: hex(HMAC-SHA256(secret, canonicalString))
+    canonicalString:
+      - method + "\n" + path + "\n" + timestamp + "\n" + nonce + "\n" + bodySha256Hex
