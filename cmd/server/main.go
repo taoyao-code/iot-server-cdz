@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	cfgpkg "github.com/taoyao-code/iot-server/internal/config"
 	"github.com/taoyao-code/iot-server/internal/health"
 	"github.com/taoyao-code/iot-server/internal/httpserver"
@@ -111,6 +114,89 @@ func main() {
 		}()
 	})
 
+	// repo 声明（在 DB 成功后赋值）
+	var repo *pgstorage.Repository
+
+	// 并行启动 HTTP（提前注册 API）
+	apiToken := os.Getenv("IOT_HTTP_TOKEN")
+	httpSrv.Register(func(r *gin.Engine) {
+		api := r.Group("/api", func(c *gin.Context) {
+			if apiToken != "" && c.GetHeader("X-Api-Token") != apiToken {
+				c.AbortWithStatus(http.StatusUnauthorized)
+				return
+			}
+		})
+		api.GET("/devices", func(c *gin.Context) {
+			limit := 100
+			offset := 0
+			if v := c.Query("limit"); v != "" {
+				if n, err := strconv.Atoi(v); err == nil {
+					limit = n
+				}
+			}
+			if v := c.Query("offset"); v != "" {
+				if n, err := strconv.Atoi(v); err == nil {
+					offset = n
+				}
+			}
+			if repo != nil {
+				items, err := repo.ListDevices(c.Request.Context(), limit, offset)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, items)
+				return
+			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "repo not ready"})
+		})
+		api.GET("/devices/:phyID/ports", func(c *gin.Context) {
+			phy := c.Param("phyID")
+			if repo != nil {
+				items, err := repo.ListPortsByPhyID(c.Request.Context(), phy)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+				c.JSON(http.StatusOK, items)
+				return
+			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "repo not ready"})
+		})
+		api.POST("/commands", func(c *gin.Context) {
+			var req struct {
+				PhyID         string  `json:"phyID"`
+				PortNo        *int    `json:"portNo"`
+				Cmd           int     `json:"cmd"`
+				Payload       []byte  `json:"payload"`
+				Priority      int     `json:"priority"`
+				CorrelationID *string `json:"correlationID"`
+				TimeoutSec    int     `json:"timeoutSec"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			if repo == nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "repo not ready"})
+				return
+			}
+			// resolve device id
+			devID, err := repo.EnsureDevice(c.Request.Context(), req.PhyID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			phy := req.PhyID
+			id, err := repo.EnqueueOutbox(c.Request.Context(), devID, &phy, req.PortNo, req.Cmd, req.Payload, req.Priority, req.CorrelationID, nil, req.TimeoutSec)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"id": id, "correlationID": req.CorrelationID})
+		})
+	})
+
 	// 并行启动
 	go func() {
 		if err := httpSrv.Start(); err != nil {
@@ -128,7 +214,7 @@ func main() {
 		log.Error("db connect error", zap.Error(err))
 	} else {
 		ready.SetDBReady(true)
-		repo := &pgstorage.Repository{Pool: dbpool}
+		repo = &pgstorage.Repository{Pool: dbpool}
 		handlerSet = &ap3000.Handlers{Repo: repo}
 		defer dbpool.Close()
 
@@ -145,6 +231,10 @@ func main() {
 		wctx, wcancel := context.WithCancel(context.Background())
 		defer wcancel()
 		outw := outbound.New(dbpool)
+		outw.SetGetConn(func(phyID string) (interface{}, bool) {
+			c, ok := sess.GetConn(phyID)
+			return c, ok
+		})
 		go outw.Run(wctx)
 	}
 

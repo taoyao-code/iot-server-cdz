@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/taoyao-code/iot-server/internal/protocol/ap3000"
 )
 
 // Worker 最小下行队列消费者（占位：仅标记已发送/完成）
@@ -13,11 +14,16 @@ type Worker struct {
 	Interval  time.Duration
 	BatchSize int
 	Throttle  time.Duration
+	// 获取连接：返回具有 Write([]byte) error 能力的对象
+	GetConn func(phyID string) (interface{}, bool)
 }
 
 func New(db *pgxpool.Pool) *Worker {
 	return &Worker{DB: db, Interval: time.Second, BatchSize: 50, Throttle: 500 * time.Millisecond}
 }
+
+// SetGetConn 安装连接获取函数
+func (w *Worker) SetGetConn(fn func(phyID string) (interface{}, bool)) { w.GetConn = fn }
 
 func (w *Worker) Run(ctx context.Context) {
 	ticker := time.NewTicker(w.Interval)
@@ -37,7 +43,7 @@ func (w *Worker) tick(ctx context.Context) {
 		return
 	}
 	// 选取待发送任务（status=0）
-	rows, err := w.DB.Query(ctx, `SELECT id, device_id, port_no, cmd, payload FROM outbound_queue
+	rows, err := w.DB.Query(ctx, `SELECT id, phy_id, cmd, payload FROM outbound_queue
         WHERE status=0 AND (not_before IS NULL OR not_before<=NOW())
         ORDER BY priority, created_at
         LIMIT $1`, w.BatchSize)
@@ -47,18 +53,41 @@ func (w *Worker) tick(ctx context.Context) {
 	defer rows.Close()
 	for rows.Next() {
 		var id int64
-		var deviceID int64
-		var portNo *int32
+		var phyID *string
 		var cmd int
 		var payload []byte
-		if err := rows.Scan(&id, &deviceID, &portNo, &cmd, &payload); err != nil {
+		if err := rows.Scan(&id, &phyID, &cmd, &payload); err != nil {
 			continue
 		}
 
-		// 占位：直接标记为 sent->done
-		_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET status=1 WHERE id=$1`, id)
-		// 模拟发送耗时与节流
+		if phyID == nil || w.GetConn == nil {
+			// 无法发送：回退重试
+			_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET retry_count=retry_count+1, not_before=NOW()+INTERVAL '3 seconds'*GREATEST(retry_count,1) WHERE id=$1`, id)
+			continue
+		}
+		conn, ok := w.GetConn(*phyID)
+		if !ok {
+			_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET retry_count=retry_count+1, not_before=NOW()+INTERVAL '3 seconds'*GREATEST(retry_count,1) WHERE id=$1`, id)
+			continue
+		}
+		type writer interface{ Write([]byte) error }
+		wconn, ok := conn.(writer)
+		if !ok {
+			// 类型不匹配，标记失败
+			_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET status=3, last_error='no writer', updated_at=NOW() WHERE id=$1`, id)
+			continue
+		}
+		// 生成下行帧（msgID 用队列ID截断）
+		msgID := uint16(id & 0xFFFF)
+		frame := ap3000.Build(*phyID, msgID, byte(cmd), payload)
+		if err := wconn.Write(frame); err != nil {
+			// 写失败，回退重试
+			_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET retry_count=retry_count+1, not_before=NOW()+INTERVAL '3 seconds'*GREATEST(retry_count,1), last_error=$2 WHERE id=$1`, id, err.Error())
+			continue
+		}
+		// 标记已发送，等待回执更新为 done
+		_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET status=1, updated_at=NOW() WHERE id=$1`, id)
+		// 节流
 		time.Sleep(w.Throttle)
-		_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET status=2 WHERE id=$1`, id)
 	}
 }

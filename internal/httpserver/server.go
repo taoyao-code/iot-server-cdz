@@ -12,6 +12,7 @@ import (
 // Server HTTP 服务封装
 type Server struct {
 	srv *http.Server
+	r   *gin.Engine
 }
 
 // New 创建并配置 Gin + HTTP Server，注册健康检查与指标路由
@@ -60,7 +61,7 @@ func New(cfg cfgpkg.HTTPConfig, metricsPath string, metricsHandler http.Handler,
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,
 	}
-	return &Server{srv: srv}
+	return &Server{srv: srv, r: r}
 }
 
 // Start 启动 HTTP 服务（阻塞）
@@ -71,4 +72,12 @@ func (s *Server) Start() error {
 // Shutdown 优雅关闭
 func (s *Server) Shutdown(ctx context.Context) error {
 	return s.srv.Shutdown(ctx)
+}
+
+// Register 允许外部注册自定义路由
+func (s *Server) Register(fn func(*gin.Engine)) {
+	if s == nil || s.r == nil || fn == nil {
+		return
+	}
+	fn(s.r)
 }
