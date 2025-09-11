@@ -19,6 +19,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/migrate"
 	"github.com/taoyao-code/iot-server/internal/outbound"
 	"github.com/taoyao-code/iot-server/internal/protocol/ap3000"
+	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 	"github.com/taoyao-code/iot-server/internal/session"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"github.com/taoyao-code/iot-server/internal/tcpserver"
@@ -90,12 +91,34 @@ func main() {
 
 	// 使用连接级处理器 + 流式解码器
 	tcpSrv.SetConnHandler(func(cc *tcpserver.ConnContext) {
-		dec := ap3000.NewStreamDecoder(1024)
+		apdec := ap3000.NewStreamDecoder(1024)
+		bkvdec := bkv.NewStreamDecoder()
 		var boundPhy string
 		cc.SetOnRead(func(b []byte) {
-			frames, _ := dec.Feed(b)
+			// 简单首帧判别：AP3000='D''N''Y'；BKV=fcfe/fcff
+			if len(b) >= 3 && b[0] == 'D' && b[1] == 'N' && b[2] == 'Y' {
+				frames, _ := apdec.Feed(b)
+				for _, fr := range frames {
+					if fr.Cmd == 0x20 || fr.Cmd == 0x21 {
+						if boundPhy != fr.PhyID {
+							boundPhy = fr.PhyID
+							sess.Bind(fr.PhyID, cc)
+						}
+					}
+					appm.AP3000ParseTotal.WithLabelValues("ok").Inc()
+					appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", fr.Cmd)).Inc()
+					_ = router.Route(fr)
+				}
+				return
+			}
+			if len(b) >= 2 && b[0] == 0xFC && (b[1] == 0xFE || b[1] == 0xFF) {
+				frames, _ := bkvdec.Feed(b)
+				_ = frames // TODO: 接 BKV 路由表
+				return
+			}
+			// 默认回退到 AP3000 解码
+			frames, _ := apdec.Feed(b)
 			for _, fr := range frames {
-				// 绑定连接与物理ID（注册/心跳）
 				if fr.Cmd == 0x20 || fr.Cmd == 0x21 {
 					if boundPhy != fr.PhyID {
 						boundPhy = fr.PhyID

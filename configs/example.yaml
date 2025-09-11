@@ -101,9 +101,12 @@ metrics:
 thirdparty:
   push:
     webhook_url: ""
-    secret: "" # 使用ENV注入
+    secret: "" # 使用ENV注入；用于 HMAC-SHA256 签名
     max_retries: 5
     backoff: "100ms,200ms,500ms,1s,2s"
+    # 签名规范：
+    # - canonical: METHOD + "\n" + PATH + "\n" + X-Timestamp + "\n" + X-Nonce + "\n" + sha256Hex(body)
+    # - header: X-Api-Key, X-Signature, X-Timestamp, X-Nonce
   auth:
     api_keys: [] # 使用ENV注入
   ip_whitelist: []
