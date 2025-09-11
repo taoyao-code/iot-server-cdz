@@ -10,3 +10,7 @@ func (f *fakeRepo) UpsertOrderProgress(ctx context.Context, deviceID int64, port
 func (f *fakeRepo) SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, reason int) error {
 	return f.error
 }
+
+func (f *fakeRepo) AckOutboundByMsgID(ctx context.Context, deviceID int64, msgID int, ok bool, errCode *int) error {
+	return f.error
+}

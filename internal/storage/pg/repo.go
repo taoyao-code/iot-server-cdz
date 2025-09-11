@@ -49,22 +49,38 @@ func (r *Repository) UpsertPortState(ctx context.Context, deviceID int64, portNo
 
 // UpsertOrderProgress 插入或更新进行中的订单进度（根据 order_no 唯一键或冲突更新）
 func (r *Repository) UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, status int, powerW01 *int) error {
-    const q = `INSERT INTO orders (device_id, port_no, order_no, start_time, status, kwh_0p01)
+	const q = `INSERT INTO orders (device_id, port_no, order_no, start_time, status, kwh_0p01)
                VALUES ($1,$2,$3,NOW(),$4,$5)
                ON CONFLICT (order_no)
                DO UPDATE SET status=EXCLUDED.status, kwh_0p01=EXCLUDED.kwh_0p01, updated_at=NOW()`
-    _, err := r.Pool.Exec(ctx, q, deviceID, portNo, orderHex, 1, kwh01)
-    return err
+	_, err := r.Pool.Exec(ctx, q, deviceID, portNo, orderHex, 1, kwh01)
+	return err
 }
 
 // SettleOrder 结算订单（结束时间、耗电、金额占位、结束原因）
 func (r *Repository) SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, reason int) error {
-    const q = `INSERT INTO orders (device_id, port_no, order_no, start_time, end_time, kwh_0p01, status)
+	const q = `INSERT INTO orders (device_id, port_no, order_no, start_time, end_time, kwh_0p01, status)
                VALUES ($1,$2,$3,NOW()-($4||' seconds')::interval, NOW(), $5, 2)
                ON CONFLICT (order_no)
                DO UPDATE SET end_time=NOW(), kwh_0p01=$5, status=2, updated_at=NOW()`
-    _, err := r.Pool.Exec(ctx, q, deviceID, portNo, orderHex, durationSec, kwh01)
-    return err
+	_, err := r.Pool.Exec(ctx, q, deviceID, portNo, orderHex, durationSec, kwh01)
+	return err
+}
+
+// AckOutboundByMsgID 根据 device_id+msg_id 标记下行队列完成或失败
+func (r *Repository) AckOutboundByMsgID(ctx context.Context, deviceID int64, msgID int, ok bool, errCode *int) error {
+	if ok {
+		_, err := r.Pool.Exec(ctx, `UPDATE outbound_queue SET status=2, updated_at=NOW() WHERE device_id=$1 AND msg_id=$2`, deviceID, msgID)
+		return err
+	}
+	var code interface{}
+	if errCode != nil {
+		code = *errCode
+	} else {
+		code = nil
+	}
+	_, err := r.Pool.Exec(ctx, `UPDATE outbound_queue SET status=3, last_error=COALESCE(last_error,'')||' ack_err='||COALESCE($3::text,'unknown'), updated_at=NOW() WHERE device_id=$1 AND msg_id=$2`, deviceID, msgID, code)
+	return err
 }
 
 // Device 设备基本信息（用于查询）

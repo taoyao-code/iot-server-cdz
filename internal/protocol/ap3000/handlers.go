@@ -11,6 +11,7 @@ type repoAPI interface {
 	UpsertPortState(ctx context.Context, deviceID int64, portNo int, status int, powerW *int) error
 	UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, status int, powerW01 *int) error
 	SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, reason int) error
+	AckOutboundByMsgID(ctx context.Context, deviceID int64, msgID int, ok bool, errCode *int) error
 }
 
 // Handlers 最小处理器集合（示例：记录心跳/注册与指令日志）
@@ -79,4 +80,23 @@ func (h *Handlers) Handle06(ctx context.Context, f *Frame) error {
 		_ = h.Repo.UpsertPortState(ctx, devID, p.Port, p.Status, nil)
 	}
 	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, f.Data, derr == nil)
+}
+
+// Handle82Ack 处理 82 设备应答：根据 MsgID 标记下行任务完成/失败
+func (h *Handlers) Handle82Ack(ctx context.Context, f *Frame) error {
+	if h == nil || h.Repo == nil {
+		return nil
+	}
+	devID, err := h.Repo.EnsureDevice(ctx, f.PhyID)
+	if err != nil {
+		return err
+	}
+	code, derr := Decode82Ack(f.Data)
+	ok := derr == nil && code == 0
+	var ecode *int
+	if !ok {
+		ecode = &code
+	}
+	_ = h.Repo.AckOutboundByMsgID(ctx, devID, int(f.MsgID), ok, ecode)
+	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, f.Data, ok)
 }

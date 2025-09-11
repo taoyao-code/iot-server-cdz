@@ -83,7 +83,7 @@ func main() {
 	})
 	router.Register(0x22, func(f *ap3000.Frame) error { return handlerSet.HandleGeneric(context.Background(), f) })
 	router.Register(0x12, func(f *ap3000.Frame) error { return handlerSet.HandleGeneric(context.Background(), f) })
-	router.Register(0x82, func(f *ap3000.Frame) error { return handlerSet.HandleGeneric(context.Background(), f) })
+	router.Register(0x82, func(f *ap3000.Frame) error { return handlerSet.Handle82Ack(context.Background(), f) })
 	router.Register(0x03, func(f *ap3000.Frame) error { return handlerSet.Handle03(context.Background(), f) })
 	router.Register(0x06, func(f *ap3000.Frame) error { return handlerSet.Handle06(context.Background(), f) })
 
