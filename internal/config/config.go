@@ -43,6 +43,19 @@ type ProtocolsConfig struct {
 	EnableBKV    bool `mapstructure:"enable_bkv"`
 }
 
+// GatewayConfig 设备接入网关与出站相关配置
+type GatewayConfig struct {
+	Listen            string   `mapstructure:"listen"`
+	ReadBufferBytes   int      `mapstructure:"read_buffer_bytes"`
+	WriteBufferBytes  int      `mapstructure:"write_buffer_bytes"`
+	ThrottleMs        int      `mapstructure:"throttle_ms"`
+	AckTimeoutMs      int      `mapstructure:"ack_timeout_ms"`
+	RetryMax          int      `mapstructure:"retry_max"`
+	DeadRetentionDays int      `mapstructure:"dead_retention_days"`
+	IPWhitelist       []string `mapstructure:"ip_whitelist"`
+	DeviceWhitelist   []string `mapstructure:"device_whitelist"`
+}
+
 // LumberjackConfig 日志滚动（lumberjack）配置
 type LumberjackConfig struct {
 	Filename   string `mapstructure:"filename"`
@@ -100,6 +113,7 @@ type Config struct {
 	HTTP       HTTPConfig       `mapstructure:"http"`
 	TCP        TCPConfig        `mapstructure:"tcp"`
 	Protocols  ProtocolsConfig  `mapstructure:"protocols"`
+	Gateway    GatewayConfig    `mapstructure:"gateway"`
 	Logging    LoggingConfig    `mapstructure:"logging"`
 	Metrics    MetricsConfig    `mapstructure:"metrics"`
 	Database   DatabaseConfig   `mapstructure:"database"`
@@ -163,9 +177,20 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tcp.maxConnections", 5000)
 	v.SetDefault("tcp.connectionBacklog", 1024)
 
-	// 协议默认：开启 AP3000 和 BKV
+	// 协议默认
 	v.SetDefault("protocols.enable_ap3000", true)
 	v.SetDefault("protocols.enable_bkv", true)
+
+	// 网关与出站默认
+	v.SetDefault("gateway.listen", ":9000")
+	v.SetDefault("gateway.read_buffer_bytes", 32768)
+	v.SetDefault("gateway.write_buffer_bytes", 32768)
+	v.SetDefault("gateway.throttle_ms", 500)
+	v.SetDefault("gateway.ack_timeout_ms", 15000)
+	v.SetDefault("gateway.retry_max", 1)
+	v.SetDefault("gateway.dead_retention_days", 7)
+	v.SetDefault("gateway.ip_whitelist", []string{})
+	v.SetDefault("gateway.device_whitelist", []string{})
 
 	v.SetDefault("logging.level", "info")
 	v.SetDefault("logging.format", "json")

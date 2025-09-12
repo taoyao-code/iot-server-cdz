@@ -68,6 +68,9 @@ func main() {
 	tcpSrv := tcpserver.New(cfg.TCP)
 	tcpSrv.SetMetricsCallbacks(func() { appm.TCPAccepted.Inc() }, func(n int) { appm.TCPBytesReceived.Add(float64(n)) })
 
+	// repo 声明（在 DB 成功后赋值）
+	var repo *pgstorage.Repository
+
 	// 使用连接级处理器 + 多协议复用器（首帧初判 -> 固定协议处理）
 	var handlerSet *ap3000.Handlers // repo 初始化后再赋值（handler 内部已判空）
 	tcpSrv.SetConnHandler(func(cc *tcpserver.ConnContext) {
@@ -80,11 +83,13 @@ func main() {
 			apAdapter = ap3000.NewAdapter()
 			adapters = append(adapters, apAdapter)
 		}
+		var bkvAdapter *bkv.Adapter
 		if cfg.Protocols.EnableBKV {
-			adapters = append(adapters, bkv.NewAdapter())
+			bkvAdapter = bkv.NewAdapter()
+			adapters = append(adapters, bkvAdapter)
 		}
 
-		// 绑定维持：在收到 0x20/0x21 心跳/注册时，绑定 phy -> 连接
+		// 绑定维持：在收到 0x20/0x21 心跳/注册时，绑定 phy -> 连接（BKV 暂用占位）
 		var boundPhy string
 		bindIfNeeded := func(phy string) {
 			if boundPhy != phy {
@@ -133,7 +138,14 @@ func main() {
 			})
 		}
 
-		// 复用器绑定到连接（按首包前缀选择协议，后续直通处理）
+		// BKV：最小处理器注册（占位指令 0x10 心跳，0x11 状态）
+		if bkvAdapter != nil {
+			bh := &bkv.Handlers{Repo: repo}
+			bkvAdapter.Register(0x10, func(f *bkv.Frame) error { return bh.HandleHeartbeat(context.Background(), f) })
+			bkvAdapter.Register(0x11, func(f *bkv.Frame) error { return bh.HandleStatus(context.Background(), f) })
+		}
+
+		// 复用器绑定到连接
 		mux := tcpserver.NewMux(adapters...)
 		mux.BindToConn(cc)
 
@@ -145,9 +157,6 @@ func main() {
 			}
 		}()
 	})
-
-	// repo 声明（在 DB 成功后赋值）
-	var repo *pgstorage.Repository
 
 	// 并行启动 HTTP（提前注册 API）
 	apiToken := os.Getenv("IOT_HTTP_TOKEN")
@@ -268,10 +277,14 @@ func main() {
 			}
 		}
 
-		// 9) 启动下行 worker（占位）
+		// 9) 启动下行 worker（接入配置）
 		wctx, wcancel := context.WithCancel(context.Background())
 		defer wcancel()
 		outw := outbound.New(dbpool)
+		outw.Throttle = time.Duration(cfg.Gateway.ThrottleMs) * time.Millisecond
+		if cfg.Gateway.RetryMax > 0 {
+			outw.MaxRetries = cfg.Gateway.RetryMax
+		}
 		outw.SetGetConn(func(phyID string) (interface{}, bool) {
 			c, ok := sess.GetConn(phyID)
 			return c, ok
