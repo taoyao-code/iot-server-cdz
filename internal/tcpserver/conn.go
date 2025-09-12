@@ -16,16 +16,19 @@ type ConnContext struct {
 	closed int32
 	onRead func([]byte)
 	doneC  chan struct{}
+	proto  atomic.Value // string: 协议标记，如 "ap3000" | "bkv"
 }
 
 func newConnContext(s *Server, c net.Conn) *ConnContext {
-	return &ConnContext{
+	cc := &ConnContext{
 		s:      s,
 		c:      c,
 		id:     atomic.AddUint64(&s.nextConnID, 1),
 		writeC: make(chan []byte, 128),
 		doneC:  make(chan struct{}),
 	}
+	cc.proto.Store("")
+	return cc
 }
 
 // ID 返回连接ID（单进程唯一递增）
@@ -36,6 +39,17 @@ func (cc *ConnContext) RemoteAddr() net.Addr { return cc.c.RemoteAddr() }
 
 // SetOnRead 安装读取回调（收到上行原始字节时触发）
 func (cc *ConnContext) SetOnRead(h func([]byte)) { cc.onRead = h }
+
+// SetProtocol 设置连接所使用的协议标记（在 Mux 决策后调用）
+func (cc *ConnContext) SetProtocol(p string) { cc.proto.Store(p) }
+
+// Protocol 返回连接的协议标记
+func (cc *ConnContext) Protocol() string {
+	v := cc.proto.Load()
+	if v == nil { return "" }
+	if s, ok := v.(string); ok { return s }
+	return ""
+}
 
 // Write 异步写入，受写队列与写超时影响
 func (cc *ConnContext) Write(b []byte) error {

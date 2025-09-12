@@ -6,14 +6,15 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/taoyao-code/iot-server/internal/protocol/ap3000"
+	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 )
 
 // Worker 最小下行队列消费者（占位：仅标记已发送/完成）
 type Worker struct {
-	DB        *pgxpool.Pool
-	Interval  time.Duration
-	BatchSize int
-	Throttle  time.Duration
+	DB         *pgxpool.Pool
+	Interval   time.Duration
+	BatchSize  int
+	Throttle   time.Duration
 	MaxRetries int
 	// 获取连接：返回具有 Write([]byte) error 能力的对象
 	GetConn func(phyID string) (interface{}, bool)
@@ -73,16 +74,25 @@ func (w *Worker) tick(ctx context.Context) {
 			_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET retry_count=retry_count+1, not_before=NOW()+INTERVAL '3 seconds'*GREATEST(retry_count,1) WHERE id=$1`, id)
 			continue
 		}
-		type writer interface{ Write([]byte) error }
+		type writer interface {
+			Write([]byte) error
+			Protocol() string
+		}
 		wconn, ok := conn.(writer)
 		if !ok {
 			// 类型不匹配，标记失败
 			_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET status=3, last_error='no writer', updated_at=NOW() WHERE id=$1`, id)
 			continue
 		}
-		// 生成下行帧（msgID 用队列ID截断）
+		// 生成下行帧（根据协议选择编码）
 		msgID := uint16(id & 0xFFFF)
-		frame := ap3000.Build(*phyID, msgID, byte(cmd), payload)
+		var frame []byte
+		switch wconn.Protocol() {
+		case "bkv":
+			frame = bkv.Build(byte(cmd), payload)
+		default:
+			frame = ap3000.Build(*phyID, msgID, byte(cmd), payload)
+		}
 		if err := wconn.Write(frame); err != nil {
 			// 写失败，回退重试
 			_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET retry_count=retry_count+1, not_before=NOW()+INTERVAL '3 seconds'*GREATEST(retry_count,1), last_error=$2 WHERE id=$1`, id, err.Error())

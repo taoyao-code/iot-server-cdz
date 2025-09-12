@@ -2,6 +2,8 @@ package tcpserver
 
 import (
 	padapter "github.com/taoyao-code/iot-server/internal/protocol/adapter"
+	ap "github.com/taoyao-code/iot-server/internal/protocol/ap3000"
+	bk "github.com/taoyao-code/iot-server/internal/protocol/bkv"
 )
 
 // Mux 多协议复用器：首帧初判 -> 绑定协议 -> 直通处理
@@ -26,6 +28,15 @@ func (m *Mux) BindToConn(cc *ConnContext) {
 				if a.Sniff(pref) {
 					aa := a
 					handler = func(b []byte) { _ = aa.ProcessBytes(b) }
+					// 标记协议
+					switch aa.(type) {
+					case *ap.Adapter:
+						cc.SetProtocol("ap3000")
+					case *bk.Adapter:
+						cc.SetProtocol("bkv")
+					default:
+						cc.SetProtocol("")
+					}
 					decided = true
 					break
 				}
@@ -38,8 +49,6 @@ func (m *Mux) BindToConn(cc *ConnContext) {
 				return
 			}
 		}
-		if handler != nil {
-			handler(p)
-		}
+		if handler != nil { handler(p) }
 	})
 }
