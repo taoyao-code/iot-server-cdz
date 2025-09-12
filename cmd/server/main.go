@@ -3,14 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	cfgpkg "github.com/taoyao-code/iot-server/internal/config"
 	"github.com/taoyao-code/iot-server/internal/health"
 	"github.com/taoyao-code/iot-server/internal/httpserver"
@@ -138,11 +135,12 @@ func main() {
 			})
 		}
 
-		// BKV：最小处理器注册（占位指令 0x10 心跳，0x11 状态）
+		// BKV：最小处理器注册（0x10 心跳，0x11 状态，占位 0x30 结算）
 		if bkvAdapter != nil {
-			bh := &bkv.Handlers{Repo: repo}
+			bh := &bkv.Handlers{Repo: repo, Reason: &bkv.ReasonMap{Map: map[int]int{2: 102}}}
 			bkvAdapter.Register(0x10, func(f *bkv.Frame) error { return bh.HandleHeartbeat(context.Background(), f) })
 			bkvAdapter.Register(0x11, func(f *bkv.Frame) error { return bh.HandleStatus(context.Background(), f) })
+			bkvAdapter.Register(0x30, func(f *bkv.Frame) error { return bh.HandleSettle(context.Background(), f) })
 		}
 
 		// 复用器绑定到连接
@@ -156,86 +154,6 @@ func main() {
 				sess.UnbindByPhy(boundPhy)
 			}
 		}()
-	})
-
-	// 并行启动 HTTP（提前注册 API）
-	apiToken := os.Getenv("IOT_HTTP_TOKEN")
-	httpSrv.Register(func(r *gin.Engine) {
-		api := r.Group("/api", func(c *gin.Context) {
-			if apiToken != "" && c.GetHeader("X-Api-Token") != apiToken {
-				c.AbortWithStatus(http.StatusUnauthorized)
-				return
-			}
-		})
-		api.GET("/devices", func(c *gin.Context) {
-			limit := 100
-			offset := 0
-			if v := c.Query("limit"); v != "" {
-				if n, err := strconv.Atoi(v); err == nil {
-					limit = n
-				}
-			}
-			if v := c.Query("offset"); v != "" {
-				if n, err := strconv.Atoi(v); err == nil {
-					offset = n
-				}
-			}
-			if repo != nil {
-				items, err := repo.ListDevices(c.Request.Context(), limit, offset)
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-					return
-				}
-				c.JSON(http.StatusOK, items)
-				return
-			}
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "repo not ready"})
-		})
-		api.GET("/devices/:phyID/ports", func(c *gin.Context) {
-			phy := c.Param("phyID")
-			if repo != nil {
-				items, err := repo.ListPortsByPhyID(c.Request.Context(), phy)
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-					return
-				}
-				c.JSON(http.StatusOK, items)
-				return
-			}
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "repo not ready"})
-		})
-		api.POST("/commands", func(c *gin.Context) {
-			var req struct {
-				PhyID         string  `json:"phyID"`
-				PortNo        *int    `json:"portNo"`
-				Cmd           int     `json:"cmd"`
-				Payload       []byte  `json:"payload"`
-				Priority      int     `json:"priority"`
-				CorrelationID *string `json:"correlationID"`
-				TimeoutSec    int     `json:"timeoutSec"`
-			}
-			if err := c.BindJSON(&req); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-				return
-			}
-			if repo == nil {
-				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "repo not ready"})
-				return
-			}
-			// resolve device id
-			devID, err := repo.EnsureDevice(c.Request.Context(), req.PhyID)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			phy := req.PhyID
-			id, err := repo.EnqueueOutbox(c.Request.Context(), devID, &phy, req.PortNo, req.Cmd, req.Payload, req.Priority, req.CorrelationID, nil, req.TimeoutSec)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"id": id, "correlationID": req.CorrelationID})
-		})
 	})
 
 	// 并行启动
