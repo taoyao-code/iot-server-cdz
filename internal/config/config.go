@@ -37,6 +37,12 @@ type TCPConfig struct {
 	ConnectionBacklog int           `mapstructure:"connectionBacklog"`
 }
 
+// ProtocolsConfig 协议启用配置
+type ProtocolsConfig struct {
+	EnableAP3000 bool `mapstructure:"enable_ap3000"`
+	EnableBKV    bool `mapstructure:"enable_bkv"`
+}
+
 // LumberjackConfig 日志滚动（lumberjack）配置
 type LumberjackConfig struct {
 	Filename   string `mapstructure:"filename"`
@@ -93,6 +99,7 @@ type Config struct {
 	App        AppConfig        `mapstructure:"app"`
 	HTTP       HTTPConfig       `mapstructure:"http"`
 	TCP        TCPConfig        `mapstructure:"tcp"`
+	Protocols  ProtocolsConfig  `mapstructure:"protocols"`
 	Logging    LoggingConfig    `mapstructure:"logging"`
 	Metrics    MetricsConfig    `mapstructure:"metrics"`
 	Database   DatabaseConfig   `mapstructure:"database"`
@@ -155,6 +162,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tcp.writeTimeout", "10s")
 	v.SetDefault("tcp.maxConnections", 5000)
 	v.SetDefault("tcp.connectionBacklog", 1024)
+
+	// 协议默认：开启 AP3000 和 BKV
+	v.SetDefault("protocols.enable_ap3000", true)
+	v.SetDefault("protocols.enable_bkv", true)
 
 	v.SetDefault("logging.level", "info")
 	v.SetDefault("logging.format", "json")

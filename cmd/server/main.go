@@ -18,6 +18,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/metrics"
 	"github.com/taoyao-code/iot-server/internal/migrate"
 	"github.com/taoyao-code/iot-server/internal/outbound"
+	"github.com/taoyao-code/iot-server/internal/protocol/adapter"
 	"github.com/taoyao-code/iot-server/internal/protocol/ap3000"
 	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 	"github.com/taoyao-code/iot-server/internal/session"
@@ -70,9 +71,18 @@ func main() {
 	// 使用连接级处理器 + 多协议复用器（首帧初判 -> 固定协议处理）
 	var handlerSet *ap3000.Handlers // repo 初始化后再赋值（handler 内部已判空）
 	tcpSrv.SetConnHandler(func(cc *tcpserver.ConnContext) {
+		// 构造启用的适配器列表
+		var adapters []adapter.Adapter
+
 		// 每个连接独立的协议适配器（持有各自的解码缓冲）
-		apAdapter := ap3000.NewAdapter()
-		bkvAdapter := bkv.NewAdapter()
+		var apAdapter *ap3000.Adapter
+		if cfg.Protocols.EnableAP3000 {
+			apAdapter = ap3000.NewAdapter()
+			adapters = append(adapters, apAdapter)
+		}
+		if cfg.Protocols.EnableBKV {
+			adapters = append(adapters, bkv.NewAdapter())
+		}
 
 		// 绑定维持：在收到 0x20/0x21 心跳/注册时，绑定 phy -> 连接
 		var boundPhy string
@@ -83,46 +93,48 @@ func main() {
 			}
 		}
 
-		// 注册 AP3000 路由处理器，并更新指标
-		apAdapter.Register(0x20, func(f *ap3000.Frame) error {
-			bindIfNeeded(f.PhyID)
-			sess.OnHeartbeat(f.PhyID, time.Now())
-			appm.HeartbeatTotal.Inc()
-			appm.OnlineGauge.Set(float64(sess.OnlineCount(time.Now())))
-			appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
-			return handlerSet.HandleRegister(context.Background(), f)
-		})
-		apAdapter.Register(0x21, func(f *ap3000.Frame) error {
-			bindIfNeeded(f.PhyID)
-			sess.OnHeartbeat(f.PhyID, time.Now())
-			appm.HeartbeatTotal.Inc()
-			appm.OnlineGauge.Set(float64(sess.OnlineCount(time.Now())))
-			appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
-			return handlerSet.HandleHeartbeat(context.Background(), f)
-		})
-		apAdapter.Register(0x22, func(f *ap3000.Frame) error {
-			appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
-			return handlerSet.HandleGeneric(context.Background(), f)
-		})
-		apAdapter.Register(0x12, func(f *ap3000.Frame) error {
-			appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
-			return handlerSet.HandleGeneric(context.Background(), f)
-		})
-		apAdapter.Register(0x82, func(f *ap3000.Frame) error {
-			appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
-			return handlerSet.Handle82Ack(context.Background(), f)
-		})
-		apAdapter.Register(0x03, func(f *ap3000.Frame) error {
-			appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
-			return handlerSet.Handle03(context.Background(), f)
-		})
-		apAdapter.Register(0x06, func(f *ap3000.Frame) error {
-			appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
-			return handlerSet.Handle06(context.Background(), f)
-		})
+		// 仅当启用了 AP3000 时注册路由处理器与指标
+		if apAdapter != nil {
+			apAdapter.Register(0x20, func(f *ap3000.Frame) error {
+				bindIfNeeded(f.PhyID)
+				sess.OnHeartbeat(f.PhyID, time.Now())
+				appm.HeartbeatTotal.Inc()
+				appm.OnlineGauge.Set(float64(sess.OnlineCount(time.Now())))
+				appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+				return handlerSet.HandleRegister(context.Background(), f)
+			})
+			apAdapter.Register(0x21, func(f *ap3000.Frame) error {
+				bindIfNeeded(f.PhyID)
+				sess.OnHeartbeat(f.PhyID, time.Now())
+				appm.HeartbeatTotal.Inc()
+				appm.OnlineGauge.Set(float64(sess.OnlineCount(time.Now())))
+				appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+				return handlerSet.HandleHeartbeat(context.Background(), f)
+			})
+			apAdapter.Register(0x22, func(f *ap3000.Frame) error {
+				appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+				return handlerSet.HandleGeneric(context.Background(), f)
+			})
+			apAdapter.Register(0x12, func(f *ap3000.Frame) error {
+				appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+				return handlerSet.HandleGeneric(context.Background(), f)
+			})
+			apAdapter.Register(0x82, func(f *ap3000.Frame) error {
+				appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+				return handlerSet.Handle82Ack(context.Background(), f)
+			})
+			apAdapter.Register(0x03, func(f *ap3000.Frame) error {
+				appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+				return handlerSet.Handle03(context.Background(), f)
+			})
+			apAdapter.Register(0x06, func(f *ap3000.Frame) error {
+				appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+				return handlerSet.Handle06(context.Background(), f)
+			})
+		}
 
 		// 复用器绑定到连接（按首包前缀选择协议，后续直通处理）
-		mux := tcpserver.NewMux(apAdapter, bkvAdapter)
+		mux := tcpserver.NewMux(adapters...)
 		mux.BindToConn(cc)
 
 		// 连接关闭时解除绑定

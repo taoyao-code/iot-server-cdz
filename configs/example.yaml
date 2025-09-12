@@ -18,6 +18,10 @@ tcp:
   maxConnections: 5000
   connectionBacklog: 1024
 
+protocols:
+  enable_ap3000: true
+  enable_bkv: true
+
 logging:
   level: info
   format: json # json|console
