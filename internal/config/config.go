@@ -39,8 +39,14 @@ type TCPConfig struct {
 
 // ProtocolsConfig 协议启用配置
 type ProtocolsConfig struct {
-	EnableAP3000 bool `mapstructure:"enable_ap3000"`
-	EnableBKV    bool `mapstructure:"enable_bkv"`
+	EnableAP3000 bool      `mapstructure:"enable_ap3000"`
+	EnableBKV    bool      `mapstructure:"enable_bkv"`
+	BKV          BKVConfig `mapstructure:"bkv"`
+}
+
+// BKVConfig BKV 协议配置
+type BKVConfig struct {
+	ReasonMapPath string `mapstructure:"reason_map_path"`
 }
 
 // GatewayConfig 设备接入网关与出站相关配置
@@ -180,6 +186,7 @@ func setDefaults(v *viper.Viper) {
 	// 协议默认
 	v.SetDefault("protocols.enable_ap3000", true)
 	v.SetDefault("protocols.enable_bkv", true)
+	v.SetDefault("protocols.bkv.reason_map_path", "configs/bkv-reason-map.example.yaml")
 
 	// 网关与出站默认
 	v.SetDefault("gateway.listen", ":9000")

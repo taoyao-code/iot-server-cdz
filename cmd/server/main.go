@@ -55,8 +55,6 @@ func main() {
 
 	// 5) HTTP 服务（ready 由闭包计算）
 	readyFn := func() bool {
-		// 占位阈值：在线数量>=0，即只要 DB/TCP Ready 则返回 ready；
-		// 后续可从配置读取阈值
 		return ready.Ready()
 	}
 	httpSrv := httpserver.New(cfg.HTTP, cfg.Metrics.Path, metricsHandler, readyFn)
@@ -68,13 +66,20 @@ func main() {
 	// repo 声明（在 DB 成功后赋值）
 	var repo *pgstorage.Repository
 
+	// 预加载 BKV 原因映射（可选）
+	var bkvReason *bkv.ReasonMap
+	if cfg.Protocols.EnableBKV && cfg.Protocols.BKV.ReasonMapPath != "" {
+		if rm, e := bkv.LoadReasonMap(cfg.Protocols.BKV.ReasonMapPath); e == nil {
+			bkvReason = rm
+		} else {
+			log.Warn("load bkv reason map failed", zap.Error(e))
+		}
+	}
+
 	// 使用连接级处理器 + 多协议复用器（首帧初判 -> 固定协议处理）
 	var handlerSet *ap3000.Handlers // repo 初始化后再赋值（handler 内部已判空）
 	tcpSrv.SetConnHandler(func(cc *tcpserver.ConnContext) {
-		// 构造启用的适配器列表
 		var adapters []adapter.Adapter
-
-		// 每个连接独立的协议适配器（持有各自的解码缓冲）
 		var apAdapter *ap3000.Adapter
 		if cfg.Protocols.EnableAP3000 {
 			apAdapter = ap3000.NewAdapter()
@@ -86,7 +91,6 @@ func main() {
 			adapters = append(adapters, bkvAdapter)
 		}
 
-		// 绑定维持：在收到 0x20/0x21 心跳/注册时，绑定 phy -> 连接（BKV 暂用占位）
 		var boundPhy string
 		bindIfNeeded := func(phy string) {
 			if boundPhy != phy {
@@ -95,7 +99,6 @@ func main() {
 			}
 		}
 
-		// 仅当启用了 AP3000 时注册路由处理器与指标
 		if apAdapter != nil {
 			apAdapter.Register(0x20, func(f *ap3000.Frame) error {
 				bindIfNeeded(f.PhyID)
@@ -135,19 +138,16 @@ func main() {
 			})
 		}
 
-		// BKV：最小处理器注册（0x10 心跳，0x11 状态，占位 0x30 结算）
 		if bkvAdapter != nil {
-			bh := &bkv.Handlers{Repo: repo, Reason: &bkv.ReasonMap{Map: map[int]int{2: 102}}}
+			bh := &bkv.Handlers{Repo: repo, Reason: bkvReason}
 			bkvAdapter.Register(0x10, func(f *bkv.Frame) error { return bh.HandleHeartbeat(context.Background(), f) })
 			bkvAdapter.Register(0x11, func(f *bkv.Frame) error { return bh.HandleStatus(context.Background(), f) })
 			bkvAdapter.Register(0x30, func(f *bkv.Frame) error { return bh.HandleSettle(context.Background(), f) })
 		}
 
-		// 复用器绑定到连接
 		mux := tcpserver.NewMux(adapters...)
 		mux.BindToConn(cc)
 
-		// 连接关闭时解除绑定
 		go func() {
 			<-cc.Done()
 			if boundPhy != "" {
@@ -156,7 +156,6 @@ func main() {
 		}()
 	})
 
-	// 并行启动
 	go func() {
 		if err := httpSrv.Start(); err != nil {
 			log.Error("http server error", zap.Error(err))
@@ -167,14 +166,12 @@ func main() {
 	}
 	ready.SetTCPReady(true)
 
-	// 7) 数据库连接
 	dbpool, err := pgstorage.NewPool(context.Background(), cfg.Database.DSN, cfg.Database.MaxOpenConns, cfg.Database.MaxIdleConns, cfg.Database.ConnMaxLifetime)
 	if err != nil {
 		log.Error("db connect error", zap.Error(err))
 	} else {
 		ready.SetDBReady(true)
 		repo = &pgstorage.Repository{Pool: dbpool}
-		// 可选第三方推送器注入（依据配置 thirdparty.push.webhook_url/secret）
 		var pusher interface {
 			SendJSON(ctx context.Context, endpoint string, payload any) (int, []byte, error)
 		}
@@ -186,7 +183,6 @@ func main() {
 		handlerSet = &ap3000.Handlers{Repo: repo, Pusher: pusher, PushURL: pushURL}
 		defer dbpool.Close()
 
-		// 8) 自动迁移（可选）
 		if cfg.Database.AutoMigrate {
 			if err = (migrate.Runner{Dir: "db/migrations"}).Up(context.Background(), dbpool); err != nil {
 				log.Error("db migrate error", zap.Error(err))
@@ -195,7 +191,6 @@ func main() {
 			}
 		}
 
-		// 9) 启动下行 worker（接入配置）
 		wctx, wcancel := context.WithCancel(context.Background())
 		defer wcancel()
 		outw := outbound.New(dbpool)
@@ -210,7 +205,6 @@ func main() {
 		go outw.Run(wctx)
 	}
 
-	// 信号处理，优雅关闭
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
