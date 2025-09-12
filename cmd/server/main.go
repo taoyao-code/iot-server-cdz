@@ -228,6 +228,7 @@ func main() {
 		if cfg.Gateway.RetryMax > 0 {
 			outw.MaxRetries = cfg.Gateway.RetryMax
 		}
+		outw.DeadRetentionDays = cfg.Gateway.DeadRetentionDays
 		outw.SetGetConn(func(phyID string) (interface{}, bool) {
 			c, ok := sess.GetConn(phyID)
 			return c, ok

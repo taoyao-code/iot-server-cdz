@@ -18,10 +18,13 @@ type Worker struct {
 	MaxRetries int
 	// 获取连接：返回具有 Write([]byte) error 能力的对象
 	GetConn func(phyID string) (interface{}, bool)
+	// DeadRetentionDays 用于删除已失败(dead)记录的保留天数；<=0 时不清理
+	DeadRetentionDays int
+	lastCleanAt       time.Time
 }
 
 func New(db *pgxpool.Pool) *Worker {
-	return &Worker{DB: db, Interval: time.Second, BatchSize: 50, Throttle: 500 * time.Millisecond, MaxRetries: 3}
+	return &Worker{DB: db, Interval: time.Second, BatchSize: 50, Throttle: 500 * time.Millisecond, MaxRetries: 3, DeadRetentionDays: 7}
 }
 
 // SetGetConn 安装连接获取函数
@@ -30,6 +33,8 @@ func (w *Worker) SetGetConn(fn func(phyID string) (interface{}, bool)) { w.GetCo
 func (w *Worker) Run(ctx context.Context) {
 	ticker := time.NewTicker(w.Interval)
 	defer ticker.Stop()
+	// 冷启立即扫描一轮（处理超时与可发送项）
+	w.tick(ctx)
 	for {
 		select {
 		case <-ctx.Done():
@@ -46,6 +51,13 @@ func (w *Worker) tick(ctx context.Context) {
 	}
 	// 先处理ACK超时的已发送任务（status=1）
 	w.sweepTimeouts(ctx)
+	// 周期性清理 dead 记录
+	if w.DeadRetentionDays > 0 {
+		if time.Since(w.lastCleanAt) >= time.Hour {
+			w.cleanDead(ctx)
+			w.lastCleanAt = time.Now()
+		}
+	}
 	// 选取待发送任务（status=0）
 	rows, err := w.DB.Query(ctx, `SELECT id, phy_id, cmd, payload FROM outbound_queue
         WHERE status=0 AND (not_before IS NULL OR not_before<=NOW())
@@ -128,4 +140,9 @@ func (w *Worker) sweepTimeouts(ctx context.Context) {
             not_before=NOW()+INTERVAL '3 seconds'*GREATEST(retry_count,1), last_error=COALESCE(last_error,'')||' timeout', updated_at=NOW()
             WHERE id=$1`, id)
 	}
+}
+
+// cleanDead 清理过期的 dead 记录（status=3），保留最近 DeadRetentionDays 天
+func (w *Worker) cleanDead(ctx context.Context) {
+	_, _ = w.DB.Exec(ctx, `DELETE FROM outbound_queue WHERE status=3 AND updated_at < NOW() - ($1 || ' days')::interval`, w.DeadRetentionDays)
 }
