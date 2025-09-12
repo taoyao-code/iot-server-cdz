@@ -140,9 +140,39 @@ func main() {
 
 		if bkvAdapter != nil {
 			bh := &bkv.Handlers{Repo: repo, Reason: bkvReason}
-			bkvAdapter.Register(0x10, func(f *bkv.Frame) error { return bh.HandleHeartbeat(context.Background(), f) })
-			bkvAdapter.Register(0x11, func(f *bkv.Frame) error { return bh.HandleStatus(context.Background(), f) })
-			bkvAdapter.Register(0x30, func(f *bkv.Frame) error { return bh.HandleSettle(context.Background(), f) })
+			bkvAdapter.Register(0x10, func(f *bkv.Frame) error {
+				appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+				return bh.HandleHeartbeat(context.Background(), f)
+			})
+			bkvAdapter.Register(0x11, func(f *bkv.Frame) error {
+				appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+				return bh.HandleStatus(context.Background(), f)
+			})
+			bkvAdapter.Register(0x30, func(f *bkv.Frame) error {
+				appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+				return bh.HandleSettle(context.Background(), f)
+			})
+			bkvAdapter.Register(0x82, func(f *bkv.Frame) error {
+				appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+				return bh.HandleAck(context.Background(), f)
+			})
+			// 占位：控制与参数
+			bkvAdapter.Register(0x90, func(f *bkv.Frame) error {
+				appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+				return bh.HandleControl(context.Background(), f)
+			})
+			bkvAdapter.Register(0x83, func(f *bkv.Frame) error {
+				appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+				return bh.HandleParam(context.Background(), f)
+			})
+			bkvAdapter.Register(0x84, func(f *bkv.Frame) error {
+				appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+				return bh.HandleParam(context.Background(), f)
+			})
+			bkvAdapter.Register(0x85, func(f *bkv.Frame) error {
+				appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+				return bh.HandleParam(context.Background(), f)
+			})
 		}
 
 		mux := tcpserver.NewMux(adapters...)

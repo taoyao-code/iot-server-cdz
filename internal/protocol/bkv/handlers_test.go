@@ -35,6 +35,11 @@ func (f *fakeRepo) SettleOrder(ctx context.Context, deviceID int64, portNo int, 
 	return nil
 }
 
+func (f *fakeRepo) AckOutboundByMsgID(ctx context.Context, deviceID int64, msgID int, ok bool, errCode *int) error {
+	f.logs++
+	return nil
+}
+
 func TestHandlers_StatusParse(t *testing.T) {
 	fr := &fakeRepo{}
 
@@ -60,5 +65,17 @@ func TestHandlers_SettleWithReasonMap(t *testing.T) {
 	}
 	if fr.logs == 0 {
 		t.Fatalf("log not inserted")
+	}
+}
+
+func TestHandlers_Ack(t *testing.T) {
+	fr := &fakeRepo{}
+	h := &Handlers{Repo: fr}
+	f := &Frame{Cmd: 0x82, Data: []byte{0x34, 0x12, 0x00}} // msgID=0x1234 ok
+	if err := h.HandleAck(context.Background(), f); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if fr.logs == 0 {
+		t.Fatalf("expected logs")
 	}
 }
