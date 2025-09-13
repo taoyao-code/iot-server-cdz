@@ -115,8 +115,14 @@ type ThirdpartyConfig struct {
 
 // SessionConfig 会话相关阈值配置
 type SessionConfig struct {
-	HeartbeatTimeoutSec int `mapstructure:"heartbeat_timeout_sec"`
-	AckGraceSec         int `mapstructure:"ack_grace_sec"`
+	HeartbeatTimeoutSec int     `mapstructure:"heartbeat_timeout_sec"`
+	AckGraceSec         int     `mapstructure:"ack_grace_sec"`
+	WeightedEnabled     bool    `mapstructure:"weighted.enabled"`
+	TCPDownWindowSec    int     `mapstructure:"weighted.tcp_down_window_sec"`
+	AckWindowSec        int     `mapstructure:"weighted.ack_window_sec"`
+	TCPDownPenalty      float64 `mapstructure:"weighted.tcp_down_penalty"`
+	AckTimeoutPenalty   float64 `mapstructure:"weighted.ack_timeout_penalty"`
+	Threshold           float64 `mapstructure:"weighted.threshold"`
 }
 
 // Config 顶层配置结构
@@ -232,4 +238,10 @@ func setDefaults(v *viper.Viper) {
 	// session defaults
 	v.SetDefault("session.heartbeat_timeout_sec", 360)
 	v.SetDefault("session.ack_grace_sec", 30)
+	v.SetDefault("session.weighted.enabled", true)
+	v.SetDefault("session.weighted.tcp_down_window_sec", 120)
+	v.SetDefault("session.weighted.ack_window_sec", 30)
+	v.SetDefault("session.weighted.tcp_down_penalty", 0.5)
+	v.SetDefault("session.weighted.ack_timeout_penalty", 0.5)
+	v.SetDefault("session.weighted.threshold", 0.5)
 }

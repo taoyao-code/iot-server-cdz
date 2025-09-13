@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/tcpserver"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
 
+	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
@@ -51,7 +53,16 @@ func main() {
 	ready := health.New()
 
 	// 会话管理
-	sess := session.New(6 * time.Minute)
+	sess := session.New(time.Duration(cfg.Session.HeartbeatTimeoutSec) * time.Second)
+	policy := session.WeightedPolicy{
+		Enabled:           cfg.Session.WeightedEnabled,
+		HeartbeatTimeout:  time.Duration(cfg.Session.HeartbeatTimeoutSec) * time.Second,
+		TCPDownWindow:     time.Duration(cfg.Session.TCPDownWindowSec) * time.Second,
+		AckWindow:         time.Duration(cfg.Session.AckWindowSec) * time.Second,
+		TCPDownPenalty:    cfg.Session.TCPDownPenalty,
+		AckTimeoutPenalty: cfg.Session.AckTimeoutPenalty,
+		Threshold:         cfg.Session.Threshold,
+	}
 
 	// 5) HTTP 服务（ready 由闭包计算）
 	readyFn := func() bool {
@@ -104,7 +115,7 @@ func main() {
 				bindIfNeeded(f.PhyID)
 				sess.OnHeartbeat(f.PhyID, time.Now())
 				appm.HeartbeatTotal.Inc()
-				appm.OnlineGauge.Set(float64(sess.OnlineCount(time.Now())))
+				appm.OnlineGauge.Set(float64(sess.OnlineCountWeighted(time.Now(), policy)))
 				appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
 				return handlerSet.HandleRegister(context.Background(), f)
 			})
@@ -112,7 +123,7 @@ func main() {
 				bindIfNeeded(f.PhyID)
 				sess.OnHeartbeat(f.PhyID, time.Now())
 				appm.HeartbeatTotal.Inc()
-				appm.OnlineGauge.Set(float64(sess.OnlineCount(time.Now())))
+				appm.OnlineGauge.Set(float64(sess.OnlineCountWeighted(time.Now(), policy)))
 				appm.AP3000RouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
 				return handlerSet.HandleHeartbeat(context.Background(), f)
 			})
@@ -223,6 +234,39 @@ func main() {
 			}
 		}
 
+		// 注册只读 API
+		httpSrv.Register(func(r *gin.Engine) {
+			r.GET("/api/devices", func(c *gin.Context) {
+				limit := 100
+				offset := 0
+				if v := c.Query("limit"); v != "" {
+					if vv, e := strconv.Atoi(v); e == nil {
+						limit = vv
+					}
+				}
+				if v := c.Query("offset"); v != "" {
+					if vv, e := strconv.Atoi(v); e == nil {
+						offset = vv
+					}
+				}
+				list, err := repo.ListDevices(c.Request.Context(), limit, offset)
+				if err != nil {
+					c.JSON(500, gin.H{"error": err.Error()})
+					return
+				}
+				c.JSON(200, gin.H{"devices": list})
+			})
+			r.GET("/api/devices/:phyId/ports", func(c *gin.Context) {
+				phy := c.Param("phyId")
+				ports, err := repo.ListPortsByPhyID(c.Request.Context(), phy)
+				if err != nil {
+					c.JSON(500, gin.H{"error": err.Error()})
+					return
+				}
+				c.JSON(200, gin.H{"phyId": phy, "ports": ports})
+			})
+		})
+
 		wctx, wcancel := context.WithCancel(context.Background())
 		defer wcancel()
 		outw := outbound.New(dbpool)
@@ -232,6 +276,9 @@ func main() {
 		}
 		outw.DeadRetentionDays = cfg.Gateway.DeadRetentionDays
 		outw.Metrics = appm
+		outw.OnAckTimeout = func(phy string) {
+			sess.OnAckTimeout(phy, time.Now())
+		}
 		outw.SetGetConn(func(phyID string) (interface{}, bool) {
 			c, ok := sess.GetConn(phyID)
 			return c, ok

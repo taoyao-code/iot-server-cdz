@@ -116,7 +116,7 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 	return h.Repo.InsertCmdLog(ctx, devID, 0, int(f.Cmd), 0, f.Data, true)
 }
 
-// HandleParam 占位：参数读/写/回读最小路径（83/84/85），此处仅记录
+// HandleParam 占位：参数读/写/回读最小路径（83/84/85），回读(0x85)成功需有负载
 func (h *Handlers) HandleParam(ctx context.Context, f *Frame) error {
 	if h == nil || h.Repo == nil {
 		return nil
@@ -125,5 +125,10 @@ func (h *Handlers) HandleParam(ctx context.Context, f *Frame) error {
 	if err != nil {
 		return err
 	}
-	return h.Repo.InsertCmdLog(ctx, devID, 0, int(f.Cmd), 0, f.Data, true)
+	success := true
+	// 0x85 作为回读结果占位：简单认为有数据即成功
+	if f.Cmd == 0x85 {
+		success = len(f.Data) > 0
+	}
+	return h.Repo.InsertCmdLog(ctx, devID, 0, int(f.Cmd), 0, f.Data, success)
 }

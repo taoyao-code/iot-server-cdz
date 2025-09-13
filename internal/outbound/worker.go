@@ -25,6 +25,8 @@ type Worker struct {
 	lastCleanAt       time.Time
 	// 可选：指标
 	Metrics *metrics.AppMetrics
+	// 可选：ACK 超时回调（用于会话多信号判定）
+	OnAckTimeout func(phyID string)
 }
 
 func New(db *pgxpool.Pool) *Worker {
@@ -154,6 +156,9 @@ func (w *Worker) sweepTimeouts(ctx context.Context) {
 				w.Metrics.OutboundTimeoutTotal.Inc()
 				w.Metrics.SessionOfflineTotal.WithLabelValues("ack").Inc()
 			}
+			if w.OnAckTimeout != nil && phy != "" {
+				w.OnAckTimeout(phy)
+			}
 			continue
 		}
 		_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET status=0, retry_count=retry_count+1,
@@ -163,6 +168,9 @@ func (w *Worker) sweepTimeouts(ctx context.Context) {
 			w.Metrics.OutboundTimeoutTotal.Inc()
 			w.Metrics.OutboundResendTotal.Inc()
 			w.Metrics.SessionOfflineTotal.WithLabelValues("ack").Inc()
+		}
+		if w.OnAckTimeout != nil && phy != "" {
+			w.OnAckTimeout(phy)
 		}
 	}
 }

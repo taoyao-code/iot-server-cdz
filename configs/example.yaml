@@ -40,6 +40,7 @@ database:
   maxIdleConns: 10
   connMaxLifetime: 1h
   autoMigrate: false
+
 gateway:
   listen: "0.0.0.0:9000" # 设备 TCP 监听地址
   read_buffer_bytes: 32768 # 读缓冲（字节）
@@ -54,6 +55,13 @@ gateway:
 session:
   heartbeat_timeout_sec: 360 # 心跳超时判定（秒）
   ack_grace_sec: 30 # ACK 宽限（秒）
+  weighted:
+    enabled: true
+    tcp_down_window_sec: 120 # 近期TCP断开计入的时间窗（秒）
+    ack_window_sec: 30 # 近期ACK超时计入的时间窗（秒）
+    tcp_down_penalty: 0.5 # TCP断开惩罚分
+    ack_timeout_penalty: 0.5 # ACK超时惩罚分
+    threshold: 0.5 # 判定阈值（>=阈值判在线）
   hash_ring:
     replicas: 128 # 一致性哈希虚拟节点数
   token_bucket:
