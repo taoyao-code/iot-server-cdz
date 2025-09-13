@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/taoyao-code/iot-server/internal/metrics"
 	"github.com/taoyao-code/iot-server/internal/protocol/ap3000"
 	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 )
@@ -21,6 +22,8 @@ type Worker struct {
 	// DeadRetentionDays 用于删除已失败(dead)记录的保留天数；<=0 时不清理
 	DeadRetentionDays int
 	lastCleanAt       time.Time
+	// 可选：指标
+	Metrics *metrics.AppMetrics
 }
 
 func New(db *pgxpool.Pool) *Worker {
@@ -79,11 +82,17 @@ func (w *Worker) tick(ctx context.Context) {
 		if phyID == nil || w.GetConn == nil {
 			// 无法发送：回退重试
 			_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET retry_count=retry_count+1, not_before=NOW()+INTERVAL '3 seconds'*GREATEST(retry_count,1) WHERE id=$1`, id)
+			if w.Metrics != nil {
+				w.Metrics.OutboundResendTotal.Inc()
+			}
 			continue
 		}
 		conn, ok := w.GetConn(*phyID)
 		if !ok {
 			_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET retry_count=retry_count+1, not_before=NOW()+INTERVAL '3 seconds'*GREATEST(retry_count,1) WHERE id=$1`, id)
+			if w.Metrics != nil {
+				w.Metrics.OutboundResendTotal.Inc()
+			}
 			continue
 		}
 		type writer interface {
@@ -108,6 +117,9 @@ func (w *Worker) tick(ctx context.Context) {
 		if err := wconn.Write(frame); err != nil {
 			// 写失败，回退重试
 			_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET retry_count=retry_count+1, not_before=NOW()+INTERVAL '3 seconds'*GREATEST(retry_count,1), last_error=$2 WHERE id=$1`, id, err.Error())
+			if w.Metrics != nil {
+				w.Metrics.OutboundResendTotal.Inc()
+			}
 			continue
 		}
 		// 标记已发送并记录 msg_id，等待回执更新为 done
@@ -134,15 +146,30 @@ func (w *Worker) sweepTimeouts(ctx context.Context) {
 		}
 		if w.MaxRetries > 0 && rc >= w.MaxRetries {
 			_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET status=3, last_error=COALESCE(last_error,'')||' timeout_dead', updated_at=NOW() WHERE id=$1`, id)
+			if w.Metrics != nil {
+				w.Metrics.OutboundTimeoutTotal.Inc()
+			}
 			continue
 		}
 		_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET status=0, retry_count=retry_count+1,
             not_before=NOW()+INTERVAL '3 seconds'*GREATEST(retry_count,1), last_error=COALESCE(last_error,'')||' timeout', updated_at=NOW()
             WHERE id=$1`, id)
+		if w.Metrics != nil {
+			w.Metrics.OutboundTimeoutTotal.Inc()
+			w.Metrics.OutboundResendTotal.Inc()
+		}
 	}
 }
 
 // cleanDead 清理过期的 dead 记录（status=3），保留最近 DeadRetentionDays 天
 func (w *Worker) cleanDead(ctx context.Context) {
-	_, _ = w.DB.Exec(ctx, `DELETE FROM outbound_queue WHERE status=3 AND updated_at < NOW() - ($1 || ' days')::interval`, w.DeadRetentionDays)
+	ct, _ := w.DB.Exec(ctx, `DELETE FROM outbound_queue WHERE status=3 AND updated_at < NOW() - ($1 || ' days')::interval`, w.DeadRetentionDays)
+	if w.Metrics != nil {
+		// pgxpool.CommandTag has RowsAffected()
+		if n := ct.RowsAffected(); n > 0 {
+			for i := int64(0); i < n; i++ {
+				w.Metrics.OutboundDeadCleanupTotal.Inc()
+			}
+		}
+	}
 }

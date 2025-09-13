@@ -3,6 +3,8 @@ package ap3000
 import (
 	"context"
 	"time"
+
+	"github.com/taoyao-code/iot-server/internal/metrics"
 )
 
 // repoAPI 抽象便于单测替换
@@ -23,6 +25,8 @@ type Handlers struct {
 		SendJSON(ctx context.Context, endpoint string, payload any) (int, []byte, error)
 	}
 	PushURL string
+	// 可选：指标
+	Metrics *metrics.AppMetrics
 }
 
 func (h *Handlers) HandleRegister(ctx context.Context, f *Frame) error {
@@ -122,5 +126,13 @@ func (h *Handlers) Handle82Ack(ctx context.Context, f *Frame) error {
 		ecode = &code
 	}
 	_ = h.Repo.AckOutboundByMsgID(ctx, devID, int(f.MsgID), ok, ecode)
+	// 指标：82 成功/失败计数
+	if h.Metrics != nil && h.Metrics.AP3000Ack82Total != nil {
+		if ok {
+			h.Metrics.AP3000Ack82Total.WithLabelValues("ok").Inc()
+		} else {
+			h.Metrics.AP3000Ack82Total.WithLabelValues("err").Inc()
+		}
+	}
 	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, f.Data, ok)
 }

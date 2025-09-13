@@ -210,7 +210,7 @@ func main() {
 			pusher = thirdparty.NewPusher(nil, "", cfg.Thirdparty.Push.Secret)
 			pushURL = cfg.Thirdparty.Push.WebhookURL
 		}
-		handlerSet = &ap3000.Handlers{Repo: repo, Pusher: pusher, PushURL: pushURL}
+		handlerSet = &ap3000.Handlers{Repo: repo, Pusher: pusher, PushURL: pushURL, Metrics: appm}
 		defer dbpool.Close()
 
 		if cfg.Database.AutoMigrate {
@@ -229,6 +229,7 @@ func main() {
 			outw.MaxRetries = cfg.Gateway.RetryMax
 		}
 		outw.DeadRetentionDays = cfg.Gateway.DeadRetentionDays
+		outw.Metrics = appm
 		outw.SetGetConn(func(phyID string) (interface{}, bool) {
 			c, ok := sess.GetConn(phyID)
 			return c, ok

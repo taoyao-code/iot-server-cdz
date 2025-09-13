@@ -32,6 +32,11 @@ type AppMetrics struct {
 	BKVRouteTotal    *prometheus.CounterVec // labels: cmd
 	OnlineGauge      prometheus.Gauge       // 当前在线设备数
 	HeartbeatTotal   prometheus.Counter     // 心跳计数
+	// 新增：协议与出站可靠性
+	AP3000Ack82Total         *prometheus.CounterVec // labels: result=ok|err
+	OutboundResendTotal      prometheus.Counter     // 出站重试计数
+	OutboundTimeoutTotal     prometheus.Counter     // 出站ACK超时计数
+	OutboundDeadCleanupTotal prometheus.Counter     // dead 清理删除的记录数（累加）
 }
 
 // NewAppMetrics 注册并返回业务指标
@@ -65,7 +70,28 @@ func NewAppMetrics(reg *prometheus.Registry) *AppMetrics {
 			Name: "session_heartbeat_total",
 			Help: "Total heartbeats observed.",
 		}),
+		AP3000Ack82Total: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "ap3000_82_ack_total",
+			Help: "Count of 0x82 ACK results by outcome.",
+		}, []string{"result"}),
+		OutboundResendTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "outbound_resend_total",
+			Help: "Total number of outbound resend attempts.",
+		}),
+		OutboundTimeoutTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "outbound_timeout_total",
+			Help: "Total number of outbound ACK timeouts handled.",
+		}),
+		OutboundDeadCleanupTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "outbound_dead_cleanup_total",
+			Help: "Total number of deleted dead outbound records.",
+		}),
 	}
-	reg.MustRegister(m.TCPAccepted, m.TCPBytesReceived, m.AP3000ParseTotal, m.AP3000RouteTotal, m.BKVRouteTotal, m.OnlineGauge, m.HeartbeatTotal)
+	reg.MustRegister(
+		m.TCPAccepted, m.TCPBytesReceived,
+		m.AP3000ParseTotal, m.AP3000RouteTotal, m.BKVRouteTotal,
+		m.OnlineGauge, m.HeartbeatTotal,
+		m.AP3000Ack82Total, m.OutboundResendTotal, m.OutboundTimeoutTotal, m.OutboundDeadCleanupTotal,
+	)
 	return m
 }
