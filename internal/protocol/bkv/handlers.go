@@ -113,6 +113,7 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 	if err != nil {
 		return err
 	}
+	_ = DecodeControl(f.Data)
 	return h.Repo.InsertCmdLog(ctx, devID, 0, int(f.Cmd), 0, f.Data, true)
 }
 
@@ -126,9 +127,12 @@ func (h *Handlers) HandleParam(ctx context.Context, f *Frame) error {
 		return err
 	}
 	success := true
-	// 0x85 作为回读结果占位：简单认为有数据即成功
+	if f.Cmd == 0x83 || f.Cmd == 0x84 {
+		_ = DecodeParamWrite(f.Data)
+	}
 	if f.Cmd == 0x85 {
-		success = len(f.Data) > 0
+		pr := DecodeParamReadback(f.Data)
+		success = len(pr.Value) > 0 || len(f.Data) > 0
 	}
 	return h.Repo.InsertCmdLog(ctx, devID, 0, int(f.Cmd), 0, f.Data, success)
 }
