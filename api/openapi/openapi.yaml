@@ -36,6 +36,115 @@ paths:
       responses:
         "200":
           description: ok
+  /api/devices:
+    get:
+      summary: 设备列表（只读）
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+          required: false
+          description: 每页数量，默认 100
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            minimum: 0
+          required: false
+          description: 偏移量，默认 0
+      responses:
+        "200":
+          description: 设备列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceListResponse"
+  /api/devices/{phyId}/ports:
+    get:
+      summary: 按设备查询端口快照（只读）
+      parameters:
+        - in: path
+          name: phyId
+          required: true
+          schema:
+            type: string
+          description: 设备物理ID
+      responses:
+        "200":
+          description: 端口快照
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortsResponse"
+  /api/sessions/{phyId}:
+    get:
+      summary: 设备会话状态（在线/离线）
+      parameters:
+        - in: path
+          name: phyId
+          required: true
+          schema:
+            type: string
+          description: 设备物理ID
+      responses:
+        "200":
+          description: 会话状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionStatusResponse"
+  /api/orders/{id}:
+    get:
+      summary: 订单详情（只读）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          description: 订单ID
+      responses:
+        "200":
+          description: 订单详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderResponse"
+        "404":
+          description: not found
+  /api/devices/{phyId}/orders:
+    get:
+      summary: 按设备查询订单（只读）
+      parameters:
+        - in: path
+          name: phyId
+          required: true
+          schema:
+            type: string
+          description: 设备物理ID
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+          required: false
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            minimum: 0
+          required: false
+      responses:
+        "200":
+          description: 订单列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderListResponse"
 components:
   securitySchemes:
     ApiKeyHmac:
@@ -60,6 +169,79 @@ components:
         data:
           type: object
           additionalProperties: true
+    Device:
+      type: object
+      properties:
+        id:
+          type: integer
+        phyId:
+          type: string
+        lastSeenAt:
+          type: string
+          format: date-time
+          nullable: true
+    Port:
+      type: object
+      properties:
+        portNo:
+          type: integer
+        status:
+          type: integer
+        powerW:
+          type: integer
+          nullable: true
+    DeviceListResponse:
+      type: object
+      properties:
+        devices:
+          type: array
+          items:
+            $ref: "#/components/schemas/Device"
+    PortsResponse:
+      type: object
+      properties:
+        phyId:
+          type: string
+        ports:
+          type: array
+          items:
+            $ref: "#/components/schemas/Port"
+    SessionStatusResponse:
+      type: object
+      properties:
+        phyId:
+          type: string
+        online:
+          type: boolean
+        lastSeenAt:
+          type: string
+          format: date-time
+          nullable: true
+    Order:
+      type: object
+      properties:
+        id: { type: integer }
+        deviceId: { type: integer }
+        phyId: { type: string }
+        portNo: { type: integer }
+        orderNo: { type: string }
+        startTime: { type: string, format: date-time, nullable: true }
+        endTime: { type: string, format: date-time, nullable: true }
+        kwh01: { type: integer, nullable: true }
+        amountCent: { type: integer, nullable: true }
+        status: { type: integer }
+    OrderResponse:
+      type: object
+      properties:
+        order:
+          $ref: "#/components/schemas/Order"
+    OrderListResponse:
+      type: object
+      properties:
+        orders:
+          type: array
+          items:
+            $ref: "#/components/schemas/Order"
   x-signature:
     algorithm: HMAC-SHA256
     header:

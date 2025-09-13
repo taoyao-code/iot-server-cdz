@@ -90,6 +90,20 @@ type Device struct {
 	LastSeenAt *time.Time
 }
 
+// Order 订单（用于查询）
+type Order struct {
+	ID         int64
+	DeviceID   int64
+	PhyID      string
+	PortNo     int
+	OrderNo    string
+	StartTime  *time.Time
+	EndTime    *time.Time
+	Kwh01      *int64
+	AmountCent *int64
+	Status     int
+}
+
 // ListDevices 简单分页列出设备
 func (r *Repository) ListDevices(ctx context.Context, limit, offset int) ([]Device, error) {
 	if limit <= 0 || limit > 1000 {
@@ -114,6 +128,16 @@ func (r *Repository) ListDevices(ctx context.Context, limit, offset int) ([]Devi
 	return res, rows.Err()
 }
 
+// GetDeviceByPhyID 通过物理ID获取设备
+func (r *Repository) GetDeviceByPhyID(ctx context.Context, phyID string) (*Device, error) {
+	const q = `SELECT id, phy_id, last_seen_at FROM devices WHERE phy_id=$1`
+	var d Device
+	if err := r.Pool.QueryRow(ctx, q, phyID).Scan(&d.ID, &d.PhyID, &d.LastSeenAt); err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
 // Port 端口快照（用于查询）
 type Port struct {
 	PortNo int
@@ -136,6 +160,56 @@ func (r *Repository) ListPortsByPhyID(ctx context.Context, phyID string) ([]Port
 			return nil, err
 		}
 		res = append(res, p)
+	}
+	return res, rows.Err()
+}
+
+// GetOrderByID 根据ID查询订单，包含设备phy_id
+func (r *Repository) GetOrderByID(ctx context.Context, id int64) (*Order, error) {
+	const q = `SELECT o.id, o.device_id, d.phy_id, o.port_no, o.order_no, o.start_time, o.end_time, o.kwh_0p01, o.amount_cent, o.status
+		FROM orders o JOIN devices d ON o.device_id = d.id WHERE o.id=$1`
+	var (
+		ord Order
+		kwh *int64
+		amt *int64
+	)
+	if err := r.Pool.QueryRow(ctx, q, id).Scan(&ord.ID, &ord.DeviceID, &ord.PhyID, &ord.PortNo, &ord.OrderNo, &ord.StartTime, &ord.EndTime, &kwh, &amt, &ord.Status); err != nil {
+		return nil, err
+	}
+	ord.Kwh01 = kwh
+	ord.AmountCent = amt
+	return &ord, nil
+}
+
+// ListOrdersByPhyID 按设备物理ID分页查询订单
+func (r *Repository) ListOrdersByPhyID(ctx context.Context, phyID string, limit, offset int) ([]Order, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	const q = `SELECT o.id, o.device_id, d.phy_id, o.port_no, o.order_no, o.start_time, o.end_time, o.kwh_0p01, o.amount_cent, o.status
+		FROM orders o JOIN devices d ON o.device_id = d.id
+		WHERE d.phy_id=$1 ORDER BY o.id DESC LIMIT $2 OFFSET $3`
+	rows, err := r.Pool.Query(ctx, q, phyID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []Order
+	for rows.Next() {
+		var (
+			ord Order
+			kwh *int64
+			amt *int64
+		)
+		if err := rows.Scan(&ord.ID, &ord.DeviceID, &ord.PhyID, &ord.PortNo, &ord.OrderNo, &ord.StartTime, &ord.EndTime, &kwh, &amt, &ord.Status); err != nil {
+			return nil, err
+		}
+		ord.Kwh01 = kwh
+		ord.AmountCent = amt
+		res = append(res, ord)
 	}
 	return res, rows.Err()
 }
@@ -197,4 +271,30 @@ func (r *Repository) EnqueueOutbox(
 		return 0, err
 	}
 	return id, nil
+}
+
+// EnqueueOutboxIdempotent 基于 correlation_id 的幂等入队：存在则返回已存在ID，并标记 created=false
+func (r *Repository) EnqueueOutboxIdempotent(
+	ctx context.Context,
+	deviceID int64,
+	phyID *string,
+	portNo *int,
+	cmd int,
+	payload []byte,
+	priority int,
+	correlationID string,
+	notBefore *time.Time,
+	timeoutSec int,
+) (id int64, created bool, err error) {
+	// 优先尝试插入
+	id, err = r.EnqueueOutbox(ctx, deviceID, phyID, portNo, cmd, payload, priority, &correlationID, notBefore, timeoutSec)
+	if err == nil {
+		return id, true, nil
+	}
+	// 冲突时查询已存在记录（依赖唯一索引）
+	err = r.Pool.QueryRow(ctx, `SELECT id FROM outbound_queue WHERE correlation_id=$1`, correlationID).Scan(&id)
+	if err != nil {
+		return 0, false, err
+	}
+	return id, false, nil
 }
