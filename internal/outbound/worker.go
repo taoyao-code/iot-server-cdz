@@ -2,6 +2,7 @@ package outbound
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -61,6 +62,8 @@ func (w *Worker) tick(ctx context.Context) {
 			w.lastCleanAt = time.Now()
 		}
 	}
+	// 刷新队列积压 Gauge
+	w.refreshQueueSize(ctx)
 	// 选取待发送任务（status=0）
 	rows, err := w.DB.Query(ctx, `SELECT id, phy_id, cmd, payload FROM outbound_queue
         WHERE status=0 AND (not_before IS NULL OR not_before<=NOW())
@@ -131,7 +134,7 @@ func (w *Worker) tick(ctx context.Context) {
 
 // sweepTimeouts 扫描已发送但超过超时的任务，按退避策略重试或置为dead
 func (w *Worker) sweepTimeouts(ctx context.Context) {
-	rows, err := w.DB.Query(ctx, `SELECT id, retry_count, timeout_sec FROM outbound_queue
+	rows, err := w.DB.Query(ctx, `SELECT id, retry_count, timeout_sec, COALESCE(phy_id, '') FROM outbound_queue
         WHERE status=1 AND timeout_sec IS NOT NULL AND updated_at + (timeout_sec || ' seconds')::interval <= NOW()`)
 	if err != nil {
 		return
@@ -141,13 +144,15 @@ func (w *Worker) sweepTimeouts(ctx context.Context) {
 		var id int64
 		var rc int
 		var to int
-		if err := rows.Scan(&id, &rc, &to); err != nil {
+		var phy string
+		if err := rows.Scan(&id, &rc, &to, &phy); err != nil {
 			continue
 		}
 		if w.MaxRetries > 0 && rc >= w.MaxRetries {
 			_, _ = w.DB.Exec(ctx, `UPDATE outbound_queue SET status=3, last_error=COALESCE(last_error,'')||' timeout_dead', updated_at=NOW() WHERE id=$1`, id)
 			if w.Metrics != nil {
 				w.Metrics.OutboundTimeoutTotal.Inc()
+				w.Metrics.SessionOfflineTotal.WithLabelValues("ack").Inc()
 			}
 			continue
 		}
@@ -157,7 +162,34 @@ func (w *Worker) sweepTimeouts(ctx context.Context) {
 		if w.Metrics != nil {
 			w.Metrics.OutboundTimeoutTotal.Inc()
 			w.Metrics.OutboundResendTotal.Inc()
+			w.Metrics.SessionOfflineTotal.WithLabelValues("ack").Inc()
 		}
+	}
+}
+
+// 刷新队列积压 Gauge
+func (w *Worker) refreshQueueSize(ctx context.Context) {
+	if w.Metrics == nil || w.Metrics.OutboundQueueSize == nil {
+		return
+	}
+	// 先清零 0..3
+	for _, s := range []string{"0", "1", "2", "3"} {
+		w.Metrics.OutboundQueueSize.WithLabelValues(s).Set(0)
+	}
+	rows, err := w.DB.Query(ctx, `SELECT status, COUNT(*) FROM outbound_queue GROUP BY status`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var st int
+		var c int64
+		if err := rows.Scan(&st, &c); err != nil {
+			continue
+		}
+		w.Metrics.OutboundQueueSize.WithLabelValues(
+			fmt.Sprintf("%d", st),
+		).Set(float64(c))
 	}
 }
 

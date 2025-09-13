@@ -37,6 +37,9 @@ type AppMetrics struct {
 	OutboundResendTotal      prometheus.Counter     // 出站重试计数
 	OutboundTimeoutTotal     prometheus.Counter     // 出站ACK超时计数
 	OutboundDeadCleanupTotal prometheus.Counter     // dead 清理删除的记录数（累加）
+	OutboundQueueSize        *prometheus.GaugeVec   // labels: status=0|1|2|3
+	// 新增：会话离线事件
+	SessionOfflineTotal *prometheus.CounterVec // labels: reason=heartbeat|ack|tcp
 }
 
 // NewAppMetrics 注册并返回业务指标
@@ -86,12 +89,21 @@ func NewAppMetrics(reg *prometheus.Registry) *AppMetrics {
 			Name: "outbound_dead_cleanup_total",
 			Help: "Total number of deleted dead outbound records.",
 		}),
+		OutboundQueueSize: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "outbound_queue_size",
+			Help: "Current outbound_queue size by status.",
+		}, []string{"status"}),
+		SessionOfflineTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "session_offline_total",
+			Help: "Count of offline decisions by reason.",
+		}, []string{"reason"}),
 	}
 	reg.MustRegister(
 		m.TCPAccepted, m.TCPBytesReceived,
 		m.AP3000ParseTotal, m.AP3000RouteTotal, m.BKVRouteTotal,
 		m.OnlineGauge, m.HeartbeatTotal,
 		m.AP3000Ack82Total, m.OutboundResendTotal, m.OutboundTimeoutTotal, m.OutboundDeadCleanupTotal,
+		m.OutboundQueueSize, m.SessionOfflineTotal,
 	)
 	return m
 }

@@ -113,6 +113,12 @@ type ThirdpartyConfig struct {
 	IPWhitelist []string             `mapstructure:"ip_whitelist"`
 }
 
+// SessionConfig 会话相关阈值配置
+type SessionConfig struct {
+	HeartbeatTimeoutSec int `mapstructure:"heartbeat_timeout_sec"`
+	AckGraceSec         int `mapstructure:"ack_grace_sec"`
+}
+
 // Config 顶层配置结构
 type Config struct {
 	App        AppConfig        `mapstructure:"app"`
@@ -124,6 +130,7 @@ type Config struct {
 	Metrics    MetricsConfig    `mapstructure:"metrics"`
 	Database   DatabaseConfig   `mapstructure:"database"`
 	Thirdparty ThirdpartyConfig `mapstructure:"thirdparty"`
+	Session    SessionConfig    `mapstructure:"session"`
 }
 
 // Load 从 YAML/TOML/JSON 文件与环境变量加载配置。
@@ -221,4 +228,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("thirdparty.push.secret", "")
 	v.SetDefault("thirdparty.push.max_retries", 5)
 	v.SetDefault("thirdparty.push.backoff", "100ms,200ms,500ms,1s,2s")
+
+	// session defaults
+	v.SetDefault("session.heartbeat_timeout_sec", 360)
+	v.SetDefault("session.ack_grace_sec", 30)
 }

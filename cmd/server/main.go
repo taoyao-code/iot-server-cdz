@@ -182,6 +182,8 @@ func main() {
 			<-cc.Done()
 			if boundPhy != "" {
 				sess.UnbindByPhy(boundPhy)
+				sess.OnTCPClosed(boundPhy, time.Now())
+				appm.SessionOfflineTotal.WithLabelValues("tcp").Inc()
 			}
 		}()
 	})
