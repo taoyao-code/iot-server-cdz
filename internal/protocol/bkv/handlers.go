@@ -10,6 +10,7 @@ type repoAPI interface {
 	EnsureDevice(ctx context.Context, phyID string) (int64, error)
 	InsertCmdLog(ctx context.Context, deviceID int64, msgID int, cmd int, direction int16, payload []byte, success bool) error
 	UpsertPortState(ctx context.Context, deviceID int64, portNo int, status int, powerW *int) error
+	UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, status int, powerW01 *int) error
 	SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, reason int) error
 	AckOutboundByMsgID(ctx context.Context, deviceID int64, msgID int, ok bool, errCode *int) error
 }
@@ -130,8 +131,50 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 		return err
 	}
 
-	// 记录控制指令日志
 	success := true
+
+	// 如果是下行控制指令（平台发给设备）
+	if !f.IsUplink() {
+		// 解析详细控制参数（按协议文档格式）
+		if len(f.Data) >= 6 {
+			socketNo := int(f.Data[0])     // 插座号
+			portNo := int(f.Data[1])       // 插孔号 (0=A孔, 1=B孔)
+			switchState := int(f.Data[2])  // 开关状态 (1=开, 0=关)
+			// chargeMode := int(f.Data[3])   // 充电模式 (1=按时, 0=按量)
+			
+			// 充电时长(分钟)或电量(wh) - 16位大端
+			duration := int(f.Data[4])<<8 | int(f.Data[5])
+			
+			if switchState == 1 {
+				// 开始充电：创建订单并更新端口状态
+				orderHex := fmt.Sprintf("%04X%02X%02X", f.MsgID, socketNo, portNo)
+				
+				// 创建充电订单（状态1=进行中）
+				if err := h.Repo.UpsertOrderProgress(ctx, devID, portNo, orderHex, duration, 0, 1, nil); err != nil {
+					success = false
+				} else {
+					// 更新端口状态为充电中
+					chargingStatus := 1 // 1=充电中
+					if err := h.Repo.UpsertPortState(ctx, devID, portNo, chargingStatus, nil); err != nil {
+						success = false
+					}
+				}
+			} else {
+				// 停止充电：更新端口状态为空闲
+				idleStatus := 0 // 0=空闲
+				if err := h.Repo.UpsertPortState(ctx, devID, portNo, idleStatus, nil); err != nil {
+					success = false
+				}
+			}
+		}
+	} else {
+		// 上行控制响应（设备回复）- 可能需要更新ACK状态
+		if err := h.Repo.AckOutboundByMsgID(ctx, devID, int(f.MsgID), true, nil); err != nil {
+			success = false
+		}
+	}
+
+	// 记录控制指令日志
 	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, success)
 }
 

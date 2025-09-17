@@ -28,6 +28,10 @@ func (f *fakeRepoParam) UpsertPortState(ctx context.Context, deviceID int64, por
 	return nil
 }
 
+func (f *fakeRepoParam) UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, status int, powerW01 *int) error {
+	return nil
+}
+
 func (f *fakeRepoParam) SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, reason int) error {
 	return nil
 }
