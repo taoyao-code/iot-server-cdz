@@ -127,88 +127,88 @@ func NewConnHandler(
 			})
 		}
 
-		// BKV 路由
+		// BKV 路由 - 使用真实的BKV协议命令码
 		if bkvAdapter != nil {
-			bkvAdapter.Register(0x10, func(f *bkv.Frame) error {
+			// 心跳 (0x0000)
+			bkvAdapter.Register(0x0000, func(f *bkv.Frame) error {
 				if appm != nil {
-					appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+					appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%04X", f.Cmd)).Inc()
 				}
+				bindIfNeeded(f.GatewayID)
 				bh := getBKVHandlers()
 				if bh == nil {
 					return nil
 				}
 				return bh.HandleHeartbeat(context.Background(), f)
 			})
-			bkvAdapter.Register(0x11, func(f *bkv.Frame) error {
+			
+			// BKV子协议数据 (插座状态上报等) (0x1000)
+			bkvAdapter.Register(0x1000, func(f *bkv.Frame) error {
 				if appm != nil {
-					appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+					appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%04X", f.Cmd)).Inc()
 				}
+				bindIfNeeded(f.GatewayID)
 				bh := getBKVHandlers()
 				if bh == nil {
 					return nil
 				}
-				return bh.HandleStatus(context.Background(), f)
+				return bh.HandleBKVStatus(context.Background(), f)
 			})
-			bkvAdapter.Register(0x30, func(f *bkv.Frame) error {
+			
+			// 控制指令 (0x0015)
+			bkvAdapter.Register(0x0015, func(f *bkv.Frame) error {
 				if appm != nil {
-					appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+					appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%04X", f.Cmd)).Inc()
 				}
-				bh := getBKVHandlers()
-				if bh == nil {
-					return nil
-				}
-				return bh.HandleSettle(context.Background(), f)
-			})
-			bkvAdapter.Register(0x82, func(f *bkv.Frame) error {
-				if appm != nil {
-					appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
-				}
-				bh := getBKVHandlers()
-				if bh == nil {
-					return nil
-				}
-				return bh.HandleAck(context.Background(), f)
-			})
-			bkvAdapter.Register(0x90, func(f *bkv.Frame) error {
-				if appm != nil {
-					appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
-				}
+				bindIfNeeded(f.GatewayID)
 				bh := getBKVHandlers()
 				if bh == nil {
 					return nil
 				}
 				return bh.HandleControl(context.Background(), f)
 			})
-			bkvAdapter.Register(0x83, func(f *bkv.Frame) error {
+			
+			// 网络节点列表 (0x0005)
+			bkvAdapter.Register(0x0005, func(f *bkv.Frame) error {
 				if appm != nil {
-					appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
+					appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%04X", f.Cmd)).Inc()
 				}
+				bindIfNeeded(f.GatewayID)
+				bh := getBKVHandlers()
+				if bh == nil {
+					return nil
+				}
+				return bh.HandleGeneric(context.Background(), f)
+			})
+			
+			// OTA升级 (0x0007)
+			bkvAdapter.Register(0x0007, func(f *bkv.Frame) error {
+				if appm != nil {
+					appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%04X", f.Cmd)).Inc()
+				}
+				bindIfNeeded(f.GatewayID)
+				bh := getBKVHandlers()
+				if bh == nil {
+					return nil
+				}
+				return bh.HandleGeneric(context.Background(), f)
+			})
+			
+			// 参数设置/查询 (0x83, 0x84, 0x85)
+			paramHandler := func(f *bkv.Frame) error {
+				if appm != nil {
+					appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%04X", f.Cmd)).Inc()
+				}
+				bindIfNeeded(f.GatewayID)
 				bh := getBKVHandlers()
 				if bh == nil {
 					return nil
 				}
 				return bh.HandleParam(context.Background(), f)
-			})
-			bkvAdapter.Register(0x84, func(f *bkv.Frame) error {
-				if appm != nil {
-					appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
-				}
-				bh := getBKVHandlers()
-				if bh == nil {
-					return nil
-				}
-				return bh.HandleParam(context.Background(), f)
-			})
-			bkvAdapter.Register(0x85, func(f *bkv.Frame) error {
-				if appm != nil {
-					appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%02X", f.Cmd)).Inc()
-				}
-				bh := getBKVHandlers()
-				if bh == nil {
-					return nil
-				}
-				return bh.HandleParam(context.Background(), f)
-			})
+			}
+			bkvAdapter.Register(0x83, paramHandler)
+			bkvAdapter.Register(0x84, paramHandler)
+			bkvAdapter.Register(0x85, paramHandler)
 		}
 
 		mux := tcpserver.NewMux(adapters...)
