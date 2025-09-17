@@ -1,6 +1,9 @@
 package bkv
 
-import "encoding/hex"
+import (
+	"encoding/hex"
+	"errors"
+)
 
 // Frame BKV 协议帧结构
 // 格式：fcfe/fcff(2) + len(2) + cmd(2) + msgID(4) + direction(1) + gatewayID(var) + data(var) + checksum(1) + fcee(2)
@@ -14,6 +17,9 @@ type Frame struct {
 	Data      []byte // 数据payload
 	Checksum  uint8  // 校验和
 	Tail      []byte // fcee 包尾
+
+	// BKV子协议解析结果 (缓存)
+	bkvPayload *BKVPayload
 }
 
 // IsUplink 判断是否为上行帧
@@ -33,6 +39,42 @@ func (f *Frame) GatewayIDBytes() []byte {
 	}
 	bytes, _ := hex.DecodeString(f.GatewayID)
 	return bytes
+}
+
+// GetBKVPayload 解析并返回BKV子协议载荷
+func (f *Frame) GetBKVPayload() (*BKVPayload, error) {
+	if f.bkvPayload != nil {
+		return f.bkvPayload, nil
+	}
+
+	// 只有命令0x1000包含BKV子协议
+	if f.Cmd != 0x1000 {
+		return nil, errors.New("not a BKV protocol frame")
+	}
+
+	payload, err := ParseBKVPayload(f.Data)
+	if err != nil {
+		return nil, err
+	}
+
+	f.bkvPayload = payload
+	return payload, nil
+}
+
+// IsBKVFrame 判断是否为BKV子协议帧
+func (f *Frame) IsBKVFrame() bool {
+	return f.Cmd == 0x1000
+}
+
+// IsHeartbeat 判断是否为心跳帧
+func (f *Frame) IsHeartbeat() bool {
+	if f.Cmd == 0x0000 {
+		return true // 简单心跳
+	}
+	if payload, err := f.GetBKVPayload(); err == nil {
+		return payload.IsHeartbeat()
+	}
+	return false
 }
 
 var (
