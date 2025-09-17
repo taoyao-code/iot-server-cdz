@@ -40,6 +40,15 @@ func (f *fakeRepoParam) AckOutboundByMsgID(ctx context.Context, deviceID int64, 
 	return nil
 }
 
+func (f *fakeRepoParam) StoreParamWrite(ctx context.Context, deviceID int64, paramID int, value []byte, msgID int) error {
+	return nil
+}
+
+func (f *fakeRepoParam) GetParamWritePending(ctx context.Context, deviceID int64, paramID int) ([]byte, int, error) {
+	// 简单的模拟实现：返回固定的测试值
+	return []byte{0x01, 0x02}, 123, nil
+}
+
 func TestHandleParam_ReadbackSuccess(t *testing.T) {
 	fr := &fakeRepoParam{}
 	h := &Handlers{Repo: fr}
@@ -57,12 +66,77 @@ func TestHandleParam_ReadbackFailure(t *testing.T) {
 	fr := &fakeRepoParam{}
 	h := &Handlers{Repo: fr}
 	// 0x85 回读，无负载视为失败
-	f := &Frame{Cmd: 0x85, Data: []byte{}}
+	f := &Frame{
+		Cmd:       0x85,
+		Direction: 0x01, // 上行回读
+		Data:      []byte{},
+	}
 	if err := h.HandleParam(context.Background(), f); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if fr.logs == 0 || fr.lastCmd != int(0x85) || fr.lastSuccess != false {
 		t.Fatalf("expected failure log for 0x85, got logs=%d cmd=%d success=%v", fr.logs, fr.lastCmd, fr.lastSuccess)
+	}
+}
+
+func TestHandleParam_WriteAndReadback(t *testing.T) {
+	fr := &fakeRepoParam{}
+	h := &Handlers{Repo: fr}
+	
+	// 测试参数写入（下行）
+	writeFrame := &Frame{
+		Cmd:       0x83,
+		MsgID:     456,
+		Direction: 0x00, // 下行
+		Data:      []byte{0x01, 0x02, 0x01, 0x02}, // paramID=1, len=2, value=[0x01,0x02]
+	}
+	
+	if err := h.HandleParam(context.Background(), writeFrame); err != nil {
+		t.Fatalf("write err: %v", err)
+	}
+	
+	// 测试参数回读（上行）匹配的情况
+	readbackFrame := &Frame{
+		Cmd:       0x85,
+		MsgID:     789,
+		Direction: 0x01, // 上行
+		Data:      []byte{0x01, 0x02, 0x01, 0x02}, // paramID=1, len=2, value=[0x01,0x02] (匹配)
+	}
+	
+	if err := h.HandleParam(context.Background(), readbackFrame); err != nil {
+		t.Fatalf("readback err: %v", err)
+	}
+	
+	// 应该有写入和回读的日志
+	if fr.logs < 2 {
+		t.Fatalf("expected at least 2 logs, got %d", fr.logs)
+	}
+	
+	// 最后一次应该是成功的回读
+	if fr.lastCmd != 0x85 || fr.lastSuccess != true {
+		t.Fatalf("expected successful readback, got cmd=%d success=%v", fr.lastCmd, fr.lastSuccess)
+	}
+}
+
+func TestHandleParam_ReadbackMismatch(t *testing.T) {
+	fr := &fakeRepoParam{}
+	h := &Handlers{Repo: fr}
+	
+	// 测试参数回读（上行）不匹配的情况
+	readbackFrame := &Frame{
+		Cmd:       0x85,
+		MsgID:     789,
+		Direction: 0x01, // 上行
+		Data:      []byte{0x01, 0x02, 0x03, 0x04}, // paramID=1, len=2, value=[0x03,0x04] (不匹配)
+	}
+	
+	if err := h.HandleParam(context.Background(), readbackFrame); err != nil {
+		t.Fatalf("readback err: %v", err)
+	}
+	
+	// 应该是失败的回读
+	if fr.lastCmd != 0x85 || fr.lastSuccess != false {
+		t.Fatalf("expected failed readback, got cmd=%d success=%v", fr.lastCmd, fr.lastSuccess)
 	}
 }
 
