@@ -276,3 +276,17 @@ func (p *BKVPayload) IsHeartbeat() bool {
 func (p *BKVPayload) IsStatusReport() bool {
 	return p.Cmd == 0x1017 // 状态上报也使用1017命令，通过0x94字段区分
 }
+
+// IsChargingEnd 判断是否为充电结束上报
+func (p *BKVPayload) IsChargingEnd() bool {
+	// 检查是否包含充电结束的关键字段
+	for _, field := range p.Fields {
+		// 0x2E: 充电结束时间
+		// 0x2F: 结束原因
+		// 0xA: 订单号
+		if field.Tag == 0x2E || field.Tag == 0x2F {
+			return true
+		}
+	}
+	return false
+}

@@ -206,6 +206,94 @@ func TestHandlers_Control_StopCharging(t *testing.T) {
 	}
 }
 
+func TestHandlers_ChargingEnd_Basic(t *testing.T) {
+	fr := newFakeRepo()
+	h := &Handlers{Repo: fr}
+	
+	// 构造基础充电结束上报 (cmd=0x0015)
+	// 基于协议文档：0011 02 02 5036 30 20 00 98 0068 0000 0001 0050 002d
+	endData := []byte{
+		0x00, 0x11, // 帧长
+		0x02,       // 命令（充电结束）
+		0x02,       // 插座号
+		0x50, 0x36, // 插座版本
+		0x30,       // 插座温度
+		0x20,       // RSSI
+		0x00,       // 插孔号（A孔）
+		0x98,       // 插座状态
+		0x00, 0x68, // 业务号
+		0x00, 0x00, // 瞬时功率
+		0x00, 0x01, // 瞬时电流
+		0x00, 0x50, // 用电量（0.8KW/h）
+		0x00, 0x2D, // 充电时间（45分钟）
+	}
+	
+	frame := &Frame{
+		Cmd:       0x0015,
+		MsgID:     0x1236,
+		Direction: 0x01, // 上行
+		GatewayID: "86004459453005",
+		Data:      endData,
+	}
+	
+	if err := h.HandleChargingEnd(context.Background(), frame); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	
+	// 应该有两个日志：SettleOrder + InsertCmdLog
+	if fr.logs != 2 {
+		t.Fatalf("expected 2 logs (settle + cmd), got %d", fr.logs)
+	}
+	
+	// 应该有一个端口状态更新
+	if fr.upserts != 1 {
+		t.Fatalf("expected 1 port upsert, got %d", fr.upserts)
+	}
+	
+	// 检查端口状态为空闲
+	if fr.lastStatus != 0 {
+		t.Fatalf("expected status 0 (idle), got %d", fr.lastStatus)
+	}
+}
+
+func TestHandlers_ChargingEnd_BKV(t *testing.T) {
+	fr := newFakeRepo()
+	h := &Handlers{Repo: fr}
+	
+	// 先创建一个简单的BKV载荷来测试IsChargingEnd
+	payload := &BKVPayload{
+		Cmd:       0x1004,
+		GatewayID: "82210225000520",
+		Fields: []TLVField{
+			{Tag: 0x08, Value: []byte{0x00}},           // 插孔号
+			{Tag: 0x0A, Value: []byte{0x00, 0x33}},     // 订单号
+			{Tag: 0x0D, Value: []byte{0x00, 0x01}},     // 用电量
+			{Tag: 0x0E, Value: []byte{0x00, 0x01}},     // 充电时间
+			{Tag: 0x2F, Value: []byte{0x08}},           // 结束原因 - 这个字段标识充电结束
+		},
+	}
+	
+	// 验证IsChargingEnd检测
+	if !payload.IsChargingEnd() {
+		t.Fatal("payload should be detected as charging end")
+	}
+	
+	// 测试处理逻辑
+	if err := h.handleBKVChargingEnd(context.Background(), 1, payload); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	
+	// 应该有一个日志：SettleOrder
+	if fr.logs != 1 {
+		t.Fatalf("expected 1 log (settle), got %d", fr.logs)
+	}
+	
+	// 应该有一个端口状态更新
+	if fr.upserts != 1 {
+		t.Fatalf("expected 1 port upsert, got %d", fr.upserts)
+	}
+}
+
 func TestHandlers_Generic(t *testing.T) {
 	fr := newFakeRepo()
 	h := &Handlers{Repo: fr}
