@@ -1,6 +1,9 @@
 package bkv
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // repoAPI 抽象（与 ap3000 对齐一部分能力）
 type repoAPI interface {
@@ -11,128 +14,181 @@ type repoAPI interface {
 	AckOutboundByMsgID(ctx context.Context, deviceID int64, msgID int, ok bool, errCode *int) error
 }
 
-// Handlers BKV 最小处理器集合（心跳/状态->端口快照；通用日志）
-// Reason 可选：用于结束原因映射（BKV→平台统一码）
+// Handlers BKV 协议处理器集合
 type Handlers struct {
 	Repo   repoAPI
 	Reason *ReasonMap
 }
 
-// HandleHeartbeat 最小心跳处理（BKV 未定义字段，这里仅记录日志与端口示例占位）
+// HandleHeartbeat 处理心跳帧 (cmd=0x0000 或 BKV cmd=0x1017)
 func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
 	if h == nil || h.Repo == nil {
 		return nil
 	}
-	devID, err := h.Repo.EnsureDevice(ctx, "BKV-UNKNOWN")
+
+	// 使用网关ID作为设备标识
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
+
+	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
 	if err != nil {
 		return err
 	}
-	// 占位：无端口/功率细节，直接日志
-	return h.Repo.InsertCmdLog(ctx, devID, 0, int(f.Cmd), 0, f.Data, true)
+
+	// 记录心跳日志
+	success := true
+	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, success)
 }
 
-// HandleStatus 示例：将首字节当作端口或状态占位（后续按真实协议完善）
-func (h *Handlers) HandleStatus(ctx context.Context, f *Frame) error {
+// HandleBKVStatus 处理BKV插座状态上报 (cmd=0x1000 with BKV payload)
+func (h *Handlers) HandleBKVStatus(ctx context.Context, f *Frame) error {
 	if h == nil || h.Repo == nil {
 		return nil
 	}
-	devID, err := h.Repo.EnsureDevice(ctx, "BKV-UNKNOWN")
+
+	// 获取BKV载荷
+	payload, err := f.GetBKVPayload()
+	if err != nil {
+		return fmt.Errorf("failed to parse BKV payload: %w", err)
+	}
+
+	// 使用BKV载荷中的网关ID
+	devicePhyID := payload.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = f.GatewayID
+	}
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
+
+	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
 	if err != nil {
 		return err
 	}
-	// 占位解析：data[0]=port, data[1]=status（若缺失则使用默认）
-	port := 1
-	status := 1
-	if len(f.Data) >= 1 {
-		port = int(f.Data[0])
+
+	// 记录命令日志
+	if err := h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, true); err != nil {
+		return err
 	}
-	if len(f.Data) >= 2 {
-		status = int(f.Data[1])
+
+	// 如果是状态上报，尝试解析并更新端口状态
+	if payload.IsStatusReport() {
+		return h.handleSocketStatusUpdate(ctx, devID, payload)
 	}
-	_ = h.Repo.UpsertPortState(ctx, devID, port, status, nil)
-	return h.Repo.InsertCmdLog(ctx, devID, 0, int(f.Cmd), 0, f.Data, true)
+
+	return nil
 }
 
-// HandleSettle 结算占位：从 data 提取原因码，映射为平台码后落库（其他字段占位）
-// 约定占位：data[0]=reason（BKV），端口/订单/时长/电量暂为空占位
-func (h *Handlers) HandleSettle(ctx context.Context, f *Frame) error {
-	if h == nil || h.Repo == nil {
-		return nil
-	}
-	devID, err := h.Repo.EnsureDevice(ctx, "BKV-UNKNOWN")
-	if err != nil {
-		return err
-	}
-	reason := 0
-	if len(f.Data) > 0 {
-		reason = int(f.Data[0])
-	}
-	if h.Reason != nil {
-		if v, ok := h.Reason.Translate(reason); ok {
-			reason = v
+// handleSocketStatusUpdate 处理插座状态更新
+func (h *Handlers) handleSocketStatusUpdate(ctx context.Context, deviceID int64, payload *BKVPayload) error {
+	// 尝试解析插座状态 (这里使用简化的解析，因为完整的TLV解析比较复杂)
+	// 从TLV字段中提取基本信息
+	var portAStatus, portBStatus int = 0, 0
+	var portAPower, portBPower *int
+
+	// 简化的字段解析
+	for _, field := range payload.Fields {
+		switch field.Tag {
+		case 0x03:
+			// 插座相关字段，暂时使用默认状态
+		case 0x00:
+			if len(field.Value) >= 3 && field.Value[1] == 0x09 {
+				// 插座状态字段
+				portAStatus = int(field.Value[2])
+			}
 		}
 	}
-	// 占位字段：port=1, orderHex="BKV-UNKNOWN", duration/kwh=0
-	_ = h.Repo.SettleOrder(ctx, devID, 1, "BKV-UNKNOWN", 0, 0, reason)
-	return h.Repo.InsertCmdLog(ctx, devID, 0, int(f.Cmd), 0, f.Data, true)
+
+	// 更新端口A状态
+	if err := h.Repo.UpsertPortState(ctx, deviceID, 0, portAStatus, portAPower); err != nil {
+		return fmt.Errorf("failed to update port A state: %w", err)
+	}
+
+	// 更新端口B状态
+	if err := h.Repo.UpsertPortState(ctx, deviceID, 1, portBStatus, portBPower); err != nil {
+		return fmt.Errorf("failed to update port B state: %w", err)
+	}
+
+	return nil
 }
 
-// HandleAck 占位：解析 msgID 与 code，并按 code==0 视为成功，调用 AckOutboundByMsgID
-// 约定占位：data[0..1]=msgID LE，data[2]=code
-func (h *Handlers) HandleAck(ctx context.Context, f *Frame) error {
-	if h == nil || h.Repo == nil {
-		return nil
-	}
-	devID, err := h.Repo.EnsureDevice(ctx, "BKV-UNKNOWN")
-	if err != nil {
-		return err
-	}
-	var msgID int
-	var code int
-	if len(f.Data) >= 2 {
-		msgID = int(uint16(f.Data[0]) | uint16(f.Data[1])<<8)
-	}
-	if len(f.Data) >= 3 {
-		code = int(f.Data[2])
-	}
-	ok := code == 0
-	var ecode *int
-	if !ok {
-		ecode = &code
-	}
-	_ = h.Repo.AckOutboundByMsgID(ctx, devID, msgID, ok, ecode)
-	return h.Repo.InsertCmdLog(ctx, devID, msgID, int(f.Cmd), 0, f.Data, ok)
-}
-
-// HandleControl 占位：控制类指令（如启动/停止），此处仅记录日志
+// HandleControl 处理控制指令 (cmd=0x0015)
 func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 	if h == nil || h.Repo == nil {
 		return nil
 	}
-	devID, err := h.Repo.EnsureDevice(ctx, "BKV-UNKNOWN")
+
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
+
+	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
 	if err != nil {
 		return err
 	}
-	_ = DecodeControl(f.Data)
-	return h.Repo.InsertCmdLog(ctx, devID, 0, int(f.Cmd), 0, f.Data, true)
+
+	// 记录控制指令日志
+	success := true
+	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, success)
 }
 
-// HandleParam 占位：参数读/写/回读最小路径（83/84/85），回读(0x85)成功需有负载
+// HandleGeneric 通用处理器，记录所有其他指令
+func (h *Handlers) HandleGeneric(ctx context.Context, f *Frame) error {
+	if h == nil || h.Repo == nil {
+		return nil
+	}
+
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
+
+	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
+	if err != nil {
+		return err
+	}
+
+	// 记录通用指令日志
+	success := true
+	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, success)
+}
+
+// getDirection 获取数据方向标识
+func getDirection(isUplink bool) int16 {
+	if isUplink {
+		return 1 // 上行
+	}
+	return 0 // 下行
+}
+
+// HandleParam 处理参数读写指令 (占位实现)
 func (h *Handlers) HandleParam(ctx context.Context, f *Frame) error {
 	if h == nil || h.Repo == nil {
 		return nil
 	}
-	devID, err := h.Repo.EnsureDevice(ctx, "BKV-UNKNOWN")
+
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
+
+	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
 	if err != nil {
 		return err
 	}
+
 	success := true
 	if f.Cmd == 0x83 || f.Cmd == 0x84 {
-		_ = DecodeParamWrite(f.Data)
+		// 参数写入
+		success = len(f.Data) > 0
 	}
 	if f.Cmd == 0x85 {
-		pr := DecodeParamReadback(f.Data)
-		success = len(pr.Value) > 0 || len(f.Data) > 0
+		// 参数回读，有数据则成功
+		success = len(f.Data) > 0
 	}
-	return h.Repo.InsertCmdLog(ctx, devID, 0, int(f.Cmd), 0, f.Data, success)
+
+	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, success)
 }
