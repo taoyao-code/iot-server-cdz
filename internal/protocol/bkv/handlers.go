@@ -13,6 +13,10 @@ type repoAPI interface {
 	UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, status int, powerW01 *int) error
 	SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, reason int) error
 	AckOutboundByMsgID(ctx context.Context, deviceID int64, msgID int, ok bool, errCode *int) error
+	
+	// 参数相关方法
+	StoreParamWrite(ctx context.Context, deviceID int64, paramID int, value []byte, msgID int) error
+	GetParamWritePending(ctx context.Context, deviceID int64, paramID int) ([]byte, int, error) // value, msgID, error
 }
 
 // Handlers BKV 协议处理器集合
@@ -89,8 +93,49 @@ func (h *Handlers) HandleBKVStatus(ctx context.Context, f *Frame) error {
 
 // handleSocketStatusUpdate 处理插座状态更新
 func (h *Handlers) handleSocketStatusUpdate(ctx context.Context, deviceID int64, payload *BKVPayload) error {
-	// 尝试解析插座状态 (这里使用简化的解析，因为完整的TLV解析比较复杂)
-	// 从TLV字段中提取基本信息
+	// 使用GetSocketStatus方法解析完整的插座状态
+	socketStatus, err := payload.GetSocketStatus()
+	if err != nil {
+		// 如果解析失败，回退到简化解析
+		return h.handleSocketStatusUpdateSimple(ctx, deviceID, payload)
+	}
+
+	// 更新端口A状态
+	if socketStatus.PortA != nil {
+		portA := socketStatus.PortA
+		status := int(portA.Status)
+		var powerW *int
+		if portA.Power > 0 {
+			power := int(portA.Power) / 10 // 从0.1W转换为W
+			powerW = &power
+		}
+		
+		if err := h.Repo.UpsertPortState(ctx, deviceID, int(portA.PortNo), status, powerW); err != nil {
+			return fmt.Errorf("failed to update port A state: %w", err)
+		}
+	}
+
+	// 更新端口B状态
+	if socketStatus.PortB != nil {
+		portB := socketStatus.PortB
+		status := int(portB.Status)
+		var powerW *int
+		if portB.Power > 0 {
+			power := int(portB.Power) / 10 // 从0.1W转换为W
+			powerW = &power
+		}
+		
+		if err := h.Repo.UpsertPortState(ctx, deviceID, int(portB.PortNo), status, powerW); err != nil {
+			return fmt.Errorf("failed to update port B state: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// handleSocketStatusUpdateSimple 简化的插座状态更新（回退方案）
+func (h *Handlers) handleSocketStatusUpdateSimple(ctx context.Context, deviceID int64, payload *BKVPayload) error {
+	// 原有的简化解析逻辑作为回退方案
 	var portAStatus, portBStatus int = 0, 0
 	var portAPower, portBPower *int
 
@@ -357,7 +402,7 @@ func getDirection(isUplink bool) int16 {
 	return 0 // 下行
 }
 
-// HandleParam 处理参数读写指令 (占位实现)
+// HandleParam 处理参数读写指令 (完整的写入→回读校验实现)
 func (h *Handlers) HandleParam(ctx context.Context, f *Frame) error {
 	if h == nil || h.Repo == nil {
 		return nil
@@ -374,12 +419,74 @@ func (h *Handlers) HandleParam(ctx context.Context, f *Frame) error {
 	}
 
 	success := true
-	if f.Cmd == 0x83 || f.Cmd == 0x84 {
-		// 参数写入
-		success = len(f.Data) > 0
-	}
-	if f.Cmd == 0x85 {
-		// 参数回读，有数据则成功
+	
+	switch f.Cmd {
+	case 0x83, 0x84: // 参数写入
+		if !f.IsUplink() {
+			// 下行参数写入：存储待验证的参数值
+			if len(f.Data) > 0 {
+				param := DecodeParamWrite(f.Data)
+				if err := h.Repo.StoreParamWrite(ctx, devID, param.ParamID, param.Value, int(f.MsgID)); err != nil {
+					success = false
+				}
+			} else {
+				success = false
+			}
+		} else {
+			// 上行参数写入响应：仅确认收到
+			if err := h.Repo.AckOutboundByMsgID(ctx, devID, int(f.MsgID), len(f.Data) > 0, nil); err != nil {
+				success = false
+			}
+		}
+		
+	case 0x85: // 参数回读
+		if f.IsUplink() {
+			// 上行参数回读：验证值是否与写入一致
+			if len(f.Data) > 0 {
+				readback := DecodeParamReadback(f.Data)
+				
+				// 获取之前写入的参数值进行比较
+				expectedValue, msgID, err := h.Repo.GetParamWritePending(ctx, devID, readback.ParamID)
+				if err == nil && expectedValue != nil {
+					// 比较回读值与期望值
+					if len(readback.Value) == len(expectedValue) {
+						match := true
+						for i, v := range readback.Value {
+							if v != expectedValue[i] {
+								match = false
+								break
+							}
+						}
+						
+						if match {
+							// 校验成功：确认参数写入完成
+							if err := h.Repo.AckOutboundByMsgID(ctx, devID, msgID, true, nil); err != nil {
+								success = false
+							}
+						} else {
+							// 校验失败：参数值不匹配
+							errCode := 1 // 参数校验失败
+							if err := h.Repo.AckOutboundByMsgID(ctx, devID, msgID, false, &errCode); err != nil {
+								success = false
+							}
+							success = false
+						}
+					} else {
+						// 校验失败：长度不匹配
+						errCode := 2 // 参数长度错误
+						if err := h.Repo.AckOutboundByMsgID(ctx, devID, msgID, false, &errCode); err != nil {
+							success = false
+						}
+						success = false
+					}
+				}
+			} else {
+				success = false
+			}
+		}
+		
+	default:
+		// 其他参数相关命令
 		success = len(f.Data) > 0
 	}
 
