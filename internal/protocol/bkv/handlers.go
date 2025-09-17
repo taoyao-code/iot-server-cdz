@@ -88,6 +88,21 @@ func (h *Handlers) HandleBKVStatus(ctx context.Context, f *Frame) error {
 		return h.handleBKVChargingEnd(ctx, devID, payload)
 	}
 
+	// 如果是异常事件上报，处理异常信息
+	if payload.IsExceptionReport() {
+		return h.handleExceptionEvent(ctx, devID, payload)
+	}
+
+	// 如果是参数查询，记录参数信息
+	if payload.IsParameterQuery() {
+		return h.handleParameterQuery(ctx, devID, payload)
+	}
+
+	// 如果是控制命令，转发到控制处理器
+	if payload.IsControlCommand() {
+		return h.handleBKVControlCommand(ctx, devID, payload)
+	}
+
 	return nil
 }
 
@@ -529,4 +544,62 @@ func (h *Handlers) HandleParam(ctx context.Context, f *Frame) error {
 	}
 
 	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, success)
+}
+
+// handleExceptionEvent 处理异常事件上报
+func (h *Handlers) handleExceptionEvent(ctx context.Context, deviceID int64, payload *BKVPayload) error {
+	event, err := ParseBKVExceptionEvent(payload)
+	if err != nil {
+		return fmt.Errorf("failed to parse exception event: %w", err)
+	}
+
+	// 这里可以根据异常类型进行不同的处理
+	// 例如：更新设备状态、发送告警、记录异常日志等
+	
+	// 记录异常事件到日志（可以扩展为专门的异常事件表）
+	success := true
+	return h.Repo.InsertCmdLog(ctx, deviceID, 0, int(payload.Cmd), 1, []byte(fmt.Sprintf("Exception: Socket=%d, Reason=%d", event.SocketNo, event.SocketEventReason)), success)
+}
+
+// handleParameterQuery 处理参数查询
+func (h *Handlers) handleParameterQuery(ctx context.Context, deviceID int64, payload *BKVPayload) error {
+	param, err := ParseBKVParameterQuery(payload)
+	if err != nil {
+		return fmt.Errorf("failed to parse parameter query: %w", err)
+	}
+
+	// 这里可以保存设备参数信息到数据库
+	// 或者与之前设置的参数进行比较验证
+	
+	// 记录参数查询结果
+	success := true
+	return h.Repo.InsertCmdLog(ctx, deviceID, 0, int(payload.Cmd), 1, []byte(fmt.Sprintf("Params: Socket=%d, Power=%d, Temp=%d", param.SocketNo, param.PowerLimit, param.HighTempThreshold)), success)
+}
+
+// handleBKVControlCommand 处理BKV控制命令
+func (h *Handlers) handleBKVControlCommand(ctx context.Context, deviceID int64, payload *BKVPayload) error {
+	// BKV控制命令可能包含刷卡充电、远程控制等
+	// 这里实现基础的控制逻辑
+	
+	// 检查是否为刷卡充电相关
+	if payload.IsCardCharging() {
+		return h.handleCardCharging(ctx, deviceID, payload)
+	}
+	
+	// 其他控制命令的通用处理
+	success := true
+	return h.Repo.InsertCmdLog(ctx, deviceID, 0, int(payload.Cmd), 1, []byte("BKV Control Command"), success)
+}
+
+// handleCardCharging 处理刷卡充电
+func (h *Handlers) handleCardCharging(ctx context.Context, deviceID int64, payload *BKVPayload) error {
+	// 解析刷卡相关信息
+	// 这里可以实现刷卡充电的完整流程：
+	// 1. 验证卡片有效性
+	// 2. 检查余额
+	// 3. 创建充电订单
+	// 4. 更新端口状态
+	
+	success := true
+	return h.Repo.InsertCmdLog(ctx, deviceID, 0, int(payload.Cmd), 1, []byte("Card Charging"), success)
 }
