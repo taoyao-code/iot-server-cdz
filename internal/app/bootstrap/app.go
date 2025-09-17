@@ -63,7 +63,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 		repo = &pgstorage.Repository{Pool: dbpool}
 		pusher, pushURL := app.NewPusherIfEnabled(cfg.Thirdparty.Push.WebhookURL, cfg.Thirdparty.Push.Secret)
 		handlerSet = &ap3000.Handlers{Repo: repo, Pusher: pusher, PushURL: pushURL, Metrics: appm}
-		bkvHandlers = &bkv.Handlers{Repo: repo, Reason: bkvReason}
+		bkvHandlers = bkv.NewHandlers(repo, bkvReason)
 		defer dbpool.Close()
 
 		httpSrv.Register(func(r *gin.Engine) { api.RegisterReadOnlyRoutes(r, repo, sess, policy) })
