@@ -115,7 +115,8 @@ func (w *Worker) tick(ctx context.Context) {
 		var frame []byte
 		switch wconn.Protocol() {
 		case "bkv":
-			frame = bkv.Build(byte(cmd), payload)
+			// BKV协议需要更多参数，这里使用占位值
+			frame = bkv.Build(uint16(cmd), uint32(msgID), *phyID, payload)
 		default:
 			frame = ap3000.Build(*phyID, msgID, byte(cmd), payload)
 		}

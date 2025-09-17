@@ -6,12 +6,12 @@ type Handler func(*Frame) error
 
 type Table struct{
     mu sync.RWMutex
-    m map[byte]Handler
+    m map[uint16]Handler
 }
 
-func NewTable() *Table { return &Table{m: make(map[byte]Handler)} }
+func NewTable() *Table { return &Table{m: make(map[uint16]Handler)} }
 
-func (t *Table) Register(cmd byte, h Handler) {
+func (t *Table) Register(cmd uint16, h Handler) {
     t.mu.Lock(); defer t.mu.Unlock()
     t.m[cmd] = h
 }
