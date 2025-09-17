@@ -240,42 +240,80 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 
 	// 如果是下行控制指令（平台发给设备）
 	if !f.IsUplink() {
-		// 解析详细控制参数（按协议文档格式）
-		if len(f.Data) >= 6 {
-			socketNo := int(f.Data[0])     // 插座号
-			portNo := int(f.Data[1])       // 插孔号 (0=A孔, 1=B孔)
-			switchState := int(f.Data[2])  // 开关状态 (1=开, 0=关)
-			// chargeMode := int(f.Data[3])   // 充电模式 (1=按时, 0=按量)
+		// 使用增强的解析器解析控制指令
+		cmd, err := ParseBKVControlCommand(f.Data)
+		if err != nil {
+			success = false
+			return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, success)
+		}
+
+		if cmd.Switch == SwitchOn {
+			// 开始充电：创建订单并更新端口状态
+			orderHex := fmt.Sprintf("%04X%02X%02X", f.MsgID, cmd.SocketNo, cmd.Port)
 			
-			// 充电时长(分钟)或电量(wh) - 16位大端
-			duration := int(f.Data[4])<<8 | int(f.Data[5])
+			// 根据充电模式确定充电参数
+			var durationSec int
+			var kwhTarget int
 			
-			if switchState == 1 {
-				// 开始充电：创建订单并更新端口状态
-				orderHex := fmt.Sprintf("%04X%02X%02X", f.MsgID, socketNo, portNo)
-				
-				// 创建充电订单（状态1=进行中）
-				if err := h.Repo.UpsertOrderProgress(ctx, devID, portNo, orderHex, duration, 0, 1, nil); err != nil {
-					success = false
-				} else {
-					// 更新端口状态为充电中
-					chargingStatus := 1 // 1=充电中
-					if err := h.Repo.UpsertPortState(ctx, devID, portNo, chargingStatus, nil); err != nil {
-						success = false
-					}
-				}
+			switch cmd.Mode {
+			case ChargingModeByTime:
+				durationSec = int(cmd.Duration) * 60 // 分钟转秒
+			case ChargingModeByPower:
+				kwhTarget = int(cmd.Energy) // Wh转换为0.01kWh需要除以10
+			case ChargingModeByLevel:
+				// 按功率充电使用总支付金额作为目标
+				durationSec = int(cmd.Duration) * 60
+			}
+			
+			// 创建充电订单（状态1=进行中）
+			if err := h.Repo.UpsertOrderProgress(ctx, devID, int(cmd.Port), orderHex, durationSec, kwhTarget, 1, nil); err != nil {
+				success = false
 			} else {
-				// 停止充电：更新端口状态为空闲
-				idleStatus := 0 // 0=空闲
-				if err := h.Repo.UpsertPortState(ctx, devID, portNo, idleStatus, nil); err != nil {
+				// 更新端口状态为充电中
+				chargingStatus := 1 // 1=充电中
+				if err := h.Repo.UpsertPortState(ctx, devID, int(cmd.Port), chargingStatus, nil); err != nil {
 					success = false
 				}
 			}
+		} else {
+			// 停止充电：更新端口状态为空闲
+			idleStatus := 0 // 0=空闲
+			if err := h.Repo.UpsertPortState(ctx, devID, int(cmd.Port), idleStatus, nil); err != nil {
+				success = false
+			}
 		}
 	} else {
-		// 上行控制响应（设备回复）- 可能需要更新ACK状态
-		if err := h.Repo.AckOutboundByMsgID(ctx, devID, int(f.MsgID), true, nil); err != nil {
-			success = false
+		// 如果是上行（设备回复），可能是充电结束上报
+		if len(f.Data) >= 15 {
+			endReport, err := ParseBKVChargingEnd(f.Data)
+			if err == nil {
+				// 处理充电结束
+				orderHex := fmt.Sprintf("%04X", endReport.BusinessNo)
+				
+				// 计算实际充电时长和用电量
+				durationSec := int(endReport.ChargingTime) * 60 // 分钟转秒
+				kwhUsed := int(endReport.EnergyUsed)            // 已经是0.01kWh单位
+				
+				// 映射结束原因到平台统一原因码
+				var platformReason int = 0 // 默认正常结束
+				if h.Reason != nil {
+					if reason, ok := h.Reason.Translate(int(endReport.EndReason)); ok {
+						platformReason = reason
+					}
+				}
+				
+				// 结算订单
+				if err := h.Repo.SettleOrder(ctx, devID, int(endReport.Port), orderHex, durationSec, kwhUsed, platformReason); err != nil {
+					success = false
+				}
+				
+				// 更新端口状态为空闲
+				idleStatus := 0
+				powerW := int(endReport.InstantPower) / 10 // 转换为实际瓦数
+				if err := h.Repo.UpsertPortState(ctx, devID, int(endReport.Port), idleStatus, &powerW); err != nil {
+					success = false
+				}
+			}
 		}
 	}
 
