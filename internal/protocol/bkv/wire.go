@@ -10,6 +10,7 @@ import (
 type repoAdapter struct {
 	*pgstorage.Repository
 	// 简单的内存存储用于参数校验（生产环境应该使用数据库）
+	// TODO: Replace with proper database-backed parameter storage. See issue #XXX.
 	paramStore map[string]paramEntry
 }
 
