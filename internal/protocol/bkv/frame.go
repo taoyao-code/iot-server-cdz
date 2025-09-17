@@ -1,14 +1,44 @@
 package bkv
 
-// Frame BKV 最小帧结构（骨架）
-// 约定：magic[2]=0xFC,0xFE | len(1) | cmd(1) | data[n] | sum(1)
-// 实际协议可能为TLV/变长，此处仅占位用于集成与测试
+import "encoding/hex"
+
+// Frame BKV 协议帧结构
+// 格式：fcfe/fcff(2) + len(2) + cmd(2) + msgID(4) + direction(1) + gatewayID(var) + data(var) + checksum(1) + fcee(2)
 type Frame struct {
-    Cmd  byte
-    Data []byte
+	Magic     []byte // fcfe (上行) 或 fcff (下行)
+	Len       uint16 // 包长度，包含整个帧
+	Cmd       uint16 // 命令码
+	MsgID     uint32 // 帧流水号
+	Direction uint8  // 包类型/数据方向：0x00-服务器下行，0x01-设备上行
+	GatewayID string // 网关ID (变长)
+	Data      []byte // 数据payload
+	Checksum  uint8  // 校验和
+	Tail      []byte // fcee 包尾
 }
 
-var magicA = []byte{0xFC, 0xFE}
-var magicB = []byte{0xFC, 0xFF}
+// IsUplink 判断是否为上行帧
+func (f *Frame) IsUplink() bool {
+	return f.Direction == 0x01
+}
+
+// IsDownlink 判断是否为下行帧  
+func (f *Frame) IsDownlink() bool {
+	return f.Direction == 0x00
+}
+
+// GatewayIDBytes 返回网关ID的原始字节
+func (f *Frame) GatewayIDBytes() []byte {
+	if len(f.GatewayID) == 0 {
+		return nil
+	}
+	bytes, _ := hex.DecodeString(f.GatewayID)
+	return bytes
+}
+
+var (
+	magicUplink   = []byte{0xFC, 0xFE} // 设备上行
+	magicDownlink = []byte{0xFC, 0xFF} // 服务器下行
+	tailMagic     = []byte{0xFC, 0xEE} // 包尾
+)
 
 

@@ -10,7 +10,7 @@ type Adapter struct {
 func NewAdapter() *Adapter { return &Adapter{decoder: NewStreamDecoder(), table: NewTable()} }
 
 // Register 注册指令处理器
-func (a *Adapter) Register(cmd byte, h Handler) { a.table.Register(cmd, h) }
+func (a *Adapter) Register(cmd uint16, h Handler) { a.table.Register(cmd, h) }
 
 // ProcessBytes 处理原始字节流：切分帧并路由
 func (a *Adapter) ProcessBytes(p []byte) error {
@@ -31,5 +31,6 @@ func (a *Adapter) Sniff(prefix []byte) bool {
 	if len(prefix) < 2 {
 		return false
 	}
-	return (prefix[0] == magicA[0] && prefix[1] == magicA[1]) || (prefix[0] == magicB[0] && prefix[1] == magicB[1])
+	return (prefix[0] == magicUplink[0] && prefix[1] == magicUplink[1]) || 
+		   (prefix[0] == magicDownlink[0] && prefix[1] == magicDownlink[1])
 }
