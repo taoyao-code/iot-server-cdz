@@ -41,12 +41,24 @@ type TCPConfig struct {
 type ProtocolsConfig struct {
 	EnableAP3000 bool      `mapstructure:"enable_ap3000"`
 	EnableBKV    bool      `mapstructure:"enable_bkv"`
+	EnableGN     bool      `mapstructure:"enable_gn"`
 	BKV          BKVConfig `mapstructure:"bkv"`
+	GN           GNConfig  `mapstructure:"gn"`
 }
 
 // BKVConfig BKV 协议配置
 type BKVConfig struct {
 	ReasonMapPath string `mapstructure:"reason_map_path"`
+}
+
+// GNConfig 组网设备(GN)协议配置
+type GNConfig struct {
+	Listen       string `mapstructure:"listen"`
+	Checksum     string `mapstructure:"checksum"`
+	ReadBuffer   int    `mapstructure:"read_buffer"`
+	WriteBuffer  int    `mapstructure:"write_buffer"`
+	IdleTimeout  int    `mapstructure:"idle_timeout"`
+	RetryBackoff int    `mapstructure:"retry_backoff"`
 }
 
 // GatewayConfig 设备接入网关与出站相关配置
@@ -199,7 +211,14 @@ func setDefaults(v *viper.Viper) {
 	// 协议默认
 	v.SetDefault("protocols.enable_ap3000", true)
 	v.SetDefault("protocols.enable_bkv", true)
+	v.SetDefault("protocols.enable_gn", false)
 	v.SetDefault("protocols.bkv.reason_map_path", "configs/bkv-reason-map.example.yaml")
+	v.SetDefault("protocols.gn.listen", ":9000")
+	v.SetDefault("protocols.gn.checksum", "sum_mod_256")
+	v.SetDefault("protocols.gn.read_buffer", 4096)
+	v.SetDefault("protocols.gn.write_buffer", 4096)
+	v.SetDefault("protocols.gn.idle_timeout", 300)
+	v.SetDefault("protocols.gn.retry_backoff", 15)
 
 	// 网关与出站默认
 	v.SetDefault("gateway.listen", ":9000")
