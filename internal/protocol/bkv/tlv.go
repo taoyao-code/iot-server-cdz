@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 )
 
 var (
@@ -95,6 +96,161 @@ type SocketStatus struct {
 	RSSI          uint8  // 信号强度
 	PortA         *PortStatus
 	PortB         *PortStatus
+}
+
+// PortStatus 插孔状态信息
+
+// BKV协议控制指令详细结构定义
+// 基于设备对接指引-组网设备2024(1).txt协议文档
+
+// ChargingMode 充电模式
+type ChargingMode uint8
+
+const (
+	ChargingModeByTime  ChargingMode = 1 // 按时长充电
+	ChargingModeByPower ChargingMode = 0 // 按电量充电  
+	ChargingModeByLevel ChargingMode = 3 // 按功率充电
+)
+
+// SwitchState 开关状态
+type SwitchState uint8
+
+const (
+	SwitchOff SwitchState = 0 // 关闭
+	SwitchOn  SwitchState = 1 // 开启
+)
+
+// PortType 插孔类型
+type PortType uint8
+
+const (
+	PortA PortType = 0 // A孔
+	PortB PortType = 1 // B孔
+)
+
+// BKVControlCommand BKV控制指令结构（cmd=0x0015）
+type BKVControlCommand struct {
+	SocketNo     uint8        // 插座号
+	Port         PortType     // 插孔号 (0=A孔, 1=B孔)
+	Switch       SwitchState  // 开关状态 (1=开, 0=关)
+	Mode         ChargingMode // 充电模式 (1=按时, 0=按量, 3=按功率)
+	Duration     uint16       // 充电时长，单位分钟(1-900分钟)
+	Energy       uint16       // 充电电量，单位wh
+	BusinessNo   uint16       // 业务号
+	
+	// 按功率充电专用字段
+	PaymentAmount uint16         // 支付金额(分)
+	LevelCount    uint8          // 挡位个数(最多5档)
+	PowerLevels   []PowerLevel   // 功率挡位信息
+}
+
+// PowerLevel 功率挡位信息（按功率充电模式）
+type PowerLevel struct {
+	Power    uint16 // 功率值(W)
+	Price    uint16 // 价格(分)
+	Duration uint16 // 时长(分钟)
+}
+
+// ChargingEndReason 充电结束原因
+type ChargingEndReason uint8
+
+const (
+	ReasonNormal      ChargingEndReason = 0 // 正常结束
+	ReasonUserStop    ChargingEndReason = 1 // 用户停止
+	ReasonOverCurrent ChargingEndReason = 2 // 过流保护
+	ReasonOverTemp    ChargingEndReason = 3 // 过温保护
+	ReasonPowerOff    ChargingEndReason = 4 // 断电/异常
+	ReasonNoLoad      ChargingEndReason = 8 // 空载结束（从状态位推导）
+)
+
+// BKVChargingEnd 充电结束上报结构（cmd=0x0015方向为设备->平台）
+type BKVChargingEnd struct {
+	SocketNo        uint8             // 插座号
+	SoftwareVer     uint16            // 插座版本
+	Temperature     uint8             // 插座温度
+	RSSI            uint8             // 信号强度
+	Port            PortType          // 插孔号
+	Status          uint8             // 插座状态位
+	BusinessNo      uint16            // 业务号
+	InstantPower    uint16            // 瞬时功率 (单位W，实际值/10)
+	InstantCurrent  uint16            // 瞬时电流 (单位A，实际值/1000)
+	EnergyUsed      uint16            // 用电量 (单位0.01kWh)
+	ChargingTime    uint16            // 充电时间 (分钟)
+	EndReason       ChargingEndReason // 结束原因
+	
+	// 按功率充电专用字段
+	EndTime         string            // 结束时间 (格式: YYYYMMDDHHMISS)
+	AmountSpent     uint16            // 花费金额(分)
+	SettlingPower   uint16            // 结算功率(单位0.1W)
+	LevelCount      uint8             // 挡位数
+	LevelDurations  []uint16          // 各挡位充电时间
+}
+
+// CardChargingRequest 刷卡充电请求（BKV子协议）
+type CardChargingRequest struct {
+	SocketNo    uint8  // 插座号
+	Port        PortType // 插孔号
+	BusinessNo  uint16 // 业务号
+	Status      uint8  // 插座状态
+	CardNo      []byte // 卡号（6字节）
+	OfflineParams []byte // 离线卡参数（补0）
+}
+
+// CardChargingEnd 刷卡充电结束（BKV子协议）
+type CardChargingEnd struct {
+	SocketNo        uint8    // 插座号
+	SoftwareVer     uint16   // 软件版本
+	Temperature     uint8    // 温度
+	RSSI            uint8    // 信号强度
+	Port            PortType // 插孔号
+	Status          uint8    // 插座状态
+	BusinessNo      uint16   // 业务号
+	InstantPower    uint16   // 瞬时功率
+	InstantCurrent  uint16   // 瞬时电流
+	EnergyUsed      uint16   // 用电量
+	ChargingTime    uint16   // 充电时间
+	CardNo          []byte   // 卡号
+	OnlineCard      bool     // 在线卡标志
+	BillingMode     uint8    // 计费模式 (1=按时, 2=按量, 3=按功率)
+	AmountSpent     uint16   // 花费金额（仅按功率）
+	SettlingPower   uint16   // 结算功率（仅按功率）
+	LevelCount      uint8    // 挡位数（仅按功率）
+	LevelDurations  []uint16 // 各挡位时间（仅按功率）
+}
+
+// ExceptionEvent 异常事件上报（BKV子协议）
+type ExceptionEvent struct {
+	SocketNo         uint8  // 插座号
+	SocketEventReason uint8  // 插座事件原因
+	SocketEventStatus uint8  // 插座事件状态
+	Port1EventReason  uint8  // 插孔1事件原因
+	Port1EventStatus  uint8  // 插孔1事件状态
+	Port2EventReason  uint8  // 插孔2事件原因
+	Port2EventStatus  uint8  // 插孔2事件状态
+	OverVoltage      uint16 // 过压值
+	UnderVoltage     uint16 // 欠压值
+	Port1LeakCurrent uint16 // 插孔1漏电流
+	Port2LeakCurrent uint16 // 插孔2漏电流
+	Port1OverTemp    uint8  // 插孔1过温值
+	Port2OverTemp    uint8  // 插孔2过温值
+	Port1ChargingStatus uint8 // 插孔1充电状态
+	Port2ChargingStatus uint8 // 插孔2充电状态
+}
+
+// ParameterQuery 参数查询（BKV子协议）
+type ParameterQuery struct {
+	SocketNo               uint8  // 插座号
+	FullPowerThreshold     uint16 // 充满功率阈值（单位0.1W）
+	TrickleThreshold       uint8  // 涓流阈值（单位%）
+	FullContinueTime       uint16 // 充满续充时间（单位s）
+	NoLoadPowerThreshold   uint16 // 空载功率阈值（单位0.1W）
+	NoLoadDelayTime        uint16 // 空载延时时间（单位s）
+	MaxChargingTime        uint16 // 最大充电时间（单位min）
+	HighTempThreshold      uint8  // 高温阈值
+	PowerLimit             uint16 // 功率限值（单位0.1W）
+	OverCurrentLimit       uint16 // 过流限值（单位0.001A）
+	KeyBaseAmount          uint16 // 按键基础金额
+	AntiPulseTime          uint16 // 防脉冲时间
 }
 
 // PortStatus 插孔状态信息
@@ -279,14 +435,330 @@ func (p *BKVPayload) IsStatusReport() bool {
 
 // IsChargingEnd 判断是否为充电结束上报
 func (p *BKVPayload) IsChargingEnd() bool {
-	// 检查是否包含充电结束的关键字段
+	return p.Cmd == 0x1004 // BKV充电结束上报使用1004命令
+}
+
+// IsControlCommand 判断是否为BKV控制命令
+func (p *BKVPayload) IsControlCommand() bool {
+	return p.Cmd == 0x1007 // BKV控制命令使用1007命令
+}
+
+// IsExceptionReport 判断是否为异常事件上报
+func (p *BKVPayload) IsExceptionReport() bool {
+	return p.Cmd == 0x1010 // 异常事件上报使用1010命令
+}
+
+// IsParameterQuery 判断是否为参数查询
+func (p *BKVPayload) IsParameterQuery() bool {
+	return p.Cmd == 0x1012 // 参数查询使用1012命令
+}
+
+// IsCardCharging 判断是否为刷卡充电相关
+func (p *BKVPayload) IsCardCharging() bool {
+	// 检查是否包含刷卡相关字段（卡号、余额等）
 	for _, field := range p.Fields {
-		// 0x2E: 充电结束时间
-		// 0x2F: 结束原因
-		// 0xA: 订单号
-		if field.Tag == 0x2E || field.Tag == 0x2F {
+		// 检查常见的刷卡字段标签
+		if field.Tag == 0x68 { // 余额相关
 			return true
 		}
 	}
 	return false
+}
+
+// ParseBKVControlCommand 解析BKV控制指令（0x0015）
+// 根据协议文档支持按时/按量/按功率三种模式
+func ParseBKVControlCommand(data []byte) (*BKVControlCommand, error) {
+	if len(data) < 6 {
+		return nil, ErrTLVShort
+	}
+
+	cmd := &BKVControlCommand{
+		SocketNo: data[0],                                                // 插座号
+		Port:     PortType(data[1]),                                      // 插孔号
+		Switch:   SwitchState(data[2]),                                   // 开关状态
+		Mode:     ChargingMode(data[3]),                                  // 充电模式
+		Duration: binary.BigEndian.Uint16(data[4:6]),                     // 充电时长
+	}
+
+	if len(data) >= 8 {
+		cmd.Energy = binary.BigEndian.Uint16(data[6:8]) // 充电电量
+	}
+
+	// 按功率充电模式有额外字段
+	if cmd.Mode == ChargingModeByLevel && len(data) >= 13 {
+		pos := 8
+		cmd.PaymentAmount = binary.BigEndian.Uint16(data[pos:pos+2]) // 支付金额
+		pos += 2
+		cmd.LevelCount = data[pos] // 挡位个数
+		pos++
+
+		// 解析各挡位信息 (每个挡位6字节: 功率2+价格2+时长2)
+		expectedLen := pos + int(cmd.LevelCount)*6
+		if len(data) >= expectedLen {
+			for i := uint8(0); i < cmd.LevelCount && i < 5; i++ { // 最多5档
+				level := PowerLevel{
+					Power:    binary.BigEndian.Uint16(data[pos:pos+2]),
+					Price:    binary.BigEndian.Uint16(data[pos+2:pos+4]),
+					Duration: binary.BigEndian.Uint16(data[pos+4:pos+6]),
+				}
+				cmd.PowerLevels = append(cmd.PowerLevels, level)
+				pos += 6
+			}
+		}
+	}
+
+	return cmd, nil
+}
+
+// ParseBKVChargingEnd 解析BKV充电结束上报
+// 支持普通充电结束和按功率充电结束两种格式
+func ParseBKVChargingEnd(data []byte) (*BKVChargingEnd, error) {
+	if len(data) < 15 {
+		return nil, ErrTLVShort
+	}
+
+	end := &BKVChargingEnd{
+		SocketNo:       data[0],                                      // 插座号
+		SoftwareVer:    binary.BigEndian.Uint16(data[1:3]),           // 软件版本
+		Temperature:    data[3],                                      // 温度
+		RSSI:           data[4],                                      // 信号强度
+		Port:           PortType(data[5]),                            // 插孔号
+		Status:         data[6],                                      // 插座状态
+		BusinessNo:     binary.BigEndian.Uint16(data[7:9]),           // 业务号
+		InstantPower:   binary.BigEndian.Uint16(data[9:11]),          // 瞬时功率
+		InstantCurrent: binary.BigEndian.Uint16(data[11:13]),         // 瞬时电流
+		EnergyUsed:     binary.BigEndian.Uint16(data[13:15]),         // 用电量
+	}
+
+	if len(data) >= 17 {
+		end.ChargingTime = binary.BigEndian.Uint16(data[15:17]) // 充电时间
+	}
+
+	// 根据插座状态推导结束原因
+	end.EndReason = deriveEndReasonFromStatus(end.Status)
+
+	// 按功率充电有额外字段
+	if len(data) >= 26 { // 基础17 + 结束时间7 + 结束原因1 + 金额2 = 27
+		pos := 17
+		if pos+7 <= len(data) {
+			// 解析结束时间 (7字节: 年2+月1+日1+时1+分1+秒1)
+			if data[pos] != 0 || data[pos+1] != 0 { // 非零时间
+				year := binary.BigEndian.Uint16(data[pos : pos+2])
+				month := data[pos+2]
+				day := data[pos+3]
+				hour := data[pos+4]
+				minute := data[pos+5]
+				second := data[pos+6]
+				end.EndTime = fmt.Sprintf("%04d%02d%02d%02d%02d%02d", year, month, day, hour, minute, second)
+			}
+			pos += 7
+		}
+
+		if pos+1 <= len(data) {
+			end.EndReason = ChargingEndReason(data[pos]) // 明确的结束原因
+			pos++
+		}
+
+		if pos+2 <= len(data) {
+			end.AmountSpent = binary.BigEndian.Uint16(data[pos : pos+2]) // 花费金额
+			pos += 2
+		}
+
+		if pos+2 <= len(data) {
+			end.SettlingPower = binary.BigEndian.Uint16(data[pos : pos+2]) // 结算功率
+			pos += 2
+		}
+
+		if pos+1 <= len(data) {
+			end.LevelCount = data[pos] // 挡位数
+			pos++
+			
+			// 解析各挡位时间 (每个2字节)
+			for i := uint8(0); i < end.LevelCount && i < 5 && pos+2 <= len(data); i++ {
+				duration := binary.BigEndian.Uint16(data[pos : pos+2])
+				end.LevelDurations = append(end.LevelDurations, duration)
+				pos += 2
+			}
+		}
+	}
+
+	return end, nil
+}
+
+// deriveEndReasonFromStatus 从插座状态位推导结束原因
+// 状态位格式: bit7-在线 bit6-计量正常 bit5-充电 bit4-空载 bit3-温度正常 bit2-电流正常 bit1-功率正常 bit0-预留
+func deriveEndReasonFromStatus(status uint8) ChargingEndReason {
+	// 检查离线 (bit7 = 0表示离线) - 最高优先级
+	if (status>>7)&0x01 == 0 {
+		return ReasonPowerOff
+	}
+
+	// 检查空载位 (bit4)
+	if (status>>4)&0x01 == 1 {
+		return ReasonNoLoad
+	}
+	
+	// 检查温度异常 (bit3 = 0表示异常)
+	if (status>>3)&0x01 == 0 {
+		return ReasonOverTemp
+	}
+	
+	// 检查电流异常 (bit2 = 0表示异常)
+	if (status>>2)&0x01 == 0 {
+		return ReasonOverCurrent
+	}
+	
+	// 默认正常结束
+	return ReasonNormal
+}
+
+// GetControlCommandType 判断控制指令类型
+func GetControlCommandType(data []byte) string {
+	if len(data) < 4 {
+		return "unknown"
+	}
+	
+	mode := ChargingMode(data[3])
+	switch mode {
+	case ChargingModeByTime:
+		return "charging_by_time"
+	case ChargingModeByPower:
+		return "charging_by_energy"
+	case ChargingModeByLevel:
+		return "charging_by_power_level"
+	default:
+		return "unknown"
+	}
+}
+
+// ParseBKVExceptionEvent 解析BKV异常事件上报
+func ParseBKVExceptionEvent(payload *BKVPayload) (*ExceptionEvent, error) {
+	event := &ExceptionEvent{}
+	
+	for _, field := range payload.Fields {
+		switch field.Tag {
+		case 0x4A: // 插座号
+			if len(field.Value) >= 1 {
+				event.SocketNo = field.Value[0]
+			}
+		case 0x54: // 插座事件原因
+			if len(field.Value) >= 1 {
+				event.SocketEventReason = field.Value[0]
+			}
+		case 0x4B: // 插座事件状态
+			if len(field.Value) >= 1 {
+				event.SocketEventStatus = field.Value[0]
+			}
+		case 0x55: // 插孔1事件原因
+			if len(field.Value) >= 1 {
+				event.Port1EventReason = field.Value[0]
+			}
+		case 0x4C: // 插孔1事件状态
+			if len(field.Value) >= 1 {
+				event.Port1EventStatus = field.Value[0]
+			}
+		case 0x56: // 插孔2事件原因
+			if len(field.Value) >= 1 {
+				event.Port2EventReason = field.Value[0]
+			}
+		case 0x4D: // 插孔2事件状态
+			if len(field.Value) >= 1 {
+				event.Port2EventStatus = field.Value[0]
+			}
+		case 0x4E: // 过压值
+			if len(field.Value) >= 2 {
+				event.OverVoltage = binary.BigEndian.Uint16(field.Value[0:2])
+			}
+		case 0x4F: // 欠压值
+			if len(field.Value) >= 2 {
+				event.UnderVoltage = binary.BigEndian.Uint16(field.Value[0:2])
+			}
+		case 0x50: // 插孔1漏电流
+			if len(field.Value) >= 2 {
+				event.Port1LeakCurrent = binary.BigEndian.Uint16(field.Value[0:2])
+			}
+		case 0x51: // 插孔2漏电流
+			if len(field.Value) >= 2 {
+				event.Port2LeakCurrent = binary.BigEndian.Uint16(field.Value[0:2])
+			}
+		case 0x52: // 插孔1过温值
+			if len(field.Value) >= 1 {
+				event.Port1OverTemp = field.Value[0]
+			}
+		case 0x53: // 插孔2过温值
+			if len(field.Value) >= 1 {
+				event.Port2OverTemp = field.Value[0]
+			}
+		case 0x57: // 插孔1充电状态
+			if len(field.Value) >= 1 {
+				event.Port1ChargingStatus = field.Value[0]
+			}
+		case 0x58: // 插孔2充电状态
+			if len(field.Value) >= 1 {
+				event.Port2ChargingStatus = field.Value[0]
+			}
+		}
+	}
+	
+	return event, nil
+}
+
+// ParseBKVParameterQuery 解析BKV参数查询
+func ParseBKVParameterQuery(payload *BKVPayload) (*ParameterQuery, error) {
+	param := &ParameterQuery{}
+	
+	for _, field := range payload.Fields {
+		switch field.Tag {
+		case 0x4A: // 插座号
+			if len(field.Value) >= 1 {
+				param.SocketNo = field.Value[0]
+			}
+		case 0x23: // 充满功率阈值
+			if len(field.Value) >= 2 {
+				param.FullPowerThreshold = binary.BigEndian.Uint16(field.Value[0:2])
+			}
+		case 0x60: // 涓流阈值
+			if len(field.Value) >= 1 {
+				param.TrickleThreshold = field.Value[0]
+			}
+		case 0x21: // 充满续充时间
+			if len(field.Value) >= 2 {
+				param.FullContinueTime = binary.BigEndian.Uint16(field.Value[0:2])
+			}
+		case 0x24: // 空载功率阈值
+			if len(field.Value) >= 2 {
+				param.NoLoadPowerThreshold = binary.BigEndian.Uint16(field.Value[0:2])
+			}
+		case 0x22: // 空载延时时间
+			if len(field.Value) >= 2 {
+				param.NoLoadDelayTime = binary.BigEndian.Uint16(field.Value[0:2])
+			}
+		case 0x59: // 最大充电时间
+			if len(field.Value) >= 2 {
+				param.MaxChargingTime = binary.BigEndian.Uint16(field.Value[0:2])
+			}
+		case 0x25: // 高温阈值
+			if len(field.Value) >= 1 {
+				param.HighTempThreshold = field.Value[0]
+			}
+		case 0x11: // 功率限值
+			if len(field.Value) >= 2 {
+				param.PowerLimit = binary.BigEndian.Uint16(field.Value[0:2])
+			}
+		case 0x10: // 过流限值
+			if len(field.Value) >= 2 {
+				param.OverCurrentLimit = binary.BigEndian.Uint16(field.Value[0:2])
+			}
+		case 0x68: // 按键基础金额
+			if len(field.Value) >= 2 {
+				param.KeyBaseAmount = binary.BigEndian.Uint16(field.Value[0:2])
+			}
+		case 0x93: // 防脉冲时间
+			if len(field.Value) >= 2 {
+				param.AntiPulseTime = binary.BigEndian.Uint16(field.Value[0:2])
+			}
+		}
+	}
+	
+	return param, nil
 }
