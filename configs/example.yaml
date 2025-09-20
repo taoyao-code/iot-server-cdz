@@ -21,8 +21,16 @@ tcp:
 protocols:
   enable_ap3000: true
   enable_bkv: true
+  enable_gn: false  # 组网设备协议（默认关闭）
   bkv:
     reason_map_path: configs/bkv-reason-map.example.yaml
+  gn:
+    listen: ":9000"                # GN协议监听端口
+    checksum: "sum_mod_256"        # 校验和算法：sum_mod_256
+    read_buffer: 4096              # 读缓冲区大小（字节）
+    write_buffer: 4096             # 写缓冲区大小（字节）
+    idle_timeout: 300              # 连接空闲超时（秒）
+    retry_backoff: 15              # 重试退避时间（秒）
 
 logging:
   level: info
