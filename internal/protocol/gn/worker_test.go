@@ -2,6 +2,7 @@ package gn
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 
 // MockOutboundQueueRepo 模拟出站队列仓储
 type MockOutboundQueueRepo struct {
+	mu       sync.RWMutex
 	messages []gnStorage.OutboundMessage
 	nextID   int64
 }
@@ -22,6 +24,9 @@ func NewMockOutboundQueueRepo() *MockOutboundQueueRepo {
 }
 
 func (r *MockOutboundQueueRepo) Enqueue(ctx context.Context, deviceID string, cmd int, seq int, payload []byte) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	
 	msg := gnStorage.OutboundMessage{
 		ID:       r.nextID,
 		DeviceID: deviceID,
@@ -40,6 +45,9 @@ func (r *MockOutboundQueueRepo) Enqueue(ctx context.Context, deviceID string, cm
 }
 
 func (r *MockOutboundQueueRepo) DequeueDue(ctx context.Context, limit int) ([]gnStorage.OutboundMessage, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	
 	var dueMessages []gnStorage.OutboundMessage
 	now := time.Now()
 	
@@ -59,6 +67,9 @@ func (r *MockOutboundQueueRepo) DequeueDue(ctx context.Context, limit int) ([]gn
 }
 
 func (r *MockOutboundQueueRepo) MarkSent(ctx context.Context, id int64, nextTS time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	
 	for i := range r.messages {
 		if r.messages[i].ID == id {
 			r.messages[i].Status = 1 // sent
@@ -71,6 +82,9 @@ func (r *MockOutboundQueueRepo) MarkSent(ctx context.Context, id int64, nextTS t
 }
 
 func (r *MockOutboundQueueRepo) Ack(ctx context.Context, deviceID string, seq int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	
 	for i := range r.messages {
 		if r.messages[i].DeviceID == deviceID && r.messages[i].Seq == seq {
 			r.messages[i].Status = 2 // acked
@@ -81,6 +95,9 @@ func (r *MockOutboundQueueRepo) Ack(ctx context.Context, deviceID string, seq in
 }
 
 func (r *MockOutboundQueueRepo) MarkDead(ctx context.Context, id int64, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	
 	for i := range r.messages {
 		if r.messages[i].ID == id {
 			r.messages[i].Status = 3 // dead
@@ -91,6 +108,9 @@ func (r *MockOutboundQueueRepo) MarkDead(ctx context.Context, id int64, reason s
 }
 
 func (r *MockOutboundQueueRepo) ListStuckSince(ctx context.Context, ts time.Time) ([]gnStorage.OutboundMessage, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	
 	var stuckMessages []gnStorage.OutboundMessage
 	
 	for _, msg := range r.messages {
@@ -103,9 +123,14 @@ func (r *MockOutboundQueueRepo) ListStuckSince(ctx context.Context, ts time.Time
 }
 
 func (r *MockOutboundQueueRepo) GetMessageByID(id int64) *gnStorage.OutboundMessage {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	
 	for _, msg := range r.messages {
 		if msg.ID == id {
-			return &msg
+			// 返回副本以避免外部修改
+			msgCopy := msg
+			return &msgCopy
 		}
 	}
 	return nil

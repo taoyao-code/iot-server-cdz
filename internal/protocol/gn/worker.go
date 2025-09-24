@@ -310,6 +310,7 @@ func (w *Worker) EnqueueMessage(ctx context.Context, deviceID string, cmd int, s
 
 // MockSender 用于测试的模拟发送器
 type MockSender struct {
+	mu           sync.Mutex
 	sentMessages []SentMessage
 	shouldFail   bool
 }
@@ -327,6 +328,9 @@ func NewMockSender() *MockSender {
 }
 
 func (s *MockSender) Send(ctx context.Context, deviceID string, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
 	if s.shouldFail {
 		return fmt.Errorf("mock send failure")
 	}
@@ -341,13 +345,22 @@ func (s *MockSender) Send(ctx context.Context, deviceID string, data []byte) err
 }
 
 func (s *MockSender) SetShouldFail(fail bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.shouldFail = fail
 }
 
 func (s *MockSender) GetSentMessages() []SentMessage {
-	return s.sentMessages
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// 返回副本以避免并发访问问题
+	result := make([]SentMessage, len(s.sentMessages))
+	copy(result, s.sentMessages)
+	return result
 }
 
 func (s *MockSender) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.sentMessages = s.sentMessages[:0]
 }
