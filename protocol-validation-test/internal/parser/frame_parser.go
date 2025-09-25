@@ -136,10 +136,10 @@ func (p *DefaultFrameParser) ValidateFrame(frame *Frame) error {
 		errors = append(errors, "Invalid tail")
 	}
 
-	// 验证校验和 - 暂时跳过，稍后修复算法
-	// if !frame.ChecksumValid {
-	//	errors = append(errors, "Checksum validation failed")
-	// }
+	// 验证校验和 - 现在与现有BKV实现对齐
+	if !frame.ChecksumValid {
+		errors = append(errors, "Checksum validation failed")
+	}
 
 	// 验证方向与包头的一致性
 	expectedDirection := uint8(DirectionUplink)
@@ -159,7 +159,7 @@ func (p *DefaultFrameParser) ValidateFrame(frame *Frame) error {
 	return nil
 }
 
-// CalculateChecksum 计算校验和
+// CalculateChecksum 计算校验和 - 与现有BKV实现保持一致
 func (p *DefaultFrameParser) CalculateChecksum(data []byte) uint8 {
 	var sum uint8
 	for _, b := range data {
