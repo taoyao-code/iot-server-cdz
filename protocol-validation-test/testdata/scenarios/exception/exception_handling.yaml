@@ -1,0 +1,97 @@
+# 异常处理测试
+# 严格按照《设备对接指引-组网设备2024(1).txt》第2.2.14节构建
+
+name: "异常处理测试"
+description: "验证各种异常事件的上报和处理"
+category: "exception"
+version: "1.0"
+author: "Protocol Validation System"
+created_at: "2024-12-25T00:00:00Z"
+
+scenarios:
+  - id: "exception_event_001"
+    name: "异常事件上报"
+    description: "设备上报各种异常事件"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe001e001c00000000000001822005200048690301040507fcee"
+      scenario: "exception_event"
+      context:
+        exception_type: "power_anomaly"
+        socket_no: 3
+        error_code: 0x01
+        
+    expected:
+      command: 0x001c
+      direction: 0x01
+      gateway_id: "82200520004869"
+      frame_type: "exception_report"
+      valid: true
+      
+    assertions:
+      - field: "command"
+        type: "equals"
+        value: 0x001c
+        message: "异常事件命令必须为0x001c"
+        required: true
+        
+      - field: "direction"
+        type: "equals"
+        value: 0x01
+        message: "上行帧方向必须为0x01"
+        required: true
+
+    metadata:
+      protocol_version: "1.7"
+      exception_type: "power_anomaly"
+      
+  - id: "device_fault_001"
+    name: "设备故障上报"
+    description: "设备硬件故障的上报"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe001e001c00000000000001822005200048690201020308fcee"
+      scenario: "device_fault"
+      
+    expected:
+      command: 0x001c
+      direction: 0x01
+      valid: true
+      
+    assertions:
+      - field: "command"
+        type: "equals"
+        value: 0x001c
+        message: "故障上报命令必须为0x001c"
+        required: true
+
+    metadata:
+      protocol_version: "1.7"
+      exception_type: "device_fault"
+      
+  - id: "communication_error_001"
+    name: "通信异常上报"
+    description: "网络通信异常的上报"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe001e001c00000000000001822005200048690004050609fcee"
+      scenario: "communication_error"
+      
+    expected:
+      command: 0x001c
+      direction: 0x01
+      valid: true
+      
+    assertions:
+      - field: "direction"
+        type: "equals"
+        value: 0x01
+        message: "上行帧方向必须为0x01"
+        required: true
+
+    metadata:
+      protocol_version: "1.7"
+      exception_type: "communication_error"

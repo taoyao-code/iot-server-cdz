@@ -1,0 +1,99 @@
+# OTA升级测试
+# 严格按照《设备对接指引-组网设备2024(1).txt》第2.2.15节构建
+
+name: "OTA升级测试"
+description: "验证设备固件OTA升级的完整流程"
+category: "ota"
+version: "1.0"
+author: "Protocol Validation System"
+created_at: "2024-12-25T00:00:00Z"
+
+scenarios:
+  - id: "ota_start_001"
+    name: "OTA升级启动"
+    description: "启动设备固件OTA升级"
+    type: "downlink"
+    
+    input:
+      hex_frame: "fcff0024001d001d000000008220052000486901020304050607080910111213141516fcee"
+      scenario: "ota_start"
+      context:
+        ota_version: "1.2.3.4"
+        package_size: 0x05060708
+        checksum: 0x09101112
+        
+    expected:
+      command: 0x001d
+      direction: 0x00
+      gateway_id: "82200520004869"
+      frame_type: "ota_management"
+      valid: true
+      
+    assertions:
+      - field: "command"
+        type: "equals"
+        value: 0x001d
+        message: "OTA升级命令必须为0x001d"
+        required: true
+        
+      - field: "direction"
+        type: "equals"
+        value: 0x00
+        message: "下行帧方向必须为0x00"
+        required: true
+
+    metadata:
+      protocol_version: "1.7"
+      ota_operation: "start_upgrade"
+      
+  - id: "ota_progress_001"
+    name: "OTA升级进度上报"
+    description: "设备上报OTA升级进度"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe001a001d00000000000001822005200048690164fcee"
+      scenario: "ota_progress"
+      context:
+        progress_percent: 100
+        
+    expected:
+      command: 0x001d
+      direction: 0x01
+      valid: true
+      
+    assertions:
+      - field: "command"
+        type: "equals"
+        value: 0x001d
+        message: "OTA进度命令必须为0x001d"
+        required: true
+
+    metadata:
+      protocol_version: "1.7"
+      ota_operation: "progress_report"
+      
+  - id: "ota_complete_001"
+    name: "OTA升级完成"
+    description: "设备报告OTA升级完成"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe001a001d000000000000018220052000486900ffcfcee"
+      scenario: "ota_complete"
+      
+    expected:
+      command: 0x001d
+      direction: 0x01
+      valid: true
+      
+    assertions:
+      - field: "direction"
+        type: "equals"
+        value: 0x01
+        message: "上行帧方向必须为0x01"
+        required: true
+
+    metadata:
+      protocol_version: "1.7"
+      ota_operation: "upgrade_complete"
