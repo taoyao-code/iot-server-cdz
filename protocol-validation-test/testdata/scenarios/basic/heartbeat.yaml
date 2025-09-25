@@ -1,0 +1,171 @@
+# 心跳上报/回复测试
+# 严格按照《设备对接指引-组网设备2024(1).txt》第2.1.1节构建
+
+name: "心跳上报/回复测试"
+description: "验证设备心跳上报和平台回复的完整流程，包含ICCID和信号强度验证"
+category: "basic"
+version: "1.0"
+author: "Protocol Validation System"
+created_at: "2024-12-25T00:00:00Z"
+
+scenarios:
+  - id: "heartbeat_uplink_001"
+    name: "网关心跳上报"
+    description: "网关心跳上报，包含ICCID和信号强度"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe002e0000000000000182200520004869383938363034363331313230373033313934313763562e31723436001fcafcee"
+      scenario: "device_heartbeat"
+      context:
+        device_online: true
+        network_status: "connected"
+    
+    expected:
+      command: 0x0000
+      direction: 0x01
+      gateway_id: "82200520004869"
+      frame_type: "heartbeat_uplink"
+      valid: true
+      payload:
+        iccid: "89860463112070319417"
+        signal_strength: 31
+        checksum_valid: true
+    
+    assertions:
+      - field: "header"
+        type: "equals"
+        value: 0xfcfe
+        message: "上行帧头必须为0xfcfe"
+        required: true
+        
+      - field: "length"
+        type: "equals"
+        value: 0x002e
+        message: "帧长度必须与声明长度一致"
+        required: true
+        
+      - field: "command"
+        type: "equals"
+        value: 0x0000
+        message: "心跳命令码必须为0x0000"
+        required: true
+        
+      - field: "sequence"
+        type: "equals"
+        value: 0x00000000
+        message: "设备主动上报帧流水号必须为0"
+        required: true
+        
+      - field: "direction"
+        type: "equals"
+        value: 0x01
+        message: "上行帧方向必须为0x01"
+        required: true
+        
+      - field: "gateway_id"
+        type: "equals"
+        value: "82200520004869"
+        message: "网关ID必须与预期一致"
+        required: true
+        
+      - field: "checksum_valid"
+        type: "equals"
+        value: true
+        message: "校验和必须正确"
+        required: true
+        
+      - field: "tail"
+        type: "equals"
+        value: 0xfcee
+        message: "帧尾必须为0xfcee"
+        required: true
+
+    metadata:
+      protocol_version: "1.7"
+      device_type: "gateway"
+      test_environment: "validation"
+      related_scenarios: ["heartbeat_downlink_001"]
+      
+  - id: "heartbeat_downlink_001"
+    name: "平台心跳回复"
+    description: "平台回复心跳，包含时间戳"
+    type: "downlink"
+    
+    input:
+      hex_frame: "fcff0018000000000000008220052000486920200730164545a7fcee"
+      scenario: "server_heartbeat_reply"
+      context:
+        server_response: true
+        timestamp: "20200730164545"
+        
+    expected:
+      command: 0x0000
+      direction: 0x00
+      gateway_id: "82200520004869"
+      frame_type: "heartbeat_downlink"
+      valid: true
+      payload:
+        timestamp: "20200730164545"
+        
+    assertions:
+      - field: "header"
+        type: "equals"
+        value: 0xfcff
+        message: "下行帧头必须为0xfcff"
+        required: true
+        
+      - field: "command"
+        type: "equals"
+        value: 0x0000
+        message: "心跳命令码必须为0x0000"
+        required: true
+        
+      - field: "direction"
+        type: "equals"
+        value: 0x00
+        message: "下行帧方向必须为0x00"
+        required: true
+        
+      - field: "gateway_id"
+        type: "equals"
+        value: "82200520004869"
+        message: "网关ID必须与上行帧一致"
+        required: true
+        
+      - field: "checksum_valid"
+        type: "equals"
+        value: true
+        message: "校验和必须正确"
+        required: true
+
+    metadata:
+      protocol_version: "1.7"
+      device_type: "server"
+      test_environment: "validation"
+      related_scenarios: ["heartbeat_uplink_001"]
+
+  - id: "heartbeat_sequence_consistency_001"
+    name: "心跳序列号一致性"
+    description: "验证心跳上报的帧流水号必须为0"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe002e0000000000000182200520004869383938363034363331313230373033313934313763562e31723436001fcafcee"
+      scenario: "sequence_validation"
+      
+    expected:
+      command: 0x0000
+      direction: 0x01
+      valid: true
+      
+    assertions:
+      - field: "sequence"
+        type: "equals"
+        value: 0x00000000
+        message: "设备主动上报帧流水号必须为0"
+        required: true
+
+    metadata:
+      protocol_version: "1.7"
+      test_type: "sequence_validation"
