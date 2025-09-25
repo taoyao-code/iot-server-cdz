@@ -65,6 +65,16 @@ type TLVParser interface {
 	
 	// GetFieldValue 获取字段值
 	GetFieldValue(fields map[uint8][]byte, tag uint8) ([]byte, bool)
+	
+	// HasField 检查字段是否存在
+	HasField(fields map[uint8][]byte, tag uint8) bool
+	
+	// 类型转换方法
+	GetFieldAsUint8(fields map[uint8][]byte, tag uint8) (uint8, error)
+	GetFieldAsUint16(fields map[uint8][]byte, tag uint8) (uint16, error)
+	GetFieldAsUint32(fields map[uint8][]byte, tag uint8) (uint32, error)
+	GetFieldAsUint64(fields map[uint8][]byte, tag uint8) (uint64, error)
+	GetFieldAsString(fields map[uint8][]byte, tag uint8) (string, error)
 }
 
 // BKVParser BKV协议解析器接口
@@ -94,8 +104,8 @@ const (
 	CmdHeartbeat      = 0x0000 // 心跳
 	CmdStatusQuery    = 0x0015 // 状态查询
 	CmdNetworkConfig  = 0x0005 // 网络配置
-	CmdControl        = 0x0015 // 控制命令
-	CmdOTA            = 0x0007 // OTA升级
+	CmdDeviceControl  = 0x0007 // 设备控制（重命名以避免冲突）
+	CmdOTA            = 0x0008 // OTA升级（重新分配）
 	
 	// BKV命令
 	BKVCmdStatusReport    = 0x1017 // 状态上报

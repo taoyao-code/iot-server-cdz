@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 
 	"github.com/taoyao-code/protocol-validation-test/internal/coverage"
+	"github.com/taoyao-code/protocol-validation-test/internal/parser"
+	"github.com/taoyao-code/protocol-validation-test/internal/validator"
 )
 
 const (
@@ -131,15 +133,87 @@ func runTests(config *Config) error {
 	fmt.Printf("   • 验证场景: %d个\n", categories["validation"])
 	fmt.Printf("   • 总计: %d个场景\n", len(matrix.Scenarios))
 	
-	// TODO: 实际加载和运行测试用例
-	fmt.Println("\n⚠️  注意: 阶段1完成 - 项目结构已创建")
-	fmt.Println("接下来阶段将实现:")
-	fmt.Println("  - 协议解析器和验证引擎")
-	fmt.Println("  - 测试用例加载器")
-	fmt.Println("  - 实际测试执行")
+	// 执行实际测试
+	if err := executeTests(config, tracker); err != nil {
+		return fmt.Errorf("执行测试失败: %w", err)
+	}
 	
-	// 生成初始覆盖度报告
+	// 生成覆盖度报告
 	return generateReports(config, tracker)
+}
+
+func executeTests(config *Config, tracker *coverage.Tracker) error {
+	fmt.Println("\n🔧 阶段2完成 - 初始化协议解析器...")
+	
+	// 创建协议解析器
+	frameParser := parser.NewDefaultFrameParser()
+	tlvParser := parser.NewDefaultTLVParser()
+	bkvParser := parser.NewDefaultBKVParser(tlvParser)
+	
+	// 创建验证引擎
+	engine := validator.NewEngine(frameParser, bkvParser, tlvParser)
+	
+	// 创建测试用例加载器
+	loader := validator.NewLoader(config.TestDataDir)
+	
+	fmt.Println("✅ 协议解析器已初始化")
+	fmt.Println("✅ 验证引擎已创建")
+	fmt.Println("✅ 测试用例加载器已准备")
+	
+	// 加载测试用例
+	var testCases []*validator.TestCase
+	var err error
+	
+	if config.Category != "" {
+		fmt.Printf("\n📂 加载 %s 分类的测试用例...\n", config.Category)
+		testCases, err = loader.GetTestCasesByCategory(config.Category)
+	} else if config.Scenario != "" {
+		fmt.Printf("\n🎯 加载场景 %s 的测试用例...\n", config.Scenario)
+		testCases, err = loader.GetTestCasesByScenario(config.Scenario)
+	} else {
+		fmt.Println("\n📋 加载所有测试用例...")
+		testCases, err = loader.GetAllTestCases()
+	}
+	
+	if err != nil {
+		return fmt.Errorf("加载测试用例失败: %w", err)
+	}
+	
+	fmt.Printf("✅ 已加载 %d 个测试用例\n", len(testCases))
+	
+	// 执行测试
+	fmt.Println("\n🧪 开始执行协议验证测试...")
+	
+	passed := 0
+	failed := 0
+	
+	for i, testCase := range testCases {
+		fmt.Printf("\r进度: [%d/%d] 执行测试用例 %s", i+1, len(testCases), testCase.ID)
+		
+		// 执行单个测试用例
+		result := engine.ValidateTestCase(testCase)
+		
+		// 记录测试结果
+		tracker.RecordTestResult(result)
+		
+		if result.Passed {
+			passed++
+		} else {
+			failed++
+			if config.Verbose {
+				fmt.Printf("\n❌ 测试失败: %s - %s\n", testCase.ID, testCase.Name)
+				for _, err := range result.Errors {
+					fmt.Printf("   错误: %s\n", err.Message)
+				}
+			}
+		}
+	}
+	
+	fmt.Printf("\n\n✅ 测试执行完成!\n")
+	fmt.Printf("📊 测试结果: 通过 %d / 失败 %d / 总计 %d\n", passed, failed, len(testCases))
+	fmt.Printf("📈 通过率: %.1f%%\n", float64(passed)/float64(len(testCases))*100)
+	
+	return nil
 }
 
 func generateReports(config *Config, tracker *coverage.Tracker) error {
@@ -178,6 +252,18 @@ func generateReports(config *Config, tracker *coverage.Tracker) error {
 		summary.TestPassRate*100, 
 		summary.PassedTestCases, 
 		summary.TotalTestCases)
+		
+	if summary.TotalTestCases > 0 {
+		fmt.Printf("\n🎯 阶段2已完成: 核心协议解析和验证框架\n")
+		fmt.Printf("   ✅ 协议帧解析器\n")
+		fmt.Printf("   ✅ TLV结构解析器\n") 
+		fmt.Printf("   ✅ BKV协议解析器\n")
+		fmt.Printf("   ✅ 验证引擎核心\n")
+		fmt.Printf("   ✅ 测试用例加载器\n")
+		fmt.Printf("   ✅ 实际测试执行\n")
+	} else {
+		fmt.Printf("\n⚠️  注意: 暂无测试用例数据，请检查testdata目录\n")
+	}
 	
 	return nil
 }

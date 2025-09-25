@@ -362,18 +362,5 @@ func (e *Engine) GetStats() (total, passed, failed, skipped int) {
 
 // hexToBytes 将十六进制字符串转换为字节数组
 func hexToBytes(hexStr string) ([]byte, error) {
-	// 移除可能的空格和前缀
-	hexStr = fmt.Sprintf("%s", hexStr) // 简化处理，实际实现需要更完善
-	
-	if len(hexStr)%2 != 0 {
-		return nil, fmt.Errorf("invalid hex string length")
-	}
-	
-	bytes := make([]byte, len(hexStr)/2)
-	for i := 0; i < len(hexStr); i += 2 {
-		// 简化实现，实际需要使用hex.DecodeString
-		// bytes[i/2] = hexToByte(hexStr[i:i+2])
-	}
-	
-	return bytes, nil
+	return parser.ParseHexString(hexStr)
 }
