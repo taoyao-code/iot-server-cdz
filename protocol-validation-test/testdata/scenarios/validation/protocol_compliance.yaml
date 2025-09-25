@@ -1,0 +1,158 @@
+# 协议合规性验证测试
+# 严格按照协议规范验证各种边界条件和错误处理
+
+name: "协议合规性验证"
+description: "全面验证协议的合规性、容错能力和边界处理"
+category: "validation"
+version: "1.0"
+author: "Protocol Validation System"
+created_at: "2024-12-25T00:00:00Z"
+
+scenarios:
+  - id: "sequence_number_validation_001"
+    name: "序列号一致性验证"
+    description: "验证设备主动上报帧序列号必须为0"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe001800000000000001822005200048690123456789ab01fcee"
+      scenario: "sequence_validation"
+      
+    expected:
+      sequence: 0x00000000
+      direction: 0x01
+      valid: true
+      
+    assertions:
+      - field: "sequence"
+        type: "equals"
+        value: 0x00000000
+        message: "设备主动上报帧流水号必须为0"
+        required: true
+
+    metadata:
+      test_type: "sequence_validation"
+      
+  - id: "gateway_id_format_001"
+    name: "网关ID格式验证"
+    description: "验证网关ID长度和格式"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe001800000000000001822005200048690123456789ab01fcee"
+      scenario: "gateway_id_validation"
+      
+    expected:
+      gateway_id: "82200520004869"
+      valid: true
+      
+    assertions:
+      - field: "gateway_id"
+        type: "pattern"
+        pattern: "^[0-9A-F]{14}$"
+        message: "网关ID必须为14位十六进制字符"
+        required: true
+        
+      - field: "gateway_id_length"
+        type: "equals"
+        value: 14
+        message: "网关ID长度必须为7字节(14个十六进制字符)"
+        required: true
+
+    metadata:
+      test_type: "gateway_id_validation"
+      
+  - id: "frame_length_boundary_001"
+    name: "帧长度边界测试"
+    description: "测试最小和最大帧长度的处理"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe001400000000000001822005200048690afcee"
+      scenario: "length_boundary"
+      
+    expected:
+      length: 20
+      valid: true
+      
+    assertions:
+      - field: "length"
+        type: "range"
+        min_value: 20
+        max_value: 1024
+        message: "帧长度必须在合理范围内"
+        required: true
+
+    metadata:
+      test_type: "boundary_validation"
+      
+  - id: "direction_consistency_001"
+    name: "方向一致性验证"
+    description: "验证帧方向与包头的一致性"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe001800000000000001822005200048690123456789ab01fcee"
+      scenario: "direction_consistency"
+      
+    expected:
+      header: 0xfcfe
+      direction: 0x01
+      valid: true
+      
+    assertions:
+      - field: "direction_header_consistency"
+        type: "valid"
+        message: "上行帧(0xfcfe)必须配合上行方向(0x01)"
+        required: true
+
+    metadata:
+      test_type: "direction_validation"
+      
+  - id: "command_range_validation_001"
+    name: "命令码范围验证"
+    description: "验证支持的命令码范围"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe001800000000000001822005200048690123456789ab01fcee"
+      scenario: "command_validation"
+      
+    expected:
+      command: 0x0000
+      valid: true
+      
+    assertions:
+      - field: "command"
+        type: "range"
+        min_value: 0x0000
+        max_value: 0xFFFF
+        message: "命令码必须在有效范围内"
+        required: true
+
+    metadata:
+      test_type: "command_validation"
+      
+  - id: "payload_size_validation_001"
+    name: "载荷大小验证"
+    description: "验证载荷大小的合理性"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe001800000000000001822005200048690123456789ab01fcee"
+      scenario: "payload_validation"
+      
+    expected:
+      payload_size: 3
+      valid: true
+      
+    assertions:
+      - field: "payload_size"
+        type: "range"
+        min_value: 0
+        max_value: 1000
+        message: "载荷大小必须合理"
+        required: true
+
+    metadata:
+      test_type: "payload_validation"

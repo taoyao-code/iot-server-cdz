@@ -1,0 +1,143 @@
+# 充电结束上报测试
+# 严格按照《设备对接指引-组网设备2024(1).txt》第2.2.5节构建
+
+name: "充电结束上报测试"
+description: "验证各种充电模式结束后的上报和结算"
+category: "advanced"
+version: "1.0"
+author: "Protocol Validation System"
+created_at: "2024-12-25T00:00:00Z"
+
+scenarios:
+  - id: "charging_end_time_001"
+    name: "按时充电结束上报"
+    description: "插座按时充电结束后的状态上报"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe007d100000000000018221022500052004010110040a010200000000000000000901038221022500052003010f017efcee"
+      scenario: "charging_end_time"
+      context:
+        socket_no: 2
+        charging_mode: "time"
+        end_reason: "normal_completion"
+        
+    expected:
+      command: 0x1000
+      direction: 0x01
+      gateway_id: "82210225000520"
+      frame_type: "bkv_charging_end"
+      valid: true
+      
+    assertions:
+      - field: "header"
+        type: "equals"
+        value: 0xfcfe
+        message: "上行帧头必须为0xfcfe"
+        required: true
+        
+      - field: "command"
+        type: "equals"
+        value: 0x1000
+        message: "BKV命令必须为0x1000"
+        required: true
+        
+      - field: "direction"
+        type: "equals"
+        value: 0x01
+        message: "上行帧方向必须为0x01"
+        required: true
+
+    bkv_assertions:
+      - field: "bkv_command"
+        type: "equals"
+        value: 0x1004
+        message: "BKV充电结束命令必须为0x1004"
+        
+      - field: "socket_no"
+        type: "equals"
+        value: 2
+        message: "插座序号必须正确"
+        
+      - field: "end_reason"
+        type: "equals"
+        value: 2
+        message: "结束原因必须记录"
+
+    metadata:
+      protocol_version: "1.7"
+      bkv_protocol: true
+      end_type: "time_charging"
+      
+  - id: "charging_end_power_001"
+    name: "按功率充电结束上报"
+    description: "按功率充电结束后的功率统计上报"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe006f100000000000018221022500052004010110040a01020000000000000000090103822102250005200301980017000200010024fcee"
+      scenario: "charging_end_power"
+      
+    expected:
+      command: 0x1000
+      direction: 0x01
+      valid: true
+      
+    assertions:
+      - field: "header"
+        type: "equals"
+        value: 0xfcfe
+        message: "上行帧头必须为0xfcfe"
+        required: true
+
+    bkv_assertions:
+      - field: "bkv_command"
+        type: "equals"
+        value: 0x1004
+        message: "BKV充电结束命令必须为0x1004"
+        
+      - field: "power_consumption"
+        type: "range"
+        min_value: 0
+        max_value: 65535
+        message: "功率消耗必须在合理范围内"
+
+    metadata:
+      protocol_version: "1.7"
+      bkv_protocol: true
+      end_type: "power_charging"
+      
+  - id: "charging_end_fee_service_001"
+    name: "电费+服务费充电结束"
+    description: "复合计费模式充电结束的详细结算"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe008d100000000000018221022500052004010110040a01020000000000000000090103822102250005200301980017000200010024070e06080e15070200005ffcee"
+      scenario: "charging_end_fee_service"
+      
+    expected:
+      command: 0x1000
+      direction: 0x01
+      valid: true
+      
+    assertions:
+      - field: "direction"
+        type: "equals"
+        value: 0x01
+        message: "上行帧方向必须为0x01"
+        required: true
+
+    bkv_assertions:
+      - field: "fee_calculation"
+        type: "valid"
+        message: "费用计算必须正确"
+        
+      - field: "service_fee"
+        type: "valid"
+        message: "服务费计算必须准确"
+
+    metadata:
+      protocol_version: "1.7"
+      bkv_protocol: true
+      end_type: "fee_service_charging"
