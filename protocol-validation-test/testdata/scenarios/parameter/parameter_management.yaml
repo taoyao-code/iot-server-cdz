@@ -1,0 +1,122 @@
+# 参数管理测试
+# 严格按照《设备对接指引-组网设备2024(1).txt》第2.2.11-2.2.13节构建
+
+name: "参数管理测试"
+description: "验证设备参数设置和查询的完整流程"
+category: "parameter"
+version: "1.0"
+author: "Protocol Validation System"  
+created_at: "2024-12-25T00:00:00Z"
+
+scenarios:
+  - id: "voice_broadcast_time_001"
+    name: "设置语音播报时间"
+    description: "设置设备允许语音播报的时间段"
+    type: "downlink"
+    
+    input:
+      hex_frame: "fcff001e0019001900000000822005200048690708001730080017fcee"
+      scenario: "voice_broadcast_setting"
+      context:
+        start_time: "07:00"
+        end_time: "23:00"
+        operation: "set_voice_time"
+        
+    expected:
+      command: 0x0019
+      direction: 0x00
+      gateway_id: "82200520004869"
+      frame_type: "parameter_setting"
+      valid: true
+      
+    assertions:
+      - field: "command"
+        type: "equals"
+        value: 0x0019
+        message: "语音播报设置命令必须为0x0019"
+        required: true
+        
+      - field: "direction"
+        type: "equals"
+        value: 0x00
+        message: "下行帧方向必须为0x00"
+        required: true
+
+    metadata:
+      protocol_version: "1.7"
+      parameter_type: "voice_broadcast_time"
+      
+  - id: "system_param_set_001"
+    name: "插座系统参数设置"
+    description: "设置插座的系统参数"
+    type: "downlink"
+    
+    input:
+      hex_frame: "fcff0020001a001a000000008220052000486901020304050607080910fcee"
+      scenario: "system_param_setting"
+      
+    expected:
+      command: 0x001a
+      direction: 0x00
+      valid: true
+      
+    assertions:
+      - field: "command"
+        type: "equals"
+        value: 0x001a
+        message: "系统参数设置命令必须为0x001a"
+        required: true
+
+    metadata:
+      protocol_version: "1.7"
+      parameter_type: "system_parameters"
+      
+  - id: "system_param_query_001"
+    name: "插座系统参数查询"
+    description: "查询插座的系统参数"
+    type: "downlink"
+    
+    input:
+      hex_frame: "fcff0016001b001b00000000822005200048690102fcee"
+      scenario: "system_param_query"
+      
+    expected:
+      command: 0x001b
+      direction: 0x00
+      valid: true
+      
+    assertions:
+      - field: "command"
+        type: "equals"
+        value: 0x001b
+        message: "系统参数查询命令必须为0x001b"
+        required: true
+
+    metadata:
+      protocol_version: "1.7"
+      parameter_type: "system_query"
+      
+  - id: "param_response_001"
+    name: "参数设置响应"
+    description: "设备对参数设置的响应"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe0018001a00000000000001822005200048690100fcee"
+      scenario: "param_response"
+      
+    expected:
+      command: 0x001a
+      direction: 0x01
+      valid: true
+      
+    assertions:
+      - field: "direction"
+        type: "equals"
+        value: 0x01
+        message: "上行帧方向必须为0x01"
+        required: true
+
+    metadata:
+      protocol_version: "1.7"
+      response_type: "parameter_ack"

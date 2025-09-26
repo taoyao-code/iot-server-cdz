@@ -1,0 +1,190 @@
+# 校验和验证测试
+# 严格按照协议规范测试校验和正确性和错误容错
+
+name: "校验和验证测试"
+description: "验证协议帧校验和的正确性验证和错误容错能力"
+category: "validation"
+version: "1.0"
+author: "Protocol Validation System"
+created_at: "2024-12-25T00:00:00Z"
+
+scenarios:
+  - id: "checksum_valid_001"
+    name: "校验和正确验证"
+    description: "验证正确校验和的帧能够正常解析"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe002e0000000000000182200520004869383938363034363331313230373033313934313763562e3172343600fcee"
+      scenario: "checksum_valid"
+      
+    expected:
+      valid: true
+      checksum_valid: true
+      
+    assertions:
+      - field: "checksum_valid"
+        type: "equals"
+        value: true
+        message: "正确的校验和必须通过验证"
+        required: true
+        
+      - field: "valid"
+        type: "equals"
+        value: true
+        message: "校验和正确的帧必须有效"
+        required: true
+
+    metadata:
+      test_type: "positive_validation"
+      
+  - id: "checksum_invalid_001"
+    name: "校验和错误验证 - 坏帧1"
+    description: "验证校验和错误帧的容错处理能力"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe002e0000000000000182200520004869383938363034363331313230373033313934313763562e3172343600f99fce"
+      scenario: "checksum_error"
+      
+    expected:
+      valid: false
+      checksum_valid: false
+      error_type: "checksum_mismatch"
+      
+    assertions:
+      - field: "checksum_valid"
+        type: "equals"
+        value: false
+        message: "错误的校验和必须验证失败"
+        required: true
+        
+      - field: "valid"
+        type: "equals"
+        value: false
+        message: "校验和错误的帧必须无效"
+        required: true
+
+    metadata:
+      test_type: "negative_validation"
+      error_injection: "checksum_corruption"
+      
+  - id: "checksum_invalid_002"
+    name: "校验和全零错误 - 坏帧2"
+    description: "验证校验和为全零时的错误处理"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe002e0000000000000182200520004869383938363034363331313230373033313934313763562e31723436000000fcee"
+      scenario: "checksum_zero_error"
+      
+    expected:
+      valid: false
+      checksum_valid: false
+      
+    assertions:
+      - field: "checksum_valid"
+        type: "equals"
+        value: false
+        message: "零校验和必须验证失败"
+        required: true
+
+    metadata:
+      test_type: "boundary_validation"
+      error_injection: "zero_checksum"
+      
+  - id: "frame_length_mismatch_001"
+    name: "帧长度不匹配验证"
+    description: "验证声明长度与实际长度不匹配的容错"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe00ff00000000000001822005200048693839383630343633313132303730333139343137635662e31723436001fcafce"
+      scenario: "length_mismatch"
+      
+    expected:
+      valid: false
+      error_type: "length_mismatch"
+      
+    assertions:
+      - field: "valid"
+        type: "equals"
+        value: false
+        message: "长度不匹配的帧必须无效"
+        required: true
+
+    metadata:
+      test_type: "structure_validation"
+      error_injection: "length_corruption"
+      
+  - id: "invalid_header_001"
+    name: "无效包头验证"
+    description: "验证无效包头的错误处理"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcdd002e00000000000001822005200048693839383630343633313132303730333139343137635662e31723436001fcafce"
+      scenario: "invalid_header"
+      
+    expected:
+      valid: false
+      error_type: "invalid_header"
+      
+    assertions:
+      - field: "valid"
+        type: "equals"
+        value: false
+        message: "无效包头的帧必须拒绝"
+        required: true
+
+    metadata:
+      test_type: "header_validation"
+      error_injection: "header_corruption"
+      
+  - id: "invalid_tail_001"
+    name: "无效包尾验证"
+    description: "验证无效包尾的错误处理"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe002e00000000000001822005200048693839383630343633313132303730333139343137635662e31723436001fcafcd"
+      scenario: "invalid_tail"
+      
+    expected:
+      valid: false
+      error_type: "invalid_tail"
+      
+    assertions:
+      - field: "valid"
+        type: "equals"
+        value: false
+        message: "无效包尾的帧必须拒绝"
+        required: true
+
+    metadata:
+      test_type: "tail_validation"
+      error_injection: "tail_corruption"
+      
+  - id: "unknown_command_001"
+    name: "未知命令测试"
+    description: "验证未知命令码的处理能力"
+    type: "uplink"
+    
+    input:
+      hex_frame: "fcfe002e0000ffff000001822005200048693839383630343633313132303730333139343137635662e31723436001fcafce"
+      scenario: "unknown_command"
+      
+    expected:
+      valid: false
+      frame_type: "unknown"
+      
+    assertions:
+      - field: "frame_type"
+        type: "equals"
+        value: "unknown"
+        message: "未知命令必须标记为unknown类型"
+        required: true
+
+    metadata:
+      test_type: "command_validation"
+      error_injection: "unknown_command"
