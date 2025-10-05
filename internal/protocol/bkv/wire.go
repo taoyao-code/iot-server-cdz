@@ -9,3 +9,13 @@ import (
 func NewHandlers(repo *pgstorage.Repository, reason *ReasonMap) *Handlers {
 	return &Handlers{Repo: repo, Reason: reason}
 }
+
+// NewHandlersWithServices 构造 BKV 处理集合（包含CardService和Outbound）Week5
+func NewHandlersWithServices(repo *pgstorage.Repository, reason *ReasonMap, cardService CardServiceAPI, outbound OutboundSender) *Handlers {
+	return &Handlers{
+		Repo:        repo,
+		Reason:      reason,
+		CardService: cardService,
+		Outbound:    outbound,
+	}
+}

@@ -30,11 +30,22 @@ type CardServiceAPI interface {
 	HandleBalanceQuery(ctx context.Context, query *BalanceQuery) (*BalanceResponse, error)
 }
 
+// OutboundSender Week5: 下行消息发送接口
+type OutboundSender interface {
+	// SendDownlink 发送下行消息
+	// gatewayID: 网关ID
+	// cmd: 命令码
+	// msgID: 消息ID
+	// data: 数据payload
+	SendDownlink(gatewayID string, cmd uint16, msgID uint32, data []byte) error
+}
+
 // Handlers BKV 协议处理器集合
 type Handlers struct {
 	Repo        repoAPI
 	Reason      *ReasonMap
 	CardService CardServiceAPI // Week4: 刷卡充电服务
+	Outbound    OutboundSender // Week5: 下行消息发送器
 }
 
 // HandleHeartbeat 处理心跳帧 (cmd=0x0000 或 BKV cmd=0x1017)
@@ -678,10 +689,13 @@ func (h *Handlers) handleCardSwipeUplink(ctx context.Context, f *Frame) error {
 			return fmt.Errorf("card service error: %w", err)
 		}
 
-		// TODO: 下发充电指令到设备
-		// 这需要通过outbound队列发送下行消息
-		// SendChargeCommand(f.GatewayID, cmd)
-		_ = cmd // 暂时忽略，等待outbound集成
+		// Week5: 下发充电指令到设备
+		if err := h.sendChargeCommand(f.GatewayID, f.MsgID, cmd); err != nil {
+			// 发送失败，记录错误
+			errLog := []byte(fmt.Sprintf("Send charge command failed: %v", err))
+			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, errLog, false)
+			return fmt.Errorf("send charge command error: %w", err)
+		}
 	}
 
 	return nil
@@ -747,9 +761,14 @@ func (h *Handlers) handleOrderConfirmUplink(ctx context.Context, f *Frame) error
 			return fmt.Errorf("order confirmation error: %w", err)
 		}
 
-		// TODO: 下发确认回复到设备
-		// reply := &OrderConfirmReply{OrderNo: conf.OrderNo, Result: 0}
-		// SendOrderConfirmReply(f.GatewayID, reply)
+		// Week5: 下发确认回复到设备
+		result := uint8(0) // 0=成功
+		if err := h.sendOrderConfirmReply(f.GatewayID, f.MsgID, conf.OrderNo, result); err != nil {
+			// 发送失败，记录错误（但不影响业务流程）
+			errLog := []byte(fmt.Sprintf("Send order confirm reply failed: %v", err))
+			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, errLog, false)
+			// 不返回错误，因为订单已更新成功
+		}
 	}
 
 	return nil
@@ -816,9 +835,14 @@ func (h *Handlers) handleChargeEndUplink(ctx context.Context, f *Frame) error {
 			return fmt.Errorf("charge end error: %w", err)
 		}
 
-		// TODO: 下发结束确认到设备
-		// reply := &ChargeEndReply{OrderNo: report.OrderNo, Result: 0}
-		// SendChargeEndReply(f.GatewayID, reply)
+		// Week5: 下发结束确认到设备
+		result := uint8(0) // 0=成功
+		if err := h.sendChargeEndReply(f.GatewayID, f.MsgID, report.OrderNo, result); err != nil {
+			// 发送失败，记录错误（但不影响业务流程）
+			errLog := []byte(fmt.Sprintf("Send charge end reply failed: %v", err))
+			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, errLog, false)
+			// 不返回错误，因为订单已完成
+		}
 	}
 
 	return nil
@@ -884,9 +908,13 @@ func (h *Handlers) handleBalanceQueryUplink(ctx context.Context, f *Frame) error
 			return fmt.Errorf("balance query error: %w", err)
 		}
 
-		// TODO: 下发余额响应到设备
-		// SendBalanceResponse(f.GatewayID, resp)
-		_ = resp // 暂时忽略，等待outbound集成
+		// Week5: 下发余额响应到设备
+		if err := h.sendBalanceResponse(f.GatewayID, f.MsgID, resp); err != nil {
+			// 发送失败，记录错误
+			errLog := []byte(fmt.Sprintf("Send balance response failed: %v", err))
+			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, errLog, false)
+			return fmt.Errorf("send balance response error: %w", err)
+		}
 	}
 
 	return nil
