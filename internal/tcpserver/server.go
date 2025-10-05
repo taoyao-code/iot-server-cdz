@@ -2,12 +2,14 @@ package tcpserver
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"sync"
 	"time"
 
 	cfgpkg "github.com/taoyao-code/iot-server/internal/config"
+	"go.uber.org/zap"
 )
 
 // Server TCP 网关最小实现
@@ -22,6 +24,12 @@ type Server struct {
 	onAccept    func()
 	onRecvBytes func(n int)
 	nextConnID  uint64
+
+	// Week2: 限流和熔断
+	connLimiter *ConnectionLimiter
+	rateLimiter *RateLimiter
+	breaker     *CircuitBreaker
+	logger      *zap.Logger
 }
 
 // New 创建 TCP 网关
@@ -40,6 +48,71 @@ func (s *Server) SetMetricsCallbacks(onAccept func(), onRecvBytes func(int)) {
 	s.onAccept, s.onRecvBytes = onAccept, onRecvBytes
 }
 
+// SetLogger 设置日志器
+func (s *Server) SetLogger(logger *zap.Logger) {
+	s.logger = logger
+}
+
+// EnableLimiting 启用限流和熔断（Week2）
+func (s *Server) EnableLimiting(maxConn int, ratePerSec int, rateBurst int, breakerThreshold int, breakerTimeout time.Duration) {
+	s.connLimiter = NewConnectionLimiter(maxConn, 5*time.Second)
+	s.rateLimiter = NewRateLimiter(ratePerSec, rateBurst)
+	s.breaker = NewCircuitBreaker(breakerThreshold, breakerTimeout)
+
+	// 设置熔断器状态变化回调
+	s.breaker.SetStateChangeCallback(func(from, to State) {
+		if s.logger != nil {
+			s.logger.Warn("circuit breaker state changed",
+				zap.String("from", from.String()),
+				zap.String("to", to.String()),
+			)
+		}
+	})
+}
+
+// ActiveConnections 获取当前活跃连接数
+func (s *Server) ActiveConnections() int {
+	if s.connLimiter != nil {
+		return s.connLimiter.Current()
+	}
+	return 0
+}
+
+// MaxConnections 获取最大连接数
+func (s *Server) MaxConnections() int {
+	if s.connLimiter != nil {
+		return s.connLimiter.MaxConnections()
+	}
+	return 0
+}
+
+// GetLimiterStats 获取限流器统计
+func (s *Server) GetLimiterStats() *LimiterStats {
+	if s.connLimiter != nil {
+		stats := s.connLimiter.Stats()
+		return &stats
+	}
+	return nil
+}
+
+// GetRateLimiterStats 获取速率限流器统计
+func (s *Server) GetRateLimiterStats() *RateLimiterStats {
+	if s.rateLimiter != nil {
+		stats := s.rateLimiter.Stats()
+		return &stats
+	}
+	return nil
+}
+
+// GetCircuitBreakerStats 获取熔断器统计
+func (s *Server) GetCircuitBreakerStats() *CircuitBreakerStats {
+	if s.breaker != nil {
+		stats := s.breaker.Stats()
+		return &stats
+	}
+	return nil
+}
+
 // Start 监听并接受连接（非阻塞，内部 goroutine）
 func (s *Server) Start() error {
 	ln, err := net.Listen("tcp", s.cfg.Addr)
@@ -52,6 +125,12 @@ func (s *Server) Start() error {
 	go func() {
 		defer s.wg.Done()
 		for {
+			// Week2: 速率限流检查
+			if s.rateLimiter != nil && !s.rateLimiter.Allow() {
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
+
 			conn, err := s.ln.Accept()
 			if err != nil {
 				select {
@@ -63,55 +142,130 @@ func (s *Server) Start() error {
 				time.Sleep(50 * time.Millisecond)
 				continue
 			}
+
 			if s.onAccept != nil {
 				s.onAccept()
 			}
 
-			if s.connHandler != nil {
-				// 新接口：连接上下文 + 读写分离
-				s.wg.Add(1)
-				go func(c net.Conn) {
-					defer s.wg.Done()
-					ctx := newConnContext(s, c)
-					// 允许上层为该连接安装专属 onRead/绑定会话等
-					s.connHandler(ctx)
-					ctx.run()
-				}(conn)
-				continue
+			// Week2: 连接数限流检查
+			if s.connLimiter != nil {
+				if err := s.connLimiter.Acquire(context.Background()); err != nil {
+					conn.Close()
+					if s.logger != nil {
+						s.logger.Warn("connection rejected by limiter", zap.Error(err))
+					}
+					continue
+				}
 			}
 
-			// 兼容旧接口（raw bytes handler）
-			s.wg.Add(1)
-			go func(c net.Conn) {
-				defer s.wg.Done()
-				defer c.Close()
-				_ = c.SetReadDeadline(time.Now().Add(s.cfg.ReadTimeout))
-				_ = c.SetWriteDeadline(time.Now().Add(s.cfg.WriteTimeout))
-				buf := make([]byte, 4096)
-				for {
-					n, err := c.Read(buf)
-					if n > 0 {
-						if s.onRecvBytes != nil {
-							s.onRecvBytes(n)
-						}
-						if s.handler != nil {
-							s.handler(buf[:n])
-						}
+			// Week2: 熔断器检查
+			if s.breaker != nil {
+				err := s.breaker.Call(func() error {
+					// 处理连接
+					s.handleConnWithProtection(conn)
+					return nil
+				})
+
+				if err == ErrCircuitOpen || err == ErrTooManyRequests {
+					conn.Close()
+					if s.connLimiter != nil {
+						s.connLimiter.Release()
 					}
-					if err != nil {
-						if ne, ok := err.(net.Error); ok && ne.Timeout() {
-							continue
-						}
-						if err == io.EOF {
-							return
-						}
-						return
+					if s.logger != nil {
+						s.logger.Warn("connection rejected by circuit breaker", zap.Error(err))
 					}
+					continue
 				}
-			}(conn)
+			} else {
+				// 无熔断器，直接处理
+				s.handleConnWithProtection(conn)
+			}
 		}
 	}()
 	return nil
+}
+
+// handleConnWithProtection 带保护的连接处理
+func (s *Server) handleConnWithProtection(conn net.Conn) {
+	if s.connHandler != nil {
+		// 新接口：连接上下文 + 读写分离
+		s.wg.Add(1)
+		go func(c net.Conn) {
+			defer s.wg.Done()
+			defer func() {
+				if s.connLimiter != nil {
+					s.connLimiter.Release()
+				}
+			}()
+			defer func() {
+				if r := recover(); r != nil {
+					if s.logger != nil {
+						s.logger.Error("panic in handleConn", zap.Any("panic", r))
+					}
+					// 记录为失败，影响熔断器
+					if s.breaker != nil {
+						s.breaker.afterCall(fmt.Errorf("panic: %v", r))
+					}
+				}
+			}()
+
+			ctx := newConnContext(s, c)
+			// 允许上层为该连接安装专属 onRead/绑定会话等
+			s.connHandler(ctx)
+			ctx.run()
+		}(conn)
+		return
+	}
+
+	// 兼容旧接口（raw bytes handler）
+	if s.handler != nil {
+		s.wg.Add(1)
+		go func(c net.Conn) {
+			defer s.wg.Done()
+			defer c.Close()
+			defer func() {
+				if s.connLimiter != nil {
+					s.connLimiter.Release()
+				}
+			}()
+			defer func() {
+				if r := recover(); r != nil {
+					if s.logger != nil {
+						s.logger.Error("panic in handler", zap.Any("panic", r))
+					}
+				}
+			}()
+
+			_ = c.SetReadDeadline(time.Now().Add(s.cfg.ReadTimeout))
+			_ = c.SetWriteDeadline(time.Now().Add(s.cfg.WriteTimeout))
+			buf := make([]byte, 4096)
+			for {
+				n, err := c.Read(buf)
+				if n > 0 {
+					if s.onRecvBytes != nil {
+						s.onRecvBytes(n)
+					}
+					s.handler(buf[:n])
+				}
+				if err != nil {
+					if ne, ok := err.(net.Error); ok && ne.Timeout() {
+						continue
+					}
+					if err == io.EOF {
+						return
+					}
+					return
+				}
+			}
+		}(conn)
+		return
+	}
+
+	// 无handler，直接关闭连接
+	conn.Close()
+	if s.connLimiter != nil {
+		s.connLimiter.Release()
+	}
 }
 
 // Shutdown 优雅关闭监听并等待连接退出
