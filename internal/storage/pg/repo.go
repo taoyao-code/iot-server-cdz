@@ -767,3 +767,148 @@ func (r *Repository) UpdateSocketStatus(ctx context.Context, gatewayID string, s
 	_, err := r.Pool.Exec(ctx, q, gatewayID, socketNo, status)
 	return err
 }
+
+// ===== Week 7: OTA升级 Repository 方法 =====
+
+// OTATask OTA升级任务
+type OTATask struct {
+	ID               int64
+	DeviceID         int64
+	TargetType       int
+	TargetSocketNo   *int
+	FirmwareVersion  string
+	FTPServer        string
+	FTPPort          int
+	FileName         string
+	FileSize         *int64
+	Status           int
+	Progress         int
+	ErrorMsg         *string
+	MsgID            *int
+	StartedAt        *time.Time
+	CompletedAt      *time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+// CreateOTATask 创建OTA升级任务
+func (r *Repository) CreateOTATask(ctx context.Context, task *OTATask) (int64, error) {
+	const q = `INSERT INTO ota_tasks 
+	           (device_id, target_type, target_socket_no, firmware_version, ftp_server, ftp_port, file_name, file_size, status, created_at)
+	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+	           RETURNING id`
+	
+	var id int64
+	err := r.Pool.QueryRow(ctx, q,
+		task.DeviceID,
+		task.TargetType,
+		task.TargetSocketNo,
+		task.FirmwareVersion,
+		task.FTPServer,
+		task.FTPPort,
+		task.FileName,
+		task.FileSize,
+		task.Status).Scan(&id)
+	
+	return id, err
+}
+
+// GetOTATask 查询OTA任务
+func (r *Repository) GetOTATask(ctx context.Context, taskID int64) (*OTATask, error) {
+	const q = `SELECT id, device_id, target_type, target_socket_no, firmware_version, ftp_server, ftp_port, 
+	                  file_name, file_size, status, progress, error_msg, msg_id, started_at, completed_at, created_at, updated_at
+	           FROM ota_tasks WHERE id = $1`
+	
+	var task OTATask
+	err := r.Pool.QueryRow(ctx, q, taskID).Scan(
+		&task.ID, &task.DeviceID, &task.TargetType, &task.TargetSocketNo, &task.FirmwareVersion,
+		&task.FTPServer, &task.FTPPort, &task.FileName, &task.FileSize, &task.Status, &task.Progress,
+		&task.ErrorMsg, &task.MsgID, &task.StartedAt, &task.CompletedAt, &task.CreatedAt, &task.UpdatedAt)
+	
+	if err != nil {
+		return nil, err
+	}
+	
+	return &task, nil
+}
+
+// UpdateOTATaskStatus 更新OTA任务状态
+func (r *Repository) UpdateOTATaskStatus(ctx context.Context, taskID int64, status int, errorMsg *string) error {
+	const q = `UPDATE ota_tasks 
+	           SET status = $2, error_msg = $3, updated_at = NOW()
+	           WHERE id = $1`
+	
+	_, err := r.Pool.Exec(ctx, q, taskID, status, errorMsg)
+	return err
+}
+
+// UpdateOTATaskProgress 更新OTA任务进度
+func (r *Repository) UpdateOTATaskProgress(ctx context.Context, taskID int64, progress int, status int) error {
+	const q = `UPDATE ota_tasks 
+	           SET progress = $2, status = $3, updated_at = NOW()
+	           WHERE id = $1`
+	
+	_, err := r.Pool.Exec(ctx, q, taskID, progress, status)
+	return err
+}
+
+// CompleteOTATask 完成OTA任务
+func (r *Repository) CompleteOTATask(ctx context.Context, taskID int64, success bool, errorMsg *string) error {
+	status := 3 // 成功
+	if !success {
+		status = 4 // 失败
+	}
+	
+	const q = `UPDATE ota_tasks 
+	           SET status = $2, progress = $3, error_msg = $4, completed_at = NOW(), updated_at = NOW()
+	           WHERE id = $1`
+	
+	progress := 100
+	if !success {
+		progress = 0
+	}
+	
+	_, err := r.Pool.Exec(ctx, q, taskID, status, progress, errorMsg)
+	return err
+}
+
+// GetDeviceOTATasks 查询设备的OTA任务列表
+func (r *Repository) GetDeviceOTATasks(ctx context.Context, deviceID int64, limit int) ([]OTATask, error) {
+	const q = `SELECT id, device_id, target_type, target_socket_no, firmware_version, ftp_server, ftp_port,
+	                  file_name, file_size, status, progress, error_msg, msg_id, started_at, completed_at, created_at, updated_at
+	           FROM ota_tasks
+	           WHERE device_id = $1
+	           ORDER BY created_at DESC
+	           LIMIT $2`
+	
+	rows, err := r.Pool.Query(ctx, q, deviceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	
+	var tasks []OTATask
+	for rows.Next() {
+		var task OTATask
+		err := rows.Scan(
+			&task.ID, &task.DeviceID, &task.TargetType, &task.TargetSocketNo, &task.FirmwareVersion,
+			&task.FTPServer, &task.FTPPort, &task.FileName, &task.FileSize, &task.Status, &task.Progress,
+			&task.ErrorMsg, &task.MsgID, &task.StartedAt, &task.CompletedAt, &task.CreatedAt, &task.UpdatedAt)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	
+	return tasks, rows.Err()
+}
+
+// SetOTATaskMsgID 设置OTA任务的消息ID
+func (r *Repository) SetOTATaskMsgID(ctx context.Context, taskID int64, msgID int) error {
+	const q = `UPDATE ota_tasks 
+	           SET msg_id = $2, status = 1, started_at = NOW(), updated_at = NOW()
+	           WHERE id = $1`
+	
+	_, err := r.Pool.Exec(ctx, q, taskID, msgID)
+	return err
+}

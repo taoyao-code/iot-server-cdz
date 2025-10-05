@@ -65,6 +65,18 @@ func RegisterHandlers(adapter *Adapter, handlers *Handlers) {
 	adapter.Register(0x000A, func(f *Frame) error {
 		return handlers.HandleNetworkDeleteNode(context.Background(), f)
 	})
+
+	// Week 7: OTA升级
+	// 0x07: OTA升级响应+进度上报（上行）
+	adapter.Register(0x0007, func(f *Frame) error {
+		// 根据数据长度判断是响应还是进度
+		if len(f.Data) >= 3 && len(f.Data) <= 10 {
+			return handlers.HandleOTAResponse(context.Background(), f)
+		} else if len(f.Data) >= 4 {
+			return handlers.HandleOTAProgress(context.Background(), f)
+		}
+		return handlers.HandleGeneric(context.Background(), f)
+	})
 }
 
 // NewBKVProtocol 创建完整的BKV协议实例
@@ -85,7 +97,7 @@ var BKVCommands = map[uint16]string{
 	0x1000: "BKV子协议数据 (插座状态上报等)",
 	0x0015: "控制设备 (按时/按量/按功率)",
 	0x0005: "网络节点列表相关",
-	0x0007: "OTA升级",
+	0x0007: "OTA升级 (下行/上行)",
 	0x0008: "刷新插座列表 (组网管理)",
 	0x0009: "添加插座 (组网管理)",
 	0x000A: "删除插座 (组网管理)",

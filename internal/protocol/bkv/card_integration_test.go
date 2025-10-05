@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 )
 
 // Week5: 刷卡充电端到端集成测试
@@ -464,6 +465,19 @@ func (m *MockRepo) FailParamWrite(ctx context.Context, deviceID int64, paramID i
 	return nil
 }
 
+// Week 6: 组网管理方法（测试桩）
+func (m *MockRepo) UpsertGatewaySocket(ctx context.Context, socket *pgstorage.GatewaySocket) error {
+	return nil
+}
+
+func (m *MockRepo) DeleteGatewaySocket(ctx context.Context, gatewayID string, socketNo int) error {
+	return nil
+}
+
+func (m *MockRepo) GetGatewaySockets(ctx context.Context, gatewayID string) ([]pgstorage.GatewaySocket, error) {
+	return nil, nil
+}
+
 // ============ 编码辅助函数 ============
 
 func EncodeCardSwipeRequest(req *CardSwipeRequest) ([]byte, error) {
@@ -572,4 +586,21 @@ func EncodeBalanceQuery(query *BalanceQuery) []byte {
 	copy(data[0:10], cardBytes)
 
 	return data
+}
+
+// Week 7: OTA升级方法（测试桩）
+func (m *MockRepo) CreateOTATask(ctx context.Context, task *pgstorage.OTATask) (int64, error) {
+	return 1, nil
+}
+func (m *MockRepo) GetOTATask(ctx context.Context, taskID int64) (*pgstorage.OTATask, error) {
+	return nil, nil
+}
+func (m *MockRepo) UpdateOTATaskStatus(ctx context.Context, taskID int64, status int, errorMsg *string) error {
+	return nil
+}
+func (m *MockRepo) UpdateOTATaskProgress(ctx context.Context, taskID int64, progress int, status int) error {
+	return nil
+}
+func (m *MockRepo) GetDeviceOTATasks(ctx context.Context, deviceID int64, limit int) ([]pgstorage.OTATask, error) {
+	return nil, nil
 }

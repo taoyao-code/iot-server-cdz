@@ -1,6 +1,7 @@
 package bkv
 
 import (
+	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"context"
 	"testing"
 )
@@ -161,4 +162,32 @@ func TestHandleControl_Log(t *testing.T) {
 	if fr.logs == 0 || fr.lastCmd != int(0x90) {
 		t.Fatalf("expected control log, got logs=%d cmd=%d", fr.logs, fr.lastCmd)
 	}
+}
+
+// Week 6: 组网管理方法（测试桩）
+func (f *fakeRepoParam) UpsertGatewaySocket(ctx context.Context, socket *pgstorage.GatewaySocket) error {
+	return nil
+}
+func (f *fakeRepoParam) DeleteGatewaySocket(ctx context.Context, gatewayID string, socketNo int) error {
+	return nil
+}
+func (f *fakeRepoParam) GetGatewaySockets(ctx context.Context, gatewayID string) ([]pgstorage.GatewaySocket, error) {
+	return nil, nil
+}
+
+// Week 7: OTA升级方法（测试桩）
+func (f *fakeRepoParam) CreateOTATask(ctx context.Context, task *pgstorage.OTATask) (int64, error) {
+	return 1, nil
+}
+func (f *fakeRepoParam) GetOTATask(ctx context.Context, taskID int64) (*pgstorage.OTATask, error) {
+	return nil, nil
+}
+func (f *fakeRepoParam) UpdateOTATaskStatus(ctx context.Context, taskID int64, status int, errorMsg *string) error {
+	return nil
+}
+func (f *fakeRepoParam) UpdateOTATaskProgress(ctx context.Context, taskID int64, progress int, status int) error {
+	return nil
+}
+func (f *fakeRepoParam) GetDeviceOTATasks(ctx context.Context, deviceID int64, limit int) ([]pgstorage.OTATask, error) {
+	return nil, nil
 }

@@ -1,6 +1,7 @@
 package bkv
 
 import (
+	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"context"
 	"encoding/hex"
 	"testing"
@@ -402,4 +403,32 @@ func TestIsBKVCommand(t *testing.T) {
 	if IsBKVCommand(0x9999) {
 		t.Error("0x9999 should not be a BKV command")
 	}
+}
+
+// Week 6: 组网管理方法（测试桩）
+func (f *fakeRepo) UpsertGatewaySocket(ctx context.Context, socket *pgstorage.GatewaySocket) error {
+	return nil
+}
+func (f *fakeRepo) DeleteGatewaySocket(ctx context.Context, gatewayID string, socketNo int) error {
+	return nil
+}
+func (f *fakeRepo) GetGatewaySockets(ctx context.Context, gatewayID string) ([]pgstorage.GatewaySocket, error) {
+	return nil, nil
+}
+
+// Week 7: OTA升级方法（测试桩）
+func (f *fakeRepo) CreateOTATask(ctx context.Context, task *pgstorage.OTATask) (int64, error) {
+	return 1, nil
+}
+func (f *fakeRepo) GetOTATask(ctx context.Context, taskID int64) (*pgstorage.OTATask, error) {
+	return nil, nil
+}
+func (f *fakeRepo) UpdateOTATaskStatus(ctx context.Context, taskID int64, status int, errorMsg *string) error {
+	return nil
+}
+func (f *fakeRepo) UpdateOTATaskProgress(ctx context.Context, taskID int64, progress int, status int) error {
+	return nil
+}
+func (f *fakeRepo) GetDeviceOTATasks(ctx context.Context, deviceID int64, limit int) ([]pgstorage.OTATask, error) {
+	return nil, nil
 }

@@ -28,6 +28,13 @@ type repoAPI interface {
 	UpsertGatewaySocket(ctx context.Context, socket *pgstorage.GatewaySocket) error
 	DeleteGatewaySocket(ctx context.Context, gatewayID string, socketNo int) error
 	GetGatewaySockets(ctx context.Context, gatewayID string) ([]pgstorage.GatewaySocket, error)
+
+	// Week 7: OTA升级方法
+	CreateOTATask(ctx context.Context, task *pgstorage.OTATask) (int64, error)
+	GetOTATask(ctx context.Context, taskID int64) (*pgstorage.OTATask, error)
+	UpdateOTATaskStatus(ctx context.Context, taskID int64, status int, errorMsg *string) error
+	UpdateOTATaskProgress(ctx context.Context, taskID int64, progress int, status int) error
+	GetDeviceOTATasks(ctx context.Context, deviceID int64, limit int) ([]pgstorage.OTATask, error)
 }
 
 // CardServiceAPI 刷卡充电服务接口
@@ -1001,4 +1008,46 @@ func (h *Handlers) HandleNetworkDeleteNode(ctx context.Context, f *Frame) error 
 		// 失败：记录错误原因
 		return fmt.Errorf("delete socket %d failed: %s", resp.SocketNo, resp.Reason)
 	}
+}
+
+// ===== Week 7: OTA升级处理器 =====
+
+// HandleOTAResponse 处理OTA升级响应（上行）
+func (h *Handlers) HandleOTAResponse(ctx context.Context, f *Frame) error {
+	// 解析OTA响应
+	resp, err := ParseOTAResponse(f.Data)
+	if err != nil {
+		return fmt.Errorf("parse OTA response: %w", err)
+	}
+
+	// TODO: 根据响应结果更新任务状态
+	// 这里需要通过MsgID关联到对应的OTA任务
+	// 暂时只记录日志
+	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
+
+	logData := []byte(fmt.Sprintf("OTA Response: target=%d, socket=%d, result=%d, reason=%s",
+		resp.TargetType, resp.SocketNo, resp.Result, resp.Reason))
+	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, resp.Result == 0)
+
+	return nil
+}
+
+// HandleOTAProgress 处理OTA升级进度上报（上行）
+func (h *Handlers) HandleOTAProgress(ctx context.Context, f *Frame) error {
+	// 解析OTA进度
+	progress, err := ParseOTAProgress(f.Data)
+	if err != nil {
+		return fmt.Errorf("parse OTA progress: %w", err)
+	}
+
+	// TODO: 更新任务进度
+	// 这里需要找到对应的OTA任务并更新进度
+	// 暂时只记录日志
+	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
+
+	logData := []byte(fmt.Sprintf("OTA Progress: target=%d, socket=%d, progress=%d%%, status=%d",
+		progress.TargetType, progress.SocketNo, progress.Progress, progress.Status))
+	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+
+	return nil
 }
