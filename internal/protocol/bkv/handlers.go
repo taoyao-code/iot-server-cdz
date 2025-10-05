@@ -3,6 +3,9 @@ package bkv
 import (
 	"context"
 	"fmt"
+	"time"
+
+	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 )
 
 // repoAPI 抽象（与 ap3000 对齐一部分能力）
@@ -20,6 +23,11 @@ type repoAPI interface {
 	GetParamWritePending(ctx context.Context, deviceID int64, paramID int) ([]byte, int, error) // value, msgID, error
 	ConfirmParamWrite(ctx context.Context, deviceID int64, paramID int, msgID int) error
 	FailParamWrite(ctx context.Context, deviceID int64, paramID int, msgID int, errMsg string) error
+
+	// Week 6: 组网管理方法
+	UpsertGatewaySocket(ctx context.Context, socket *pgstorage.GatewaySocket) error
+	DeleteGatewaySocket(ctx context.Context, gatewayID string, socketNo int) error
+	GetGatewaySockets(ctx context.Context, gatewayID string) ([]pgstorage.GatewaySocket, error)
 }
 
 // CardServiceAPI 刷卡充电服务接口
@@ -918,4 +926,79 @@ func (h *Handlers) handleBalanceQueryUplink(ctx context.Context, f *Frame) error
 	}
 
 	return nil
+}
+
+// ===== Week 6: 组网管理处理器 =====
+
+// HandleNetworkRefresh 处理刷新插座列表响应（上行）
+func (h *Handlers) HandleNetworkRefresh(ctx context.Context, f *Frame) error {
+	// 解析刷新响应
+	resp, err := ParseNetworkRefreshResponse(f.Data)
+	if err != nil {
+		return fmt.Errorf("parse refresh response: %w", err)
+	}
+
+	// 更新数据库中的插座列表
+	now := time.Now()
+	for _, socket := range resp.Sockets {
+		signal := int(socket.SignalStrength)
+		lastSeen := now
+
+		gatewaySocket := &pgstorage.GatewaySocket{
+			GatewayID:      f.GatewayID,
+			SocketNo:       int(socket.SocketNo),
+			SocketMAC:      socket.SocketMAC,
+			SocketUID:      socket.SocketUID,
+			Channel:        int(socket.Channel),
+			Status:         int(socket.Status),
+			SignalStrength: &signal,
+			LastSeenAt:     &lastSeen,
+		}
+
+		if err := h.Repo.UpsertGatewaySocket(ctx, gatewaySocket); err != nil {
+			return fmt.Errorf("upsert socket %d: %w", socket.SocketNo, err)
+		}
+	}
+
+	return nil
+}
+
+// HandleNetworkAddNode 处理添加插座响应（上行）
+func (h *Handlers) HandleNetworkAddNode(ctx context.Context, f *Frame) error {
+	// 解析添加响应
+	resp, err := ParseNetworkAddNodeResponse(f.Data)
+	if err != nil {
+		return fmt.Errorf("parse add node response: %w", err)
+	}
+
+	// 根据结果更新插座状态
+	if resp.Result == 0 {
+		// 成功：插座应该已经在刷新列表时更新了
+		// 这里可以记录日志或发送通知
+		return nil
+	} else {
+		// 失败：记录错误原因
+		return fmt.Errorf("add socket %d failed: %s", resp.SocketNo, resp.Reason)
+	}
+}
+
+// HandleNetworkDeleteNode 处理删除插座响应（上行）
+func (h *Handlers) HandleNetworkDeleteNode(ctx context.Context, f *Frame) error {
+	// 解析删除响应
+	resp, err := ParseNetworkDeleteNodeResponse(f.Data)
+	if err != nil {
+		return fmt.Errorf("parse delete node response: %w", err)
+	}
+
+	// 根据结果处理
+	if resp.Result == 0 {
+		// 成功：从数据库删除插座
+		if err := h.Repo.DeleteGatewaySocket(ctx, f.GatewayID, int(resp.SocketNo)); err != nil {
+			return fmt.Errorf("delete socket %d: %w", resp.SocketNo, err)
+		}
+		return nil
+	} else {
+		// 失败：记录错误原因
+		return fmt.Errorf("delete socket %d failed: %s", resp.SocketNo, resp.Reason)
+	}
 }

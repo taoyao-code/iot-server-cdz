@@ -49,6 +49,22 @@ func RegisterHandlers(adapter *Adapter, handlers *Handlers) {
 	adapter.Register(0x001A, func(f *Frame) error {
 		return handlers.HandleBalanceQuery(context.Background(), f)
 	})
+
+	// Week 6: 组网管理
+	// 0x08: 刷新插座列表
+	adapter.Register(0x0008, func(f *Frame) error {
+		return handlers.HandleNetworkRefresh(context.Background(), f)
+	})
+
+	// 0x09: 添加插座
+	adapter.Register(0x0009, func(f *Frame) error {
+		return handlers.HandleNetworkAddNode(context.Background(), f)
+	})
+
+	// 0x0A: 删除插座
+	adapter.Register(0x000A, func(f *Frame) error {
+		return handlers.HandleNetworkDeleteNode(context.Background(), f)
+	})
 }
 
 // NewBKVProtocol 创建完整的BKV协议实例
@@ -70,6 +86,9 @@ var BKVCommands = map[uint16]string{
 	0x0015: "控制设备 (按时/按量/按功率)",
 	0x0005: "网络节点列表相关",
 	0x0007: "OTA升级",
+	0x0008: "刷新插座列表 (组网管理)",
+	0x0009: "添加插座 (组网管理)",
+	0x000A: "删除插座 (组网管理)",
 	0x000B: "刷卡上报/下发充电指令",
 	0x000C: "充电结束上报/确认",
 	0x000F: "订单确认",

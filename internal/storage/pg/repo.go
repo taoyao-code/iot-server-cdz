@@ -661,3 +661,109 @@ func (r *Repository) GetCardTransactions(ctx context.Context, cardNo string, lim
 	}
 	return transactions, rows.Err()
 }
+
+// ===== Week 6: 组网管理 Repository 方法 =====
+
+// GatewaySocket 网关插座
+type GatewaySocket struct {
+	ID             int64
+	GatewayID      string
+	SocketNo       int
+	SocketMAC      string
+	SocketUID      string
+	Channel        int
+	Status         int
+	SignalStrength *int
+	LastSeenAt     *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// UpsertGatewaySocket 插入或更新网关插座
+func (r *Repository) UpsertGatewaySocket(ctx context.Context, socket *GatewaySocket) error {
+	const q = `INSERT INTO gateway_sockets 
+	           (gateway_id, socket_no, socket_mac, socket_uid, channel, status, signal_strength, last_seen_at, updated_at)
+	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+	           ON CONFLICT (gateway_id, socket_no) 
+	           DO UPDATE SET 
+	               socket_mac = EXCLUDED.socket_mac,
+	               socket_uid = EXCLUDED.socket_uid,
+	               channel = EXCLUDED.channel,
+	               status = EXCLUDED.status,
+	               signal_strength = EXCLUDED.signal_strength,
+	               last_seen_at = EXCLUDED.last_seen_at,
+	               updated_at = NOW()`
+
+	_, err := r.Pool.Exec(ctx, q,
+		socket.GatewayID,
+		socket.SocketNo,
+		socket.SocketMAC,
+		socket.SocketUID,
+		socket.Channel,
+		socket.Status,
+		socket.SignalStrength,
+		socket.LastSeenAt)
+
+	return err
+}
+
+// GetGatewaySockets 查询网关下所有插座
+func (r *Repository) GetGatewaySockets(ctx context.Context, gatewayID string) ([]GatewaySocket, error) {
+	const q = `SELECT id, gateway_id, socket_no, socket_mac, socket_uid, channel, status, signal_strength, last_seen_at, created_at, updated_at
+	           FROM gateway_sockets
+	           WHERE gateway_id = $1
+	           ORDER BY socket_no`
+
+	rows, err := r.Pool.Query(ctx, q, gatewayID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sockets []GatewaySocket
+	for rows.Next() {
+		var s GatewaySocket
+		err := rows.Scan(&s.ID, &s.GatewayID, &s.SocketNo, &s.SocketMAC, &s.SocketUID,
+			&s.Channel, &s.Status, &s.SignalStrength, &s.LastSeenAt, &s.CreatedAt, &s.UpdatedAt)
+		if err != nil {
+			return nil, err
+		}
+		sockets = append(sockets, s)
+	}
+
+	return sockets, rows.Err()
+}
+
+// GetGatewaySocket 查询指定插座
+func (r *Repository) GetGatewaySocket(ctx context.Context, gatewayID string, socketNo int) (*GatewaySocket, error) {
+	const q = `SELECT id, gateway_id, socket_no, socket_mac, socket_uid, channel, status, signal_strength, last_seen_at, created_at, updated_at
+	           FROM gateway_sockets
+	           WHERE gateway_id = $1 AND socket_no = $2`
+
+	var s GatewaySocket
+	err := r.Pool.QueryRow(ctx, q, gatewayID, socketNo).Scan(
+		&s.ID, &s.GatewayID, &s.SocketNo, &s.SocketMAC, &s.SocketUID,
+		&s.Channel, &s.Status, &s.SignalStrength, &s.LastSeenAt, &s.CreatedAt, &s.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &s, nil
+}
+
+// DeleteGatewaySocket 删除网关插座
+func (r *Repository) DeleteGatewaySocket(ctx context.Context, gatewayID string, socketNo int) error {
+	const q = `DELETE FROM gateway_sockets WHERE gateway_id = $1 AND socket_no = $2`
+	_, err := r.Pool.Exec(ctx, q, gatewayID, socketNo)
+	return err
+}
+
+// UpdateSocketStatus 更新插座状态
+func (r *Repository) UpdateSocketStatus(ctx context.Context, gatewayID string, socketNo int, status int) error {
+	const q = `UPDATE gateway_sockets 
+	           SET status = $3, updated_at = NOW()
+	           WHERE gateway_id = $1 AND socket_no = $2`
+
+	_, err := r.Pool.Exec(ctx, q, gatewayID, socketNo, status)
+	return err
+}
