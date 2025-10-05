@@ -16,9 +16,10 @@ import (
 
 // NewConnHandler 构建 TCP 连接处理器，完成协议识别、会话绑定与指标上报。
 // 通过 getHandlers 延迟获取 AP3000 处理集合，以便在 DB 初始化后赋值。
+// P0完成: 支持接口类型以兼容内存和Redis会话管理器
 func NewConnHandler(
 	protocols cfgpkg.ProtocolsConfig,
-	sess *session.Manager,
+	sess session.SessionManager,
 	policy session.WeightedPolicy,
 	appm *metrics.AppMetrics,
 	getAP3000Handlers func() *ap3000.Handlers,
@@ -141,7 +142,7 @@ func NewConnHandler(
 				}
 				return bh.HandleHeartbeat(context.Background(), f)
 			})
-			
+
 			// BKV子协议数据 (插座状态上报等) (0x1000)
 			bkvAdapter.Register(0x1000, func(f *bkv.Frame) error {
 				if appm != nil {
@@ -154,7 +155,7 @@ func NewConnHandler(
 				}
 				return bh.HandleBKVStatus(context.Background(), f)
 			})
-			
+
 			// 控制指令 (0x0015)
 			bkvAdapter.Register(0x0015, func(f *bkv.Frame) error {
 				if appm != nil {
@@ -167,7 +168,7 @@ func NewConnHandler(
 				}
 				return bh.HandleControl(context.Background(), f)
 			})
-			
+
 			// 网络节点列表 (0x0005)
 			bkvAdapter.Register(0x0005, func(f *bkv.Frame) error {
 				if appm != nil {
@@ -180,7 +181,7 @@ func NewConnHandler(
 				}
 				return bh.HandleGeneric(context.Background(), f)
 			})
-			
+
 			// OTA升级 (0x0007)
 			bkvAdapter.Register(0x0007, func(f *bkv.Frame) error {
 				if appm != nil {
@@ -193,7 +194,7 @@ func NewConnHandler(
 				}
 				return bh.HandleGeneric(context.Background(), f)
 			})
-			
+
 			// 参数设置/查询 (0x83, 0x84, 0x85)
 			paramHandler := func(f *bkv.Frame) error {
 				if appm != nil {

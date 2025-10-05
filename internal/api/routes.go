@@ -14,10 +14,11 @@ import (
 
 // RegisterReadOnlyRoutes 注册只读查询路由
 // P0修复: 添加API认证保护
+// P0完成: 支持接口类型以兼容内存和Redis会话管理器
 func RegisterReadOnlyRoutes(
 	r *gin.Engine,
 	repo *pgstorage.Repository,
-	sess *session.Manager,
+	sess session.SessionManager,
 	policy session.WeightedPolicy,
 	authCfg middleware.AuthConfig,
 	logger *zap.Logger,

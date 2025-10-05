@@ -17,6 +17,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/metrics"
 	"github.com/taoyao-code/iot-server/internal/protocol/ap3000"
 	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
+	"github.com/taoyao-code/iot-server/internal/session"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"go.uber.org/zap"
 )
@@ -30,10 +31,26 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	reg, appm := app.NewMetrics()
 	metricsHandler := metrics.Handler(reg)
 	ready := app.NewReady()
-	sess, policy := app.NewSessionAndPolicy(cfg.Session)
-	log.Info("basic components initialized")
 
-	// ========== 阶段2: 连接数据库（阻塞等待，失败直接返回）==========
+	// 生成服务器实例ID（用于Redis会话管理）
+	serverID := app.GenerateServerID()
+	log.Info("basic components initialized", zap.String("server_id", serverID))
+
+	// ========== 阶段2: 初始化Redis（如果启用）==========
+	redisClient, err := app.NewRedisClient(cfg.Redis, log)
+	if err != nil {
+		log.Error("redis initialization failed", zap.Error(err))
+		return err
+	}
+	if redisClient != nil {
+		defer redisClient.Close()
+		log.Info("redis initialized")
+	}
+
+	// ========== 阶段3: 初始化会话管理器（需要Redis客户端）==========
+	sess, policy := app.NewSessionAndPolicy(cfg.Session, redisClient, serverID, log)
+
+	// ========== 阶段4: 连接数据库（阻塞等待，失败直接返回）==========
 	dbpool, err := app.ConnectDBAndMigrate(context.Background(), cfg.Database, "db/migrations", log)
 	if err != nil {
 		log.Error("database initialization failed", zap.Error(err))
@@ -43,7 +60,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	ready.SetDBReady(true)
 	log.Info("database ready", zap.String("dsn", maskDSN(cfg.Database.DSN)))
 
-	// ========== 阶段3: 初始化业务处理器（确保DB已就绪）==========
+	// ========== 阶段5: 初始化业务处理器（确保DB已就绪）==========
 	repo := &pgstorage.Repository{Pool: dbpool}
 
 	var bkvReason *bkv.ReasonMap
@@ -63,12 +80,14 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 		zap.Bool("ap3000", cfg.Protocols.EnableAP3000),
 		zap.Bool("bkv", cfg.Protocols.EnableBKV))
 
-	// ========== 阶段4: 启动HTTP服务（非阻塞）==========
+	// ========== 阶段6: 启动HTTP服务（非阻塞）==========
 	readyFn := func() bool { return ready.Ready() }
 	httpSrv := app.NewHTTPServer(cfg.HTTP, cfg.Metrics.Path, metricsHandler, readyFn)
 
 	// Week2: 创建健康检查聚合器
 	healthAgg := app.NewHealthAggregator(dbpool)
+	// Week2.2: 添加Redis健康检查器（如果Redis已启用）
+	app.AddRedisChecker(healthAgg, redisClient)
 	log.Info("health aggregator initialized")
 
 	// P0修复: 注册路由时传入认证配置
@@ -89,21 +108,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	}()
 	log.Info("http server started", zap.String("addr", cfg.HTTP.Addr))
 
-	// ========== Week2.2: 初始化Redis（如果启用）==========
-	redisClient, err := app.NewRedisClient(cfg.Redis, log)
-	if err != nil {
-		log.Error("redis initialization failed", zap.Error(err))
-		return err
-	}
-	if redisClient != nil {
-		defer redisClient.Close()
-		log.Info("redis initialized")
-
-		// 添加Redis健康检查器
-		app.AddRedisChecker(healthAgg, redisClient)
-	}
-
-	// ========== 阶段5: 启动下行队列Worker ==========
+	// ========== 阶段7: 启动下行队列Worker ==========
 	var wcancel context.CancelFunc
 	var outw interface {
 		SetGetConn(func(string) (interface{}, bool))
@@ -130,7 +135,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	}
 	defer wcancel()
 
-	// ========== 阶段6: 最后启动TCP服务（此时所有依赖已就绪）==========
+	// ========== 阶段8: 最后启动TCP服务（此时所有依赖已就绪）==========
 	tcpSrv := app.NewTCPServer(cfg.TCP, log) // Week2: 传递logger以支持限流日志
 	tcpSrv.SetMetricsCallbacks(
 		func() { appm.TCPAccepted.Inc() },
@@ -153,7 +158,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	app.AddTCPChecker(healthAgg, tcpSrv)
 	log.Info("all services ready, waiting for connections")
 
-	// ========== 阶段7: 等待关闭信号 ==========
+	// ========== 阶段9: 等待关闭信号 ==========
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
@@ -167,6 +172,17 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 
 	_ = tcpSrv.Shutdown(ctx)
 	log.Info("tcp server stopped")
+
+	// P0完成: 清理Redis会话数据（如果使用Redis管理器）
+	if redisClient != nil {
+		if redisMgr, ok := sess.(*session.RedisManager); ok {
+			if err := redisMgr.Cleanup(); err != nil {
+				log.Warn("redis session cleanup failed", zap.Error(err))
+			} else {
+				log.Info("redis session cleaned up")
+			}
+		}
+	}
 
 	log.Info("shutdown complete")
 	return nil
