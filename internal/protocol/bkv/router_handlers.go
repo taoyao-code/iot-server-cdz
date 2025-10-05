@@ -77,6 +77,56 @@ func RegisterHandlers(adapter *Adapter, handlers *Handlers) {
 		}
 		return handlers.HandleGeneric(context.Background(), f)
 	})
+
+	// Week 8: 按功率分档充电
+	// 0x17: 按功率分档充电命令（下行，由API触发）
+	// 0x18: 按功率充电结束上报（上行）
+	adapter.Register(0x0018, func(f *Frame) error {
+		return handlers.HandlePowerLevelEnd(context.Background(), f)
+	})
+
+	// Week 9: 参数管理
+	// 0x01: 批量读取参数（上行响应）
+	adapter.Register(0x0001, func(f *Frame) error {
+		return handlers.HandleParamReadResponse(context.Background(), f)
+	})
+	
+	// 0x02: 批量写入参数（上行响应）
+	adapter.Register(0x0002, func(f *Frame) error {
+		return handlers.HandleParamWriteResponse(context.Background(), f)
+	})
+	
+	// 0x03: 参数同步（上行响应）
+	adapter.Register(0x0003, func(f *Frame) error {
+		return handlers.HandleParamSyncResponse(context.Background(), f)
+	})
+	
+	// 0x04: 参数重置（上行响应）
+	adapter.Register(0x0004, func(f *Frame) error {
+		return handlers.HandleParamResetResponse(context.Background(), f)
+	})
+
+	// Week 10: 扩展功能
+	// 0x1B: 语音配置（上行响应）
+	adapter.Register(0x001B, func(f *Frame) error {
+		return handlers.HandleVoiceConfigResponse(context.Background(), f)
+	})
+	
+	// 0x0D/0x0E/0x1D: 查询插座状态（上行响应）
+	adapter.Register(0x000D, func(f *Frame) error {
+		return handlers.HandleSocketStateResponse(context.Background(), f)
+	})
+	adapter.Register(0x000E, func(f *Frame) error {
+		return handlers.HandleSocketStateResponse(context.Background(), f)
+	})
+	adapter.Register(0x001D, func(f *Frame) error {
+		return handlers.HandleSocketStateResponse(context.Background(), f)
+	})
+	
+	// 0x19: 服务费充电结束（上行）
+	adapter.Register(0x0019, func(f *Frame) error {
+		return handlers.HandleServiceFeeEnd(context.Background(), f)
+	})
 }
 
 // NewBKVProtocol 创建完整的BKV协议实例
@@ -94,8 +144,10 @@ func NewBKVProtocol(repo repoAPI, reasonMap *ReasonMap) *Adapter {
 // BKVCommands BKV协议支持的命令列表
 var BKVCommands = map[uint16]string{
 	0x0000: "心跳上报/回复",
-	0x1000: "BKV子协议数据 (插座状态上报等)",
-	0x0015: "控制设备 (按时/按量/按功率)",
+	0x0001: "批量读取参数 (下行/上行)",
+	0x0002: "批量写入参数 (下行/上行)",
+	0x0003: "参数同步 (下行/上行)",
+	0x0004: "参数重置 (下行/上行)",
 	0x0005: "网络节点列表相关",
 	0x0007: "OTA升级 (下行/上行)",
 	0x0008: "刷新插座列表 (组网管理)",
@@ -103,8 +155,18 @@ var BKVCommands = map[uint16]string{
 	0x000A: "删除插座 (组网管理)",
 	0x000B: "刷卡上报/下发充电指令",
 	0x000C: "充电结束上报/确认",
+	0x000D: "查询插座状态 (下行/上行)",
+	0x000E: "查询插座状态 (下行/上行)",
 	0x000F: "订单确认",
+	0x0015: "控制设备 (按时/按量/按功率)",
+	0x0017: "按功率分档充电 (下行)",
+	0x0018: "按功率充电结束上报 (上行)",
+	0x0019: "服务费充电 (下行/上行)",
 	0x001A: "余额查询",
+	0x001B: "语音配置 (下行/上行)",
+	0x001D: "查询插座状态 (下行/上行)",
+	0x1000: "BKV子协议数据 (插座状态上报等)",
+	0x1017: "插座状态上报 (上行)",
 }
 
 // IsBKVCommand 判断是否为BKV协议支持的命令

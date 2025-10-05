@@ -1051,3 +1051,175 @@ func (h *Handlers) HandleOTAProgress(ctx context.Context, f *Frame) error {
 
 	return nil
 }
+
+// ===== Week 8: 按功率分档充电处理器 =====
+
+// HandlePowerLevelEnd 处理按功率充电结束上报（上行）
+func (h *Handlers) HandlePowerLevelEnd(ctx context.Context, f *Frame) error {
+	// 解析充电结束上报
+	report, err := ParsePowerLevelEndReport(f.Data)
+	if err != nil {
+		return fmt.Errorf("parse power level end report: %w", err)
+	}
+
+	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
+	
+	// 记录充电结束日志
+	logData := []byte(fmt.Sprintf("PowerLevelEnd: port=%d, duration=%dm, energy=%.2fkWh, amount=%.2f元, reason=%d",
+		report.PortNo, report.TotalDuration, float64(report.TotalEnergy)/100, float64(report.TotalAmount)/100, report.EndReason))
+	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+
+	// TODO: 更新订单信息，记录各档位使用情况
+	// 目前先返回确认
+	reply := EncodePowerLevelEndReply(report.PortNo, 0) // 0=确认成功
+	
+	// 发送确认回复（下行）
+	// TODO: 通过Outbound发送回复
+	_ = reply
+	
+	return nil
+}
+
+// ===== Week 9: 参数管理处理器 =====
+
+// HandleParamReadResponse 处理批量读取参数响应（上行）
+func (h *Handlers) HandleParamReadResponse(ctx context.Context, f *Frame) error {
+	resp, err := ParseParamReadResponse(f.Data)
+	if err != nil {
+		return fmt.Errorf("parse param read response: %w", err)
+	}
+
+	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
+	
+	// 记录参数读取日志
+	logData := []byte(fmt.Sprintf("ParamReadResponse: %d params", len(resp.Params)))
+	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+
+	// TODO: 存储参数到数据库或缓存
+	for _, param := range resp.Params {
+		_ = param // 暂时忽略
+	}
+	
+	return nil
+}
+
+// HandleParamWriteResponse 处理批量写入参数响应（上行）
+func (h *Handlers) HandleParamWriteResponse(ctx context.Context, f *Frame) error {
+	resp, err := ParseParamWriteResponse(f.Data)
+	if err != nil {
+		return fmt.Errorf("parse param write response: %w", err)
+	}
+
+	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
+	
+	// 记录参数写入日志
+	successCount := 0
+	for _, result := range resp.Results {
+		if result.Result == 0 {
+			successCount++
+		}
+	}
+	
+	logData := []byte(fmt.Sprintf("ParamWriteResponse: %d/%d success", successCount, len(resp.Results)))
+	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+
+	return nil
+}
+
+// HandleParamSyncResponse 处理参数同步响应（上行）
+func (h *Handlers) HandleParamSyncResponse(ctx context.Context, f *Frame) error {
+	resp, err := ParseParamSyncResponse(f.Data)
+	if err != nil {
+		return fmt.Errorf("parse param sync response: %w", err)
+	}
+
+	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
+	
+	// 记录同步状态
+	logData := []byte(fmt.Sprintf("ParamSyncResponse: result=%s, progress=%d%%",
+		GetParamSyncResultDescription(resp.Result), resp.Progress))
+	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+
+	return nil
+}
+
+// HandleParamResetResponse 处理参数重置响应（上行）
+func (h *Handlers) HandleParamResetResponse(ctx context.Context, f *Frame) error {
+	resp, err := ParseParamResetResponse(f.Data)
+	if err != nil {
+		return fmt.Errorf("parse param reset response: %w", err)
+	}
+
+	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
+	
+	// 记录重置结果
+	status := "成功"
+	if resp.Result != 0 {
+		status = "失败"
+	}
+	logData := []byte(fmt.Sprintf("ParamResetResponse: %s, message=%s", status, resp.Message))
+	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+
+	return nil
+}
+
+// ===== Week 10: 扩展功能处理器 =====
+
+// HandleVoiceConfigResponse 处理语音配置响应（上行）
+func (h *Handlers) HandleVoiceConfigResponse(ctx context.Context, f *Frame) error {
+	resp, err := ParseVoiceConfigResponse(f.Data)
+	if err != nil {
+		return fmt.Errorf("parse voice config response: %w", err)
+	}
+
+	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
+	
+	status := "成功"
+	if resp.Result != 0 {
+		status = "失败"
+	}
+	logData := []byte(fmt.Sprintf("VoiceConfig: %s, message=%s", status, resp.Message))
+	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+
+	return nil
+}
+
+// HandleSocketStateResponse 处理插座状态响应（上行）
+func (h *Handlers) HandleSocketStateResponse(ctx context.Context, f *Frame) error {
+	resp, err := ParseSocketStateResponse(f.Data)
+	if err != nil {
+		return fmt.Errorf("parse socket state response: %w", err)
+	}
+
+	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
+	
+	logData := []byte(fmt.Sprintf("SocketState: socket=%d, status=%s, voltage=%.1fV, current=%dmA, power=%dW",
+		resp.SocketNo, GetSocketStatusDescription(resp.Status),
+		float64(resp.Voltage)/10, resp.Current, resp.Power))
+	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+
+	// TODO: 更新插座状态到数据库
+	return nil
+}
+
+// HandleServiceFeeEnd 处理服务费充电结束上报（上行）
+func (h *Handlers) HandleServiceFeeEnd(ctx context.Context, f *Frame) error {
+	report, err := ParseServiceFeeEndReport(f.Data)
+	if err != nil {
+		return fmt.Errorf("parse service fee end report: %w", err)
+	}
+
+	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
+	
+	logData := []byte(fmt.Sprintf("ServiceFeeEnd: port=%d, energy=%.2fkWh, electric=%.2f元, service=%.2f元, total=%.2f元",
+		report.PortNo, float64(report.TotalEnergy)/100,
+		float64(report.ElectricFee)/100, float64(report.ServiceFee)/100,
+		float64(report.TotalAmount)/100))
+	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+
+	// TODO: 更新订单信息
+	reply := EncodeServiceFeeEndReply(report.PortNo, 0)
+	_ = reply
+	
+	return nil
+}

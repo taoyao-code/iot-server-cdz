@@ -210,8 +210,8 @@ func TestBKVCommands_Extension(t *testing.T) {
 		}
 	}
 	
-	// 测试不支持的命令
-	unsupportedCommands := []uint16{0x0001, 0x0010, 0x1001, 0x2000}
+	// 测试不支持的命令（更新：0x01-0x04已在Week9实现）
+	unsupportedCommands := []uint16{0x0006, 0x0010, 0x1001, 0x2000}
 	
 	for _, cmd := range unsupportedCommands {
 		if IsBKVCommand(cmd) {
