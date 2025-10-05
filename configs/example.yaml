@@ -15,6 +15,14 @@ tcp:
   readTimeout: 300s
   writeTimeout: 30s
   maxConnections: 5000
+  # Week2: 限流和熔断配置
+  limiting:
+    enabled: true # 启用限流和熔断
+    max_connections: 10000 # 最大并发连接数
+    rate_per_second: 100 # 每秒新连接速率
+    rate_burst: 200 # 突发容量（2倍速率）
+    breaker_threshold: 5 # 连续5次失败触发熔断
+    breaker_timeout: 30s # 熔断30秒后尝试恢复
 
 protocols:
   enable_ap3000: true
@@ -48,6 +56,18 @@ database:
   maxIdleConns: 10
   connMaxLifetime: 1h
   autoMigrate: true
+
+# Week2.2: Redis配置（用于Outbound队列、缓存等）
+redis:
+  enabled: false # 启用Redis（false=使用PostgreSQL队列）
+  addr: "localhost:6379" # Redis地址
+  password: "123456" # 密码（无密码留空）
+  db: 0 # 数据库编号
+  pool_size: 20 # 连接池大小
+  min_idle_conns: 5 # 最小空闲连接
+  dial_timeout: 5s # 连接超时
+  read_timeout: 3s # 读超时
+  write_timeout: 3s # 写超时
 
 thirdparty:
   push:

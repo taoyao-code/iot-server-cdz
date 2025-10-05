@@ -67,13 +67,19 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	readyFn := func() bool { return ready.Ready() }
 	httpSrv := app.NewHTTPServer(cfg.HTTP, cfg.Metrics.Path, metricsHandler, readyFn)
 
+	// Week2: 创建健康检查聚合器
+	healthAgg := app.NewHealthAggregator(dbpool)
+	log.Info("health aggregator initialized")
+
 	// P0修复: 注册路由时传入认证配置
+	// Week2: 同时注册健康检查路由
 	httpSrv.Register(func(r *gin.Engine) {
 		authCfg := middleware.AuthConfig{
 			APIKeys: cfg.API.Auth.APIKeys,
 			Enabled: cfg.API.Auth.Enabled,
 		}
 		api.RegisterReadOnlyRoutes(r, repo, sess, policy, authCfg, log)
+		app.RegisterHealthRoutes(r, healthAgg) // Week2: 健康检查路由
 	})
 
 	go func() {
@@ -83,14 +89,49 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	}()
 	log.Info("http server started", zap.String("addr", cfg.HTTP.Addr))
 
+	// ========== Week2.2: 初始化Redis（如果启用）==========
+	redisClient, err := app.NewRedisClient(cfg.Redis, log)
+	if err != nil {
+		log.Error("redis initialization failed", zap.Error(err))
+		return err
+	}
+	if redisClient != nil {
+		defer redisClient.Close()
+		log.Info("redis initialized")
+
+		// 添加Redis健康检查器
+		app.AddRedisChecker(healthAgg, redisClient)
+	}
+
 	// ========== 阶段5: 启动下行队列Worker ==========
-	wcancel, outw := app.StartOutbound(dbpool, cfg.Gateway.ThrottleMs, cfg.Gateway.RetryMax, cfg.Gateway.DeadRetentionDays, appm, sess)
+	var wcancel context.CancelFunc
+	var outw interface {
+		SetGetConn(func(string) (interface{}, bool))
+	}
+
+	if redisClient != nil {
+		// Week2.2: 使用Redis队列
+		redisQueue := app.NewRedisOutboundQueue(redisClient)
+		redisWorker := app.NewRedisWorker(redisQueue, cfg.Gateway.ThrottleMs, cfg.Gateway.RetryMax, log)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		wcancel = cancel
+
+		go redisWorker.Start(ctx)
+		redisWorker.SetGetConn(func(phyID string) (interface{}, bool) { return sess.GetConn(phyID) })
+		log.Info("redis outbound worker started")
+	} else {
+		// 使用PostgreSQL队列（原有逻辑）
+		var cancel context.CancelFunc
+		cancel, outw = app.StartOutbound(dbpool, cfg.Gateway.ThrottleMs, cfg.Gateway.RetryMax, cfg.Gateway.DeadRetentionDays, appm, sess)
+		wcancel = cancel
+		outw.SetGetConn(func(phyID string) (interface{}, bool) { return sess.GetConn(phyID) })
+		log.Info("postgresql outbound worker started")
+	}
 	defer wcancel()
-	outw.SetGetConn(func(phyID string) (interface{}, bool) { return sess.GetConn(phyID) })
-	log.Info("outbound worker started")
 
 	// ========== 阶段6: 最后启动TCP服务（此时所有依赖已就绪）==========
-	tcpSrv := app.NewTCPServer(cfg.TCP)
+	tcpSrv := app.NewTCPServer(cfg.TCP, log) // Week2: 传递logger以支持限流日志
 	tcpSrv.SetMetricsCallbacks(
 		func() { appm.TCPAccepted.Inc() },
 		func(n int) { appm.TCPBytesReceived.Add(float64(n)) },
@@ -107,6 +148,9 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	}
 	ready.SetTCPReady(true)
 	log.Info("tcp server started", zap.String("addr", cfg.TCP.Addr))
+
+	// Week2: TCP启动后，将TCP检查器添加到健康聚合器
+	app.AddTCPChecker(healthAgg, tcpSrv)
 	log.Info("all services ready, waiting for connections")
 
 	// ========== 阶段7: 等待关闭信号 ==========

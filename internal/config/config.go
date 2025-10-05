@@ -35,6 +35,18 @@ type TCPConfig struct {
 	WriteTimeout      time.Duration `mapstructure:"writeTimeout"`
 	MaxConnections    int           `mapstructure:"maxConnections"`
 	ConnectionBacklog int           `mapstructure:"connectionBacklog"`
+	// Week2: 限流和熔断配置
+	Limiting TCPLimitingConfig `mapstructure:"limiting"`
+}
+
+// TCPLimitingConfig TCP限流和熔断配置 (Week2)
+type TCPLimitingConfig struct {
+	Enabled          bool          `mapstructure:"enabled"`           // 是否启用限流
+	MaxConnections   int           `mapstructure:"max_connections"`   // 最大并发连接数
+	RatePerSecond    int           `mapstructure:"rate_per_second"`   // 每秒新连接数
+	RateBurst        int           `mapstructure:"rate_burst"`        // 突发容量
+	BreakerThreshold int           `mapstructure:"breaker_threshold"` // 熔断器失败阈值
+	BreakerTimeout   time.Duration `mapstructure:"breaker_timeout"`   // 熔断超时时间
 }
 
 // ProtocolsConfig 协议启用配置
@@ -105,6 +117,19 @@ type DatabaseConfig struct {
 	AutoMigrate     bool          `mapstructure:"autoMigrate"`
 }
 
+// RedisConfig Redis 连接配置 (Week2.2)
+type RedisConfig struct {
+	Enabled      bool          `mapstructure:"enabled"`       // 是否启用Redis
+	Addr         string        `mapstructure:"addr"`          // Redis地址
+	Password     string        `mapstructure:"password"`      // 密码
+	DB           int           `mapstructure:"db"`            // 数据库编号
+	PoolSize     int           `mapstructure:"pool_size"`     // 连接池大小
+	MinIdleConns int           `mapstructure:"min_idle_conns"` // 最小空闲连接
+	DialTimeout  time.Duration `mapstructure:"dial_timeout"`  // 连接超时
+	ReadTimeout  time.Duration `mapstructure:"read_timeout"`  // 读超时
+	WriteTimeout time.Duration `mapstructure:"write_timeout"` // 写超时
+}
+
 // ThirdpartyPushConfig 第三方推送配置
 type ThirdpartyPushConfig struct {
 	WebhookURL string `mapstructure:"webhook_url"`
@@ -153,6 +178,7 @@ type Config struct {
 	Logging    LoggingConfig    `mapstructure:"logging"`
 	Metrics    MetricsConfig    `mapstructure:"metrics"`
 	Database   DatabaseConfig   `mapstructure:"database"`
+	Redis      RedisConfig      `mapstructure:"redis"`      // Week2.2: Redis配置
 	Thirdparty ThirdpartyConfig `mapstructure:"thirdparty"`
 	Session    SessionConfig    `mapstructure:"session"`
 	API        struct {
@@ -276,4 +302,23 @@ func setDefaults(v *viper.Viper) {
 	// api auth defaults (P0修复)
 	v.SetDefault("api.auth.enabled", false) // 默认关闭（向后兼容）
 	v.SetDefault("api.auth.api_keys", []string{})
+
+	// Week2: tcp limiting defaults
+	v.SetDefault("tcp.limiting.enabled", true)          // 默认启用
+	v.SetDefault("tcp.limiting.max_connections", 10000) // 最大10000并发
+	v.SetDefault("tcp.limiting.rate_per_second", 100)   // 每秒100个新连接
+	v.SetDefault("tcp.limiting.rate_burst", 200)        // 突发200个
+	v.SetDefault("tcp.limiting.breaker_threshold", 5)   // 连续5次失败触发熔断
+	v.SetDefault("tcp.limiting.breaker_timeout", "30s") // 熔断30秒后尝试恢复
+
+	// Week2.2: redis defaults
+	v.SetDefault("redis.enabled", false)             // 默认禁用（需手动启用）
+	v.SetDefault("redis.addr", "localhost:6379")     // 默认Redis地址
+	v.SetDefault("redis.password", "")               // 默认无密码
+	v.SetDefault("redis.db", 0)                      // 默认DB 0
+	v.SetDefault("redis.pool_size", 20)              // 连接池20个
+	v.SetDefault("redis.min_idle_conns", 5)          // 最小空闲5个
+	v.SetDefault("redis.dial_timeout", "5s")         // 连接超时5秒
+	v.SetDefault("redis.read_timeout", "3s")         // 读超时3秒
+	v.SetDefault("redis.write_timeout", "3s")        // 写超时3秒
 }
