@@ -1,139 +1,76 @@
-# 集中配置清单（示例）。实际环境请以 ENV 覆盖敏感项。
+# IOT Server 配置文件
+# P0修复: 添加API认证配置
+
 app:
   name: iot-server
   env: dev
 
 http:
   addr: ":8080"
-  readTimeout: 5s
-  writeTimeout: 10s
-  pprof:
-    enable: false
-    prefix: /debug/pprof
+  readTimeout: 30s
+  writeTimeout: 30s
 
 tcp:
-  addr: ":7001"
-  readTimeout: 5s
-  writeTimeout: 10s
+  addr: ":8899"
+  readTimeout: 300s
+  writeTimeout: 30s
   maxConnections: 5000
-  connectionBacklog: 1024
 
 protocols:
   enable_ap3000: true
   enable_bkv: true
-  enable_gn: false  # 组网设备协议（默认关闭）
+  enable_gn: false
   bkv:
-    reason_map_path: configs/bkv-reason-map.example.yaml
-  gn:
-    listen: ":9000"                # GN协议监听端口
-    checksum: "sum_mod_256"        # 校验和算法：sum_mod_256
-    read_buffer: 4096              # 读缓冲区大小（字节）
-    write_buffer: 4096             # 写缓冲区大小（字节）
-    idle_timeout: 300              # 连接空闲超时（秒）
-    retry_backoff: 15              # 重试退避时间（秒）
+    reason_map_path: "configs/bkv_reason_map.yaml"
+
+gateway:
+  throttle_ms: 500
+  retry_max: 3
+  dead_retention_days: 7
 
 logging:
   level: info
-  format: json # json|console
+  format: json
   file:
-    filename: logs/iot-server.log
+    filename: "logs/iot-server.log"
     maxSize: 100
     maxBackups: 7
     maxAge: 30
     compress: true
 
+metrics:
+  enable: true
+  path: "/metrics"
+
 database:
-  dsn: postgres://postgres:postgres@localhost:5432/iot?sslmode=disable
+  dsn: "postgres://iot:iot123@localhost:5432/iot_server?sslmode=disable"
   maxOpenConns: 20
   maxIdleConns: 10
   connMaxLifetime: 1h
-  autoMigrate: false
-
-gateway:
-  listen: "0.0.0.0:9000" # 设备 TCP 监听地址
-  read_buffer_bytes: 32768 # 读缓冲（字节）
-  write_buffer_bytes: 32768 # 写缓冲（字节）
-  throttle_ms: 500 # 单设备下行节流（毫秒）
-  ack_timeout_ms: 15000 # 等待设备应答超时（毫秒）
-  retry_max: 1 # 下行重发次数
-  dead_retention_days: 7 # dead 队列保留天数
-  ip_whitelist: [] # 允许的源IP（CIDR或IP），为空表示不限制
-  device_whitelist: [] # 允许的设备（phyId/ICCID前缀），为空表示不限制
-
-session:
-  heartbeat_timeout_sec: 360 # 心跳超时判定（秒）
-  ack_grace_sec: 30 # ACK 宽限（秒）
-  weighted:
-    enabled: true
-    tcp_down_window_sec: 120 # 近期TCP断开计入的时间窗（秒）
-    ack_window_sec: 30 # 近期ACK超时计入的时间窗（秒）
-    tcp_down_penalty: 0.5 # TCP断开惩罚分
-    ack_timeout_penalty: 0.5 # ACK超时惩罚分
-    threshold: 0.5 # 判定阈值（>=阈值判在线）
-  hash_ring:
-    replicas: 128 # 一致性哈希虚拟节点数
-  token_bucket:
-    qps_per_device: 0 # 0 表示关闭设备级限速
-    global_qps: 0 # 0 表示关闭全局限速
-
-protocol:
-  legacy_01_enabled: false # AP3000：是否兼容01心跳
-  heartbeat_interval_sec: 180 # 心跳摘要窗口（秒）
-  ff_port_enabled: true # 是否启用FF智能端口
-  skip_short_check_mode: 2 # 短路检测策略：0=不检测，1=跳过，2=正常
-  max_duration_sec: 36000 # 充电最长时长上限（秒）
-  max_kwh: 9999 # 充电电量上限（0.01度）
-
-order:
-  timeout_sec: 900 # 订单等待回执/活动窗口（秒）
-
-upgrade:
-  batch_size: 50 # 升级批次设备数
-  window_size: 5 # 并发窗口
-  max_retries: 3 # 分片最大重试
-
-pg:
-  dsn: "postgres://user:pass@127.0.0.1:5432/iot?sslmode=disable" # 使用ENV覆盖
-  max_open: 50
-  max_idle: 10
-  conn_max_lifetime: "30m"
-  partitions:
-    keep_days: 30 # 日分区保留天数
-  batch:
-    max_rows: 500
-    max_bytes: 1048576 # 1MB
-
-wal:
-  scan_interval_sec: 5 # 冷启/定期续发扫描周期
-  dead_retention_days: 7
-
-metrics:
-  enable: true
-  path: /metrics
-  sample_ratio: 1.0 # 指标采样率
-  alerts:
-    enabled: true
-    thresholds:
-      p99_ms: 200
-      success_rate_min: 0.99 # 82成功率下限
-      resend_rate_max: 0.03 # 重发率上限
-      db_write_fail_rate_max: 0.001
-      queue_backlog_max: 10000
+  autoMigrate: true
 
 thirdparty:
   push:
     webhook_url: ""
-    secret: "" # 使用ENV注入；用于 HMAC-SHA256 签名
+    secret: ""
     max_retries: 5
-    backoff: "100ms,200ms,500ms,1s,2s"
-    # 签名规范：
-    # - canonical: METHOD + "\n" + PATH + "\n" + X-Timestamp + "\n" + X-Nonce + "\n" + sha256Hex(body)
-    # - header: X-Api-Key, X-Signature, X-Timestamp, X-Nonce
-  auth:
-    api_keys: [] # 使用ENV注入
-  ip_whitelist: []
 
-security:
-  audit:
+session:
+  heartbeat_timeout_sec: 360
+  weighted:
     enabled: true
-    mask_fields: ["ICCID", "IMEI", "UID"]
+    tcp_down_window_sec: 120
+    ack_window_sec: 30
+    tcp_down_penalty: 0.5
+    ack_timeout_penalty: 0.5
+    threshold: 0.5
+
+# P0修复: API认证配置
+api:
+  auth:
+    enabled: false # 开发环境：false, 生产环境：true
+    api_keys:
+      # 生产环境请使用强密钥，建议32位以上随机字符串
+      # 示例生成命令: openssl rand -base64 32
+      - "sk_dev_test1234567890" # 开发环境测试密钥
+      # - "sk_live_abcd1234efgh5678ijkl"  # 生产环境密钥

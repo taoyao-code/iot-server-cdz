@@ -2,6 +2,7 @@ package pg
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -297,4 +298,130 @@ func (r *Repository) EnqueueOutboxIdempotent(
 		return 0, false, err
 	}
 	return id, false, nil
+}
+
+// ============================================================================
+// P0修复: 设备参数持久化存储方法
+// ============================================================================
+
+// StoreParamWrite 存储参数写入请求
+func (r *Repository) StoreParamWrite(ctx context.Context, deviceID int64, paramID int, value []byte, msgID int) error {
+	const q = `INSERT INTO device_params (device_id, param_id, param_value, msg_id, status, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, 0, NOW(), NOW())
+               ON CONFLICT (device_id, param_id) 
+               DO UPDATE SET 
+                   param_value = EXCLUDED.param_value,
+                   msg_id = EXCLUDED.msg_id,
+                   status = 0,
+                   created_at = NOW(),
+                   updated_at = NOW(),
+                   confirmed_at = NULL,
+                   error_message = NULL`
+	_, err := r.Pool.Exec(ctx, q, deviceID, paramID, value, msgID)
+	return err
+}
+
+// GetParamWritePending 获取待确认的参数写入
+func (r *Repository) GetParamWritePending(ctx context.Context, deviceID int64, paramID int) ([]byte, int, error) {
+	const q = `SELECT param_value, msg_id 
+               FROM device_params 
+               WHERE device_id = $1 AND param_id = $2 AND status = 0
+               ORDER BY created_at DESC
+               LIMIT 1`
+
+	var value []byte
+	var msgID int
+	err := r.Pool.QueryRow(ctx, q, deviceID, paramID).Scan(&value, &msgID)
+	if err != nil {
+		return nil, 0, err
+	}
+	return value, msgID, nil
+}
+
+// ConfirmParamWrite 确认参数写入成功
+func (r *Repository) ConfirmParamWrite(ctx context.Context, deviceID int64, paramID int, msgID int) error {
+	const q = `UPDATE device_params 
+               SET status = 1, confirmed_at = NOW(), updated_at = NOW()
+               WHERE device_id = $1 AND param_id = $2 AND msg_id = $3 AND status = 0`
+	result, err := r.Pool.Exec(ctx, q, deviceID, paramID, msgID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("no pending param write found for device=%d param=%d msg=%d", deviceID, paramID, msgID)
+	}
+	return nil
+}
+
+// FailParamWrite 标记参数写入失败
+func (r *Repository) FailParamWrite(ctx context.Context, deviceID int64, paramID int, msgID int, errMsg string) error {
+	const q = `UPDATE device_params 
+               SET status = 2, error_message = $4, updated_at = NOW()
+               WHERE device_id = $1 AND param_id = $2 AND msg_id = $3 AND status = 0`
+	result, err := r.Pool.Exec(ctx, q, deviceID, paramID, msgID, errMsg)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("no pending param write found for device=%d param=%d msg=%d", deviceID, paramID, msgID)
+	}
+	return nil
+}
+
+// DeviceParam 设备参数结构
+type DeviceParam struct {
+	ID          int64
+	DeviceID    int64
+	ParamID     int
+	ParamValue  []byte
+	MsgID       int
+	Status      int // 0=待确认, 1=已确认, 2=失败
+	CreatedAt   time.Time
+	ConfirmedAt *time.Time
+	UpdatedAt   time.Time
+	ErrorMsg    *string
+}
+
+// ListDeviceParams 查询设备所有参数
+func (r *Repository) ListDeviceParams(ctx context.Context, deviceID int64) ([]DeviceParam, error) {
+	const q = `SELECT id, device_id, param_id, param_value, msg_id, status, created_at, confirmed_at, updated_at, error_message
+               FROM device_params
+               WHERE device_id = $1
+               ORDER BY param_id, created_at DESC`
+
+	rows, err := r.Pool.Query(ctx, q, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var params []DeviceParam
+	for rows.Next() {
+		var p DeviceParam
+		if err := rows.Scan(&p.ID, &p.DeviceID, &p.ParamID, &p.ParamValue, &p.MsgID,
+			&p.Status, &p.CreatedAt, &p.ConfirmedAt, &p.UpdatedAt, &p.ErrorMsg); err != nil {
+			return nil, err
+		}
+		params = append(params, p)
+	}
+	return params, rows.Err()
+}
+
+// GetDeviceParam 获取设备指定参数的最新记录
+func (r *Repository) GetDeviceParam(ctx context.Context, deviceID int64, paramID int) (*DeviceParam, error) {
+	const q = `SELECT id, device_id, param_id, param_value, msg_id, status, created_at, confirmed_at, updated_at, error_message
+               FROM device_params
+               WHERE device_id = $1 AND param_id = $2
+               ORDER BY created_at DESC
+               LIMIT 1`
+
+	var p DeviceParam
+	err := r.Pool.QueryRow(ctx, q, deviceID, paramID).Scan(
+		&p.ID, &p.DeviceID, &p.ParamID, &p.ParamValue, &p.MsgID,
+		&p.Status, &p.CreatedAt, &p.ConfirmedAt, &p.UpdatedAt, &p.ErrorMsg,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
 }

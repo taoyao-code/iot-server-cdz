@@ -49,6 +49,17 @@ func (f *fakeRepoParam) GetParamWritePending(ctx context.Context, deviceID int64
 	return []byte{0x01, 0x02}, 123, nil
 }
 
+// P0修复: 新增参数确认和失败方法（测试mock）
+func (f *fakeRepoParam) ConfirmParamWrite(ctx context.Context, deviceID int64, paramID int, msgID int) error {
+	f.logs++
+	return nil
+}
+
+func (f *fakeRepoParam) FailParamWrite(ctx context.Context, deviceID int64, paramID int, msgID int, errMsg string) error {
+	f.logs++
+	return nil
+}
+
 func TestHandleParam_ReadbackSuccess(t *testing.T) {
 	fr := &fakeRepoParam{}
 	h := &Handlers{Repo: fr}
@@ -82,36 +93,36 @@ func TestHandleParam_ReadbackFailure(t *testing.T) {
 func TestHandleParam_WriteAndReadback(t *testing.T) {
 	fr := &fakeRepoParam{}
 	h := &Handlers{Repo: fr}
-	
+
 	// 测试参数写入（下行）
 	writeFrame := &Frame{
 		Cmd:       0x83,
 		MsgID:     456,
-		Direction: 0x00, // 下行
+		Direction: 0x00,                           // 下行
 		Data:      []byte{0x01, 0x02, 0x01, 0x02}, // paramID=1, len=2, value=[0x01,0x02]
 	}
-	
+
 	if err := h.HandleParam(context.Background(), writeFrame); err != nil {
 		t.Fatalf("write err: %v", err)
 	}
-	
+
 	// 测试参数回读（上行）匹配的情况
 	readbackFrame := &Frame{
 		Cmd:       0x85,
 		MsgID:     789,
-		Direction: 0x01, // 上行
+		Direction: 0x01,                           // 上行
 		Data:      []byte{0x01, 0x02, 0x01, 0x02}, // paramID=1, len=2, value=[0x01,0x02] (匹配)
 	}
-	
+
 	if err := h.HandleParam(context.Background(), readbackFrame); err != nil {
 		t.Fatalf("readback err: %v", err)
 	}
-	
+
 	// 应该有写入和回读的日志
 	if fr.logs < 2 {
 		t.Fatalf("expected at least 2 logs, got %d", fr.logs)
 	}
-	
+
 	// 最后一次应该是成功的回读
 	if fr.lastCmd != 0x85 || fr.lastSuccess != true {
 		t.Fatalf("expected successful readback, got cmd=%d success=%v", fr.lastCmd, fr.lastSuccess)
@@ -121,19 +132,19 @@ func TestHandleParam_WriteAndReadback(t *testing.T) {
 func TestHandleParam_ReadbackMismatch(t *testing.T) {
 	fr := &fakeRepoParam{}
 	h := &Handlers{Repo: fr}
-	
+
 	// 测试参数回读（上行）不匹配的情况
 	readbackFrame := &Frame{
 		Cmd:       0x85,
 		MsgID:     789,
-		Direction: 0x01, // 上行
+		Direction: 0x01,                           // 上行
 		Data:      []byte{0x01, 0x02, 0x03, 0x04}, // paramID=1, len=2, value=[0x03,0x04] (不匹配)
 	}
-	
+
 	if err := h.HandleParam(context.Background(), readbackFrame); err != nil {
 		t.Fatalf("readback err: %v", err)
 	}
-	
+
 	// 应该是失败的回读
 	if fr.lastCmd != 0x85 || fr.lastSuccess != false {
 		t.Fatalf("expected failed readback, got cmd=%d success=%v", fr.lastCmd, fr.lastSuccess)

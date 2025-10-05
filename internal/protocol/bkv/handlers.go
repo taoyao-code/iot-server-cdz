@@ -6,6 +6,7 @@ import (
 )
 
 // repoAPI 抽象（与 ap3000 对齐一部分能力）
+// P0修复: 扩展接口支持参数持久化
 type repoAPI interface {
 	EnsureDevice(ctx context.Context, phyID string) (int64, error)
 	InsertCmdLog(ctx context.Context, deviceID int64, msgID int, cmd int, direction int16, payload []byte, success bool) error
@@ -13,10 +14,12 @@ type repoAPI interface {
 	UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, status int, powerW01 *int) error
 	SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, reason int) error
 	AckOutboundByMsgID(ctx context.Context, deviceID int64, msgID int, ok bool, errCode *int) error
-	
-	// 参数相关方法
+
+	// P0修复: 参数持久化方法（数据库存储）
 	StoreParamWrite(ctx context.Context, deviceID int64, paramID int, value []byte, msgID int) error
 	GetParamWritePending(ctx context.Context, deviceID int64, paramID int) ([]byte, int, error) // value, msgID, error
+	ConfirmParamWrite(ctx context.Context, deviceID int64, paramID int, msgID int) error
+	FailParamWrite(ctx context.Context, deviceID int64, paramID int, msgID int, errMsg string) error
 }
 
 // Handlers BKV 协议处理器集合
@@ -124,7 +127,7 @@ func (h *Handlers) handleSocketStatusUpdate(ctx context.Context, deviceID int64,
 			power := int(portA.Power) / 10 // 从0.1W转换为W
 			powerW = &power
 		}
-		
+
 		if err := h.Repo.UpsertPortState(ctx, deviceID, int(portA.PortNo), status, powerW); err != nil {
 			return fmt.Errorf("failed to update port A state: %w", err)
 		}
@@ -139,7 +142,7 @@ func (h *Handlers) handleSocketStatusUpdate(ctx context.Context, deviceID int64,
 			power := int(portB.Power) / 10 // 从0.1W转换为W
 			powerW = &power
 		}
-		
+
 		if err := h.Repo.UpsertPortState(ctx, deviceID, int(portB.PortNo), status, powerW); err != nil {
 			return fmt.Errorf("failed to update port B state: %w", err)
 		}
@@ -187,7 +190,7 @@ func (h *Handlers) handleBKVChargingEnd(ctx context.Context, deviceID int64, pay
 	var kwh01 int = 0
 	var durationSec int = 0
 	var reason int = 0
-	
+
 	// 解析BKV字段
 	for _, field := range payload.Fields {
 		switch field.Tag {
@@ -199,7 +202,7 @@ func (h *Handlers) handleBKVChargingEnd(ctx context.Context, deviceID int64, pay
 			if len(field.Value) >= 2 {
 				orderID = int(field.Value[0])<<8 | int(field.Value[1])
 			}
-		case 0x0D: // 已用电量 
+		case 0x0D: // 已用电量
 			if len(field.Value) >= 2 {
 				kwh01 = int(field.Value[0])<<8 | int(field.Value[1])
 			}
@@ -214,22 +217,22 @@ func (h *Handlers) handleBKVChargingEnd(ctx context.Context, deviceID int64, pay
 			}
 		}
 	}
-	
+
 	// 如果有结束原因映射，进行转换
 	if h.Reason != nil {
 		if mappedReason, ok := h.Reason.Translate(reason); ok {
 			reason = mappedReason
 		}
 	}
-	
+
 	// 生成订单号
 	orderHex := fmt.Sprintf("%04X", orderID)
-	
+
 	// 结算订单
 	if err := h.Repo.SettleOrder(ctx, deviceID, portNo, orderHex, durationSec, kwh01, reason); err != nil {
 		return err
 	}
-	
+
 	// 更新端口状态为空闲
 	idleStatus := 0 // 0=空闲
 	return h.Repo.UpsertPortState(ctx, deviceID, portNo, idleStatus, nil)
@@ -265,11 +268,11 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 		if cmd.Switch == SwitchOn {
 			// 开始充电：创建订单并更新端口状态
 			orderHex := fmt.Sprintf("%04X%02X%02X", f.MsgID, cmd.SocketNo, cmd.Port)
-			
+
 			// 根据充电模式确定充电参数
 			var durationSec int
 			var kwhTarget int
-			
+
 			switch cmd.Mode {
 			case ChargingModeByTime:
 				durationSec = int(cmd.Duration) * 60 // 分钟转秒
@@ -279,7 +282,7 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 				// 按功率充电使用总支付金额作为目标
 				durationSec = int(cmd.Duration) * 60
 			}
-			
+
 			// 创建充电订单（状态1=进行中）
 			if err := h.Repo.UpsertOrderProgress(ctx, devID, int(cmd.Port), orderHex, durationSec, kwhTarget, 1, nil); err != nil {
 				success = false
@@ -304,11 +307,11 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 			if err == nil {
 				// 处理充电结束
 				orderHex := fmt.Sprintf("%04X", endReport.BusinessNo)
-				
+
 				// 计算实际充电时长和用电量
 				durationSec := int(endReport.ChargingTime) * 60 // 分钟转秒
 				kwhUsed := int(endReport.EnergyUsed)            // 已经是0.01kWh单位
-				
+
 				// 映射结束原因到平台统一原因码
 				var platformReason int = 0 // 默认正常结束
 				if h.Reason != nil {
@@ -316,12 +319,12 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 						platformReason = reason
 					}
 				}
-				
+
 				// 结算订单
 				if err := h.Repo.SettleOrder(ctx, devID, int(endReport.Port), orderHex, durationSec, kwhUsed, platformReason); err != nil {
 					success = false
 				}
-				
+
 				// 更新端口状态为空闲
 				idleStatus := 0
 				powerW := int(endReport.InstantPower) / 10 // 转换为实际瓦数
@@ -367,35 +370,35 @@ func (h *Handlers) HandleChargingEnd(ctx context.Context, f *Frame) error {
 		// data[9]: 插座状态
 		// data[10-11]: 业务号
 		// data[12-13]: 瞬时功率
-		// data[14-15]: 瞬时电流  
+		// data[14-15]: 瞬时电流
 		// data[16-17]: 用电量
 		// data[18-19]: 充电时间
 
 		if f.Data[2] == 0x02 && len(f.Data) >= 20 { // 确认是充电结束命令
-			portNo := int(f.Data[8])  // 插孔号
-			
+			portNo := int(f.Data[8]) // 插孔号
+
 			// 解析业务号（16位）
 			orderID := int(f.Data[10])<<8 | int(f.Data[11])
 			orderHex := fmt.Sprintf("%04X", orderID)
-			
+
 			// 解析用电量（16位，单位：0.01kWh）
 			kwh01 := int(f.Data[16])<<8 | int(f.Data[17])
-			
+
 			// 解析充电时间（16位，单位：分钟）
 			durationMin := int(f.Data[18])<<8 | int(f.Data[19])
 			durationSec := durationMin * 60
-			
+
 			// 从插座状态中提取结束原因（简化版本）
 			status := f.Data[9]
 			reason := extractEndReason(status)
-			
+
 			// 如果有结束原因映射，进行转换
 			if h.Reason != nil {
 				if mappedReason, ok := h.Reason.Translate(reason); ok {
 					reason = mappedReason
 				}
 			}
-			
+
 			// 结算订单
 			if err := h.Repo.SettleOrder(ctx, devID, portNo, orderHex, durationSec, kwh01, reason); err != nil {
 				success = false
@@ -472,7 +475,7 @@ func (h *Handlers) HandleParam(ctx context.Context, f *Frame) error {
 	}
 
 	success := true
-	
+
 	switch f.Cmd {
 	case 0x83, 0x84: // 参数写入
 		if !f.IsUplink() {
@@ -491,13 +494,13 @@ func (h *Handlers) HandleParam(ctx context.Context, f *Frame) error {
 				success = false
 			}
 		}
-		
+
 	case 0x85: // 参数回读
 		if f.IsUplink() {
 			// 上行参数回读：验证值是否与写入一致
 			if len(f.Data) > 0 {
 				readback := DecodeParamReadback(f.Data)
-				
+
 				// 获取之前写入的参数值进行比较
 				expectedValue, msgID, err := h.Repo.GetParamWritePending(ctx, devID, readback.ParamID)
 				if err == nil && expectedValue != nil {
@@ -510,7 +513,7 @@ func (h *Handlers) HandleParam(ctx context.Context, f *Frame) error {
 								break
 							}
 						}
-						
+
 						if match {
 							// 校验成功：确认参数写入完成
 							if err := h.Repo.AckOutboundByMsgID(ctx, devID, msgID, true, nil); err != nil {
@@ -537,7 +540,7 @@ func (h *Handlers) HandleParam(ctx context.Context, f *Frame) error {
 				success = false
 			}
 		}
-		
+
 	default:
 		// 其他参数相关命令
 		success = len(f.Data) > 0
@@ -555,7 +558,7 @@ func (h *Handlers) handleExceptionEvent(ctx context.Context, deviceID int64, pay
 
 	// 这里可以根据异常类型进行不同的处理
 	// 例如：更新设备状态、发送告警、记录异常日志等
-	
+
 	// 记录异常事件到日志（可以扩展为专门的异常事件表）
 	success := true
 	return h.Repo.InsertCmdLog(ctx, deviceID, 0, int(payload.Cmd), 1, []byte(fmt.Sprintf("Exception: Socket=%d, Reason=%d", event.SocketNo, event.SocketEventReason)), success)
@@ -570,7 +573,7 @@ func (h *Handlers) handleParameterQuery(ctx context.Context, deviceID int64, pay
 
 	// 这里可以保存设备参数信息到数据库
 	// 或者与之前设置的参数进行比较验证
-	
+
 	// 记录参数查询结果
 	success := true
 	return h.Repo.InsertCmdLog(ctx, deviceID, 0, int(payload.Cmd), 1, []byte(fmt.Sprintf("Params: Socket=%d, Power=%d, Temp=%d", param.SocketNo, param.PowerLimit, param.HighTempThreshold)), success)
@@ -580,12 +583,12 @@ func (h *Handlers) handleParameterQuery(ctx context.Context, deviceID int64, pay
 func (h *Handlers) handleBKVControlCommand(ctx context.Context, deviceID int64, payload *BKVPayload) error {
 	// BKV控制命令可能包含刷卡充电、远程控制等
 	// 这里实现基础的控制逻辑
-	
+
 	// 检查是否为刷卡充电相关
 	if payload.IsCardCharging() {
 		return h.handleCardCharging(ctx, deviceID, payload)
 	}
-	
+
 	// 其他控制命令的通用处理
 	success := true
 	return h.Repo.InsertCmdLog(ctx, deviceID, 0, int(payload.Cmd), 1, []byte("BKV Control Command"), success)
@@ -599,7 +602,7 @@ func (h *Handlers) handleCardCharging(ctx context.Context, deviceID int64, paylo
 	// 2. 检查余额
 	// 3. 创建充电订单
 	// 4. 更新端口状态
-	
+
 	success := true
 	return h.Repo.InsertCmdLog(ctx, deviceID, 0, int(payload.Cmd), 1, []byte("Card Charging"), success)
 }

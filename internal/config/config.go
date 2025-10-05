@@ -137,6 +137,12 @@ type SessionConfig struct {
 	Threshold           float64 `mapstructure:"weighted.threshold"`
 }
 
+// APIAuthConfig API认证配置 (P0修复)
+type APIAuthConfig struct {
+	Enabled bool     `mapstructure:"enabled"`
+	APIKeys []string `mapstructure:"api_keys"`
+}
+
 // Config 顶层配置结构
 type Config struct {
 	App        AppConfig        `mapstructure:"app"`
@@ -149,6 +155,9 @@ type Config struct {
 	Database   DatabaseConfig   `mapstructure:"database"`
 	Thirdparty ThirdpartyConfig `mapstructure:"thirdparty"`
 	Session    SessionConfig    `mapstructure:"session"`
+	API        struct {
+		Auth APIAuthConfig `mapstructure:"auth"`
+	} `mapstructure:"api"`
 }
 
 // Load 从 YAML/TOML/JSON 文件与环境变量加载配置。
@@ -263,4 +272,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("session.weighted.tcp_down_penalty", 0.5)
 	v.SetDefault("session.weighted.ack_timeout_penalty", 0.5)
 	v.SetDefault("session.weighted.threshold", 0.5)
+
+	// api auth defaults (P0修复)
+	v.SetDefault("api.auth.enabled", false) // 默认关闭（向后兼容）
+	v.SetDefault("api.auth.api_keys", []string{})
 }
