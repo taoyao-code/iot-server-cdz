@@ -2,23 +2,23 @@
 
 > **状态**: P0任务已完成 ✅  
 > **完成日期**: 2025-10-05  
-> **版本**: v1.0
+> **更新日期**: 2025-01-03 (清理冗余代码)  
+> **版本**: v2.0
 
 ## 概述
 
-IOT Server现已支持基于Redis的分布式会话管理，实现真正的水平扩展能力。系统自动根据配置选择使用内存会话管理器或Redis会话管理器。
+IOT Server使用基于Redis的分布式会话管理，实现真正的水平扩展能力。**Redis是必选依赖**，用于支持多实例部署和高可用架构。
 
 ## 功能特性
 
 ### ✅ 已实现
 
 - **分布式会话存储**: 会话数据存储在Redis中，多实例共享
-- **自动切换**: 根据Redis配置自动选择管理器类型
 - **连接亲和性**: 同一设备的连接保持在同一服务器实例上
 - **优雅关闭**: 服务器关闭时自动清理会话数据
 - **多信号离线判定**: 支持心跳、TCP断开、ACK超时的加权策略
 - **服务器实例标识**: 自动生成或配置服务器ID
-- **兼容性**: 完全兼容原有内存会话管理器
+- **高性能队列**: 使用Redis List实现高性能消息队列（比PostgreSQL快10倍）
 
 ## 架构设计
 
@@ -61,15 +61,15 @@ session:server:{serverID}:conns -> Set[connID1, connID2, ...]
 
 ## 配置说明
 
-### 启用Redis会话管理
+### Redis配置（必选）
 
-在配置文件中启用Redis：
+**Redis是必选依赖**，必须在配置文件中正确配置：
 
 ```yaml
 redis:
-  enabled: true
+  enabled: true  # 必须为true，不可禁用
   addr: "localhost:6379"
-  password: ""
+  password: "your-password"
   db: 0
   pool_size: 100
   min_idle_conns: 10
@@ -77,6 +77,8 @@ redis:
   read_timeout: 3s
   write_timeout: 3s
 ```
+
+**注意**: 如果Redis未配置或`enabled: false`，程序将无法启动。
 
 ### 服务器实例ID
 

@@ -1,5 +1,23 @@
 version: "3.8"
 services:
+  # Redis服务（必选依赖）
+  # 用于分布式会话管理和高性能消息队列
+  redis:
+    image: redis:7-alpine
+    container_name: iot-redis
+    restart: unless-stopped
+    command: redis-server --requirepass 123456
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # PostgreSQL数据库
   postgres:
     image: postgres:15-alpine
     container_name: iot-postgres
@@ -19,4 +37,5 @@ services:
       retries: 10
 
 volumes:
+  redisdata:
   pgdata:

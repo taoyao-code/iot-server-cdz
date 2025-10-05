@@ -2,7 +2,18 @@ package session
 
 import "time"
 
-// SessionManager 会话管理器接口，支持内存和Redis两种实现
+// WeightedPolicy 多信号在线判定策略（权重/时间窗/阈值）
+type WeightedPolicy struct {
+	Enabled           bool
+	HeartbeatTimeout  time.Duration
+	TCPDownWindow     time.Duration
+	AckWindow         time.Duration
+	TCPDownPenalty    float64
+	AckTimeoutPenalty float64
+	Threshold         float64
+}
+
+// SessionManager 会话管理器接口
 type SessionManager interface {
 	// OnHeartbeat 更新设备最近心跳时间
 	OnHeartbeat(phyID string, t time.Time)

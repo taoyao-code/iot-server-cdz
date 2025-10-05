@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"time"
 
 	cfgpkg "github.com/taoyao-code/iot-server/internal/config"
@@ -10,7 +11,7 @@ import (
 )
 
 // NewSessionAndPolicy 构造会话管理器与加权策略
-// 如果Redis客户端可用，则使用Redis会话管理器，否则使用内存会话管理器
+// Redis是必选依赖，用于支持分布式会话管理和水平扩展
 func NewSessionAndPolicy(
 	cfg cfgpkg.SessionConfig,
 	redisClient *redisstorage.Client,
@@ -19,20 +20,16 @@ func NewSessionAndPolicy(
 ) (session.SessionManager, session.WeightedPolicy) {
 	timeout := time.Duration(cfg.HeartbeatTimeoutSec) * time.Second
 
-	var mgr session.SessionManager
-
-	// 如果Redis可用，使用Redis会话管理器
-	if redisClient != nil {
-		mgr = session.NewRedisManager(redisClient.Client, serverID, timeout)
-		logger.Info("using redis session manager",
-			zap.String("server_id", serverID),
-			zap.Duration("timeout", timeout))
-	} else {
-		// 否则使用内存会话管理器
-		mgr = session.New(timeout)
-		logger.Info("using memory session manager",
-			zap.Duration("timeout", timeout))
+	// Redis是生产环境必选依赖
+	if redisClient == nil {
+		panic(fmt.Errorf("redis is required for session management (enable redis in config)"))
 	}
+
+	// 使用Redis会话管理器（支持分布式部署）
+	mgr := session.NewRedisManager(redisClient.Client, serverID, timeout)
+	logger.Info("redis session manager initialized",
+		zap.String("server_id", serverID),
+		zap.Duration("timeout", timeout))
 
 	policy := session.WeightedPolicy{
 		Enabled:           cfg.WeightedEnabled,

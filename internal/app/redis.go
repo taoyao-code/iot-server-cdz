@@ -1,6 +1,8 @@
 package app
 
 import (
+	"fmt"
+
 	cfgpkg "github.com/taoyao-code/iot-server/internal/config"
 	"github.com/taoyao-code/iot-server/internal/health"
 	"github.com/taoyao-code/iot-server/internal/outbound"
@@ -8,16 +10,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// NewRedisClient 创建Redis客户端 (Week2.2)
+// NewRedisClient 创建Redis客户端
+// Redis是必选依赖，用于分布式会话管理和消息队列
 func NewRedisClient(cfg cfgpkg.RedisConfig, logger *zap.Logger) (*redisstorage.Client, error) {
+	// Redis是生产环境必选依赖
 	if !cfg.Enabled {
-		logger.Info("redis is disabled, skipping initialization")
-		return nil, nil
+		return nil, fmt.Errorf("redis is required for production deployment (set redis.enabled=true in config)")
 	}
 
 	client, err := redisstorage.NewClient(cfg)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to connect to redis: %w", err)
 	}
 
 	logger.Info("redis client initialized",

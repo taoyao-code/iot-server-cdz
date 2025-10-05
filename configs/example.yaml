@@ -57,9 +57,10 @@ database:
   connMaxLifetime: 1h
   autoMigrate: true
 
-# Week2.2: Redis配置（用于Outbound队列、缓存等）
+# Redis配置（必选依赖）
+# Redis用于分布式会话管理和高性能消息队列
 redis:
-  enabled: false # 启用Redis（false=使用PostgreSQL队列）
+  enabled: true # 必须为true，否则程序无法启动
   addr: "localhost:6379" # Redis地址
   password: "123456" # 密码（无密码留空）
   db: 0 # 数据库编号

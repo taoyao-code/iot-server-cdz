@@ -50,36 +50,38 @@
 - **API认证**: API Key认证保护HTTP端点
 - **会话Redis化**: 支持分布式会话管理和水平扩展
 
-### 部署模式
+### 部署要求
 
-#### 单实例模式
+#### Redis是必选依赖
 
-适合开发/测试环境或小规模部署（<10K设备）
-
-```yaml
-# config.yaml
-redis:
-  enabled: false  # 使用内存会话管理
-```
-
-```bash
-./iot-server --config config.yaml
-```
-
-#### 多实例模式
-
-适合生产环境，支持水平扩展（10K+设备）
+本项目使用Redis进行分布式会话管理和消息队列，Redis是**必选依赖**，不可禁用。
 
 ```yaml
 # config.yaml
 redis:
-  enabled: true
+  enabled: true  # 必须为true
   addr: "redis:6379"
+  password: "your-password"
+  db: 0
   pool_size: 100
 ```
 
+#### 开发环境快速启动
+
 ```bash
-# 启动多个实例
+# 使用Docker Compose启动Redis
+docker-compose up -d redis
+
+# 启动服务
+./iot-server --config config.yaml
+```
+
+#### 生产环境多实例部署
+
+支持水平扩展，可部署多个实例实现高可用和负载均衡。
+
+```bash
+# 启动多个实例（建议3个以上）
 SERVER_ID=iot-server-1 ./iot-server --config config.yaml
 SERVER_ID=iot-server-2 ./iot-server --config config.yaml
 SERVER_ID=iot-server-3 ./iot-server --config config.yaml

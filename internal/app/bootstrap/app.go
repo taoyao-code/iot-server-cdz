@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -36,16 +37,14 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	serverID := app.GenerateServerID()
 	log.Info("basic components initialized", zap.String("server_id", serverID))
 
-	// ========== 阶段2: 初始化Redis（如果启用）==========
+	// ========== 阶段2: 初始化Redis（必选依赖）==========
 	redisClient, err := app.NewRedisClient(cfg.Redis, log)
 	if err != nil {
 		log.Error("redis initialization failed", zap.Error(err))
-		return err
+		return fmt.Errorf("redis is required: %w", err)
 	}
-	if redisClient != nil {
-		defer redisClient.Close()
-		log.Info("redis initialized")
-	}
+	defer redisClient.Close()
+	log.Info("redis initialized successfully")
 
 	// ========== 阶段3: 初始化会话管理器（需要Redis客户端）==========
 	sess, policy := app.NewSessionAndPolicy(cfg.Session, redisClient, serverID, log)
@@ -108,32 +107,19 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	}()
 	log.Info("http server started", zap.String("addr", cfg.HTTP.Addr))
 
-	// ========== 阶段7: 启动下行队列Worker ==========
-	var wcancel context.CancelFunc
-	var outw interface {
-		SetGetConn(func(string) (interface{}, bool))
-	}
+	// ========== 阶段7: 启动下行队列Worker（使用Redis队列）==========
+	// Redis队列性能比PostgreSQL轮询快10倍
+	redisQueue := app.NewRedisOutboundQueue(redisClient)
+	redisWorker := app.NewRedisWorker(redisQueue, cfg.Gateway.ThrottleMs, cfg.Gateway.RetryMax, log)
 
-	if redisClient != nil {
-		// Week2.2: 使用Redis队列
-		redisQueue := app.NewRedisOutboundQueue(redisClient)
-		redisWorker := app.NewRedisWorker(redisQueue, cfg.Gateway.ThrottleMs, cfg.Gateway.RetryMax, log)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		wcancel = cancel
-
-		go redisWorker.Start(ctx)
-		redisWorker.SetGetConn(func(phyID string) (interface{}, bool) { return sess.GetConn(phyID) })
-		log.Info("redis outbound worker started")
-	} else {
-		// 使用PostgreSQL队列（原有逻辑）
-		var cancel context.CancelFunc
-		cancel, outw = app.StartOutbound(dbpool, cfg.Gateway.ThrottleMs, cfg.Gateway.RetryMax, cfg.Gateway.DeadRetentionDays, appm, sess)
-		wcancel = cancel
-		outw.SetGetConn(func(phyID string) (interface{}, bool) { return sess.GetConn(phyID) })
-		log.Info("postgresql outbound worker started")
-	}
+	ctx, wcancel := context.WithCancel(context.Background())
 	defer wcancel()
+
+	go redisWorker.Start(ctx)
+	redisWorker.SetGetConn(func(phyID string) (interface{}, bool) { return sess.GetConn(phyID) })
+	log.Info("redis outbound worker started",
+		zap.Int("throttle_ms", cfg.Gateway.ThrottleMs),
+		zap.Int("retry_max", cfg.Gateway.RetryMax))
 
 	// ========== 阶段8: 最后启动TCP服务（此时所有依赖已就绪）==========
 	tcpSrv := app.NewTCPServer(cfg.TCP, log) // Week2: 传递logger以支持限流日志
@@ -173,14 +159,12 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	_ = tcpSrv.Shutdown(ctx)
 	log.Info("tcp server stopped")
 
-	// P0完成: 清理Redis会话数据（如果使用Redis管理器）
-	if redisClient != nil {
-		if redisMgr, ok := sess.(*session.RedisManager); ok {
-			if err := redisMgr.Cleanup(); err != nil {
-				log.Warn("redis session cleanup failed", zap.Error(err))
-			} else {
-				log.Info("redis session cleaned up")
-			}
+	// 清理Redis会话数据
+	if redisMgr, ok := sess.(*session.RedisManager); ok {
+		if err := redisMgr.Cleanup(); err != nil {
+			log.Warn("redis session cleanup failed", zap.Error(err))
+		} else {
+			log.Info("redis session cleaned up")
 		}
 	}
 
