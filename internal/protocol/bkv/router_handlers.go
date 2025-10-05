@@ -28,6 +28,27 @@ func RegisterHandlers(adapter *Adapter, handlers *Handlers) {
 	adapter.Register(0x0007, func(f *Frame) error {
 		return handlers.HandleGeneric(context.Background(), f)
 	})
+
+	// Week4: 刷卡充电相关
+	// 0x0B: 刷卡上报/下发充电指令
+	adapter.Register(0x000B, func(f *Frame) error {
+		return handlers.HandleCardSwipe(context.Background(), f)
+	})
+
+	// 0x0F: 订单确认
+	adapter.Register(0x000F, func(f *Frame) error {
+		return handlers.HandleOrderConfirm(context.Background(), f)
+	})
+
+	// 0x0C: 充电结束上报/确认
+	adapter.Register(0x000C, func(f *Frame) error {
+		return handlers.HandleChargeEnd(context.Background(), f)
+	})
+
+	// 0x1A: 余额查询
+	adapter.Register(0x001A, func(f *Frame) error {
+		return handlers.HandleBalanceQuery(context.Background(), f)
+	})
 }
 
 // NewBKVProtocol 创建完整的BKV协议实例
@@ -37,7 +58,7 @@ func NewBKVProtocol(repo repoAPI, reasonMap *ReasonMap) *Adapter {
 		Repo:   repo,
 		Reason: reasonMap,
 	}
-	
+
 	RegisterHandlers(adapter, handlers)
 	return adapter
 }
@@ -49,6 +70,10 @@ var BKVCommands = map[uint16]string{
 	0x0015: "控制设备 (按时/按量/按功率)",
 	0x0005: "网络节点列表相关",
 	0x0007: "OTA升级",
+	0x000B: "刷卡上报/下发充电指令",
+	0x000C: "充电结束上报/确认",
+	0x000F: "订单确认",
+	0x001A: "余额查询",
 }
 
 // IsBKVCommand 判断是否为BKV协议支持的命令

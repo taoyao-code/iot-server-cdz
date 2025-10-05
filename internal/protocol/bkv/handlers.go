@@ -22,10 +22,19 @@ type repoAPI interface {
 	FailParamWrite(ctx context.Context, deviceID int64, paramID int, msgID int, errMsg string) error
 }
 
+// CardServiceAPI 刷卡充电服务接口
+type CardServiceAPI interface {
+	HandleCardSwipe(ctx context.Context, req *CardSwipeRequest) (*ChargeCommand, error)
+	HandleOrderConfirmation(ctx context.Context, conf *OrderConfirmation) error
+	HandleChargeEnd(ctx context.Context, report *ChargeEndReport) error
+	HandleBalanceQuery(ctx context.Context, query *BalanceQuery) (*BalanceResponse, error)
+}
+
 // Handlers BKV 协议处理器集合
 type Handlers struct {
-	Repo   repoAPI
-	Reason *ReasonMap
+	Repo        repoAPI
+	Reason      *ReasonMap
+	CardService CardServiceAPI // Week4: 刷卡充电服务
 }
 
 // HandleHeartbeat 处理心跳帧 (cmd=0x0000 或 BKV cmd=0x1017)
@@ -605,4 +614,280 @@ func (h *Handlers) handleCardCharging(ctx context.Context, deviceID int64, paylo
 
 	success := true
 	return h.Repo.InsertCmdLog(ctx, deviceID, 0, int(payload.Cmd), 1, []byte("Card Charging"), success)
+}
+
+// ============ Week4: 刷卡充电处理函数 ============
+
+// HandleCardSwipe 处理刷卡上报 (0x0B)
+func (h *Handlers) HandleCardSwipe(ctx context.Context, f *Frame) error {
+	if h == nil || h.Repo == nil {
+		return nil
+	}
+
+	// 上行：设备刷卡上报
+	if f.IsUplink() {
+		return h.handleCardSwipeUplink(ctx, f)
+	}
+
+	// 下行：下发充电指令（通常由业务层触发，这里记录日志）
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		return fmt.Errorf("missing gateway ID")
+	}
+
+	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
+	if err != nil {
+		return err
+	}
+
+	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, true)
+}
+
+// handleCardSwipeUplink 处理刷卡上报上行
+func (h *Handlers) handleCardSwipeUplink(ctx context.Context, f *Frame) error {
+	// 解析刷卡数据
+	req, err := ParseCardSwipeRequest(f.Data)
+	if err != nil {
+		return fmt.Errorf("failed to parse card swipe: %w", err)
+	}
+
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = req.PhyID
+	}
+
+	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
+	if err != nil {
+		return err
+	}
+
+	// 记录刷卡日志
+	logData := []byte(fmt.Sprintf("CardNo=%s, PhyID=%s, Balance=%d", req.CardNo, req.PhyID, req.Balance))
+	err = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+	if err != nil {
+		return err
+	}
+
+	// Week4: 调用CardService处理刷卡业务
+	if h.CardService != nil {
+		cmd, err := h.CardService.HandleCardSwipe(ctx, req)
+		if err != nil {
+			// 业务处理失败，记录错误日志
+			errLog := []byte(fmt.Sprintf("CardSwipe failed: %v", err))
+			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, errLog, false)
+			return fmt.Errorf("card service error: %w", err)
+		}
+
+		// TODO: 下发充电指令到设备
+		// 这需要通过outbound队列发送下行消息
+		// SendChargeCommand(f.GatewayID, cmd)
+		_ = cmd // 暂时忽略，等待outbound集成
+	}
+
+	return nil
+}
+
+// HandleOrderConfirm 处理订单确认 (0x0F)
+func (h *Handlers) HandleOrderConfirm(ctx context.Context, f *Frame) error {
+	if h == nil || h.Repo == nil {
+		return nil
+	}
+
+	// 上行：设备确认订单
+	if f.IsUplink() {
+		return h.handleOrderConfirmUplink(ctx, f)
+	}
+
+	// 下行：平台回复确认（记录日志）
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		return fmt.Errorf("missing gateway ID")
+	}
+
+	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
+	if err != nil {
+		return err
+	}
+
+	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, true)
+}
+
+// handleOrderConfirmUplink 处理订单确认上行
+func (h *Handlers) handleOrderConfirmUplink(ctx context.Context, f *Frame) error {
+	// 解析订单确认
+	conf, err := ParseOrderConfirmation(f.Data)
+	if err != nil {
+		return fmt.Errorf("failed to parse order confirmation: %w", err)
+	}
+
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		return fmt.Errorf("missing gateway ID")
+	}
+
+	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
+	if err != nil {
+		return err
+	}
+
+	// 记录订单确认日志
+	logData := []byte(fmt.Sprintf("OrderNo=%s, Status=%d, Reason=%s", conf.OrderNo, conf.Status, conf.Reason))
+	err = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+	if err != nil {
+		return err
+	}
+
+	// Week4: 调用CardService更新订单状态
+	if h.CardService != nil {
+		err = h.CardService.HandleOrderConfirmation(ctx, conf)
+		if err != nil {
+			// 更新订单失败，记录错误
+			errLog := []byte(fmt.Sprintf("OrderConfirm failed: %v", err))
+			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, errLog, false)
+			return fmt.Errorf("order confirmation error: %w", err)
+		}
+
+		// TODO: 下发确认回复到设备
+		// reply := &OrderConfirmReply{OrderNo: conf.OrderNo, Result: 0}
+		// SendOrderConfirmReply(f.GatewayID, reply)
+	}
+
+	return nil
+}
+
+// HandleChargeEnd 处理充电结束 (0x0C)
+func (h *Handlers) HandleChargeEnd(ctx context.Context, f *Frame) error {
+	if h == nil || h.Repo == nil {
+		return nil
+	}
+
+	// 上行：设备上报充电结束
+	if f.IsUplink() {
+		return h.handleChargeEndUplink(ctx, f)
+	}
+
+	// 下行：平台确认（记录日志）
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		return fmt.Errorf("missing gateway ID")
+	}
+
+	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
+	if err != nil {
+		return err
+	}
+
+	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, true)
+}
+
+// handleChargeEndUplink 处理充电结束上行
+func (h *Handlers) handleChargeEndUplink(ctx context.Context, f *Frame) error {
+	// 解析充电结束数据
+	report, err := ParseChargeEndReport(f.Data)
+	if err != nil {
+		return fmt.Errorf("failed to parse charge end: %w", err)
+	}
+
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		return fmt.Errorf("missing gateway ID")
+	}
+
+	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
+	if err != nil {
+		return err
+	}
+
+	// 记录充电结束日志
+	logData := []byte(fmt.Sprintf("OrderNo=%s, CardNo=%s, Duration=%d, Energy=%d, Amount=%d",
+		report.OrderNo, report.CardNo, report.Duration, report.Energy, report.Amount))
+	err = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+	if err != nil {
+		return err
+	}
+
+	// Week4: 调用CardService完成订单和扣款
+	if h.CardService != nil {
+		err = h.CardService.HandleChargeEnd(ctx, report)
+		if err != nil {
+			// 扣款失败，记录错误
+			errLog := []byte(fmt.Sprintf("ChargeEnd failed: %v", err))
+			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, errLog, false)
+			return fmt.Errorf("charge end error: %w", err)
+		}
+
+		// TODO: 下发结束确认到设备
+		// reply := &ChargeEndReply{OrderNo: report.OrderNo, Result: 0}
+		// SendChargeEndReply(f.GatewayID, reply)
+	}
+
+	return nil
+}
+
+// HandleBalanceQuery 处理余额查询 (0x1A)
+func (h *Handlers) HandleBalanceQuery(ctx context.Context, f *Frame) error {
+	if h == nil || h.Repo == nil {
+		return nil
+	}
+
+	// 上行：设备查询余额
+	if f.IsUplink() {
+		return h.handleBalanceQueryUplink(ctx, f)
+	}
+
+	// 下行：平台响应余额（记录日志）
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		return fmt.Errorf("missing gateway ID")
+	}
+
+	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
+	if err != nil {
+		return err
+	}
+
+	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, true)
+}
+
+// handleBalanceQueryUplink 处理余额查询上行
+func (h *Handlers) handleBalanceQueryUplink(ctx context.Context, f *Frame) error {
+	// 解析余额查询
+	query, err := ParseBalanceQuery(f.Data)
+	if err != nil {
+		return fmt.Errorf("failed to parse balance query: %w", err)
+	}
+
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		return fmt.Errorf("missing gateway ID")
+	}
+
+	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
+	if err != nil {
+		return err
+	}
+
+	// 记录余额查询日志
+	logData := []byte(fmt.Sprintf("CardNo=%s", query.CardNo))
+	err = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+	if err != nil {
+		return err
+	}
+
+	// Week4: 调用CardService查询余额
+	if h.CardService != nil {
+		resp, err := h.CardService.HandleBalanceQuery(ctx, query)
+		if err != nil {
+			// 查询失败，记录错误
+			errLog := []byte(fmt.Sprintf("BalanceQuery failed: %v", err))
+			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, errLog, false)
+			return fmt.Errorf("balance query error: %w", err)
+		}
+
+		// TODO: 下发余额响应到设备
+		// SendBalanceResponse(f.GatewayID, resp)
+		_ = resp // 暂时忽略，等待outbound集成
+	}
+
+	return nil
 }

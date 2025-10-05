@@ -13,14 +13,15 @@ import (
 // 使用测试用Redis客户端（需要真实Redis实例或mock）
 func setupTestRedis(t *testing.T) *redis.Client {
 	client := redis.NewClient(&redis.Options{
-		Addr: "localhost:6379",
-		DB:   15, // 使用测试专用数据库
+		Addr:     "localhost:6379",
+		Password: "123456", // Docker Redis密码
+		DB:       15,       // 使用测试专用数据库
 	})
 
 	// 测试连接
 	ctx := context.Background()
 	if err := client.Ping(ctx).Err(); err != nil {
-		t.Skip("Redis not available, skipping test")
+		t.Skipf("Redis not available, skipping test: %v", err)
 		return nil
 	}
 

@@ -425,3 +425,239 @@ func (r *Repository) GetDeviceParam(ctx context.Context, deviceID int64, paramID
 	}
 	return &p, nil
 }
+
+// ============ Week4: 刷卡充电系统数据库操作 ============
+
+// Card 卡片信息
+type Card struct {
+	ID          int64     `json:"id"`
+	CardNo      string    `json:"card_no"`
+	Balance     float64   `json:"balance"`
+	Status      string    `json:"status"`
+	UserID      *int64    `json:"user_id,omitempty"`
+	Description string    `json:"description,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// CardTransaction 刷卡交易记录
+type CardTransaction struct {
+	ID              int64      `json:"id"`
+	CardNo          string     `json:"card_no"`
+	DeviceID        string     `json:"device_id"`
+	PhyID           string     `json:"phy_id"`
+	OrderNo         string     `json:"order_no"`
+	ChargeMode      int        `json:"charge_mode"`
+	Amount          *float64   `json:"amount,omitempty"`
+	DurationMinutes *int       `json:"duration_minutes,omitempty"`
+	PowerWatts      *int       `json:"power_watts,omitempty"`
+	EnergyKwh       *float64   `json:"energy_kwh,omitempty"`
+	Status          string     `json:"status"`
+	StartTime       *time.Time `json:"start_time,omitempty"`
+	EndTime         *time.Time `json:"end_time,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	FailureReason   *string    `json:"failure_reason,omitempty"`
+	PricePerKwh     *float64   `json:"price_per_kwh,omitempty"`
+	ServiceFeeRate  *float64   `json:"service_fee_rate,omitempty"`
+	TotalAmount     *float64   `json:"total_amount,omitempty"`
+}
+
+// CardBalanceLog 余额变更记录
+type CardBalanceLog struct {
+	ID            int64     `json:"id"`
+	CardNo        string    `json:"card_no"`
+	TransactionID *int64    `json:"transaction_id,omitempty"`
+	ChangeType    string    `json:"change_type"`
+	Amount        float64   `json:"amount"`
+	BalanceBefore float64   `json:"balance_before"`
+	BalanceAfter  float64   `json:"balance_after"`
+	Description   string    `json:"description,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// GetCard 根据卡号获取卡片信息
+func (r *Repository) GetCard(ctx context.Context, cardNo string) (*Card, error) {
+	const q = `SELECT id, card_no, balance, status, user_id, description, created_at, updated_at
+               FROM cards WHERE card_no = $1`
+
+	var card Card
+	err := r.Pool.QueryRow(ctx, q, cardNo).Scan(
+		&card.ID, &card.CardNo, &card.Balance, &card.Status,
+		&card.UserID, &card.Description, &card.CreatedAt, &card.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &card, nil
+}
+
+// CreateCard 创建新卡片
+func (r *Repository) CreateCard(ctx context.Context, cardNo string, balance float64, status string) (*Card, error) {
+	const q = `INSERT INTO cards (card_no, balance, status, created_at, updated_at)
+               VALUES ($1, $2, $3, NOW(), NOW())
+               RETURNING id, card_no, balance, status, user_id, description, created_at, updated_at`
+
+	var card Card
+	err := r.Pool.QueryRow(ctx, q, cardNo, balance, status).Scan(
+		&card.ID, &card.CardNo, &card.Balance, &card.Status,
+		&card.UserID, &card.Description, &card.CreatedAt, &card.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &card, nil
+}
+
+// UpdateCardBalance 更新卡片余额（原子操作）
+func (r *Repository) UpdateCardBalance(ctx context.Context, cardNo string, amount float64, changeType, description string) error {
+	// 开启事务
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// 1. 获取当前余额并加锁
+	var balanceBefore float64
+	err = tx.QueryRow(ctx, `SELECT balance FROM cards WHERE card_no = $1 FOR UPDATE`, cardNo).Scan(&balanceBefore)
+	if err != nil {
+		return fmt.Errorf("card not found or locked: %w", err)
+	}
+
+	// 2. 计算新余额
+	balanceAfter := balanceBefore + amount
+	if balanceAfter < 0 {
+		return fmt.Errorf("insufficient balance: current=%.2f, required=%.2f", balanceBefore, -amount)
+	}
+
+	// 3. 更新余额
+	_, err = tx.Exec(ctx, `UPDATE cards SET balance = $1, updated_at = NOW() WHERE card_no = $2`,
+		balanceAfter, cardNo)
+	if err != nil {
+		return err
+	}
+
+	// 4. 记录余额变更日志
+	_, err = tx.Exec(ctx, `INSERT INTO card_balance_logs 
+		(card_no, change_type, amount, balance_before, balance_after, description, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+		cardNo, changeType, amount, balanceBefore, balanceAfter, description)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+// CreateTransaction 创建交易记录
+func (r *Repository) CreateTransaction(ctx context.Context, tx *CardTransaction) (*CardTransaction, error) {
+	const q = `INSERT INTO card_transactions 
+		(card_no, device_id, phy_id, order_no, charge_mode, amount, duration_minutes, 
+		 power_watts, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+		RETURNING id, created_at, updated_at`
+
+	err := r.Pool.QueryRow(ctx, q,
+		tx.CardNo, tx.DeviceID, tx.PhyID, tx.OrderNo, tx.ChargeMode,
+		tx.Amount, tx.DurationMinutes, tx.PowerWatts, tx.Status,
+	).Scan(&tx.ID, &tx.CreatedAt, &tx.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return tx, nil
+}
+
+// GetTransaction 根据订单号获取交易
+func (r *Repository) GetTransaction(ctx context.Context, orderNo string) (*CardTransaction, error) {
+	const q = `SELECT id, card_no, device_id, phy_id, order_no, charge_mode, 
+		amount, duration_minutes, power_watts, energy_kwh, status,
+		start_time, end_time, created_at, updated_at, failure_reason,
+		price_per_kwh, service_fee_rate, total_amount
+		FROM card_transactions WHERE order_no = $1`
+
+	var tx CardTransaction
+	err := r.Pool.QueryRow(ctx, q, orderNo).Scan(
+		&tx.ID, &tx.CardNo, &tx.DeviceID, &tx.PhyID, &tx.OrderNo, &tx.ChargeMode,
+		&tx.Amount, &tx.DurationMinutes, &tx.PowerWatts, &tx.EnergyKwh, &tx.Status,
+		&tx.StartTime, &tx.EndTime, &tx.CreatedAt, &tx.UpdatedAt, &tx.FailureReason,
+		&tx.PricePerKwh, &tx.ServiceFeeRate, &tx.TotalAmount,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &tx, nil
+}
+
+// UpdateTransactionStatus 更新交易状态
+func (r *Repository) UpdateTransactionStatus(ctx context.Context, orderNo, status string) error {
+	const q = `UPDATE card_transactions 
+		SET status = $1, updated_at = NOW() 
+		WHERE order_no = $2`
+	_, err := r.Pool.Exec(ctx, q, status, orderNo)
+	return err
+}
+
+// UpdateTransactionCharging 更新为充电中状态（设置开始时间）
+func (r *Repository) UpdateTransactionCharging(ctx context.Context, orderNo string) error {
+	const q = `UPDATE card_transactions 
+		SET status = 'charging', start_time = NOW(), updated_at = NOW()
+		WHERE order_no = $1`
+	_, err := r.Pool.Exec(ctx, q, orderNo)
+	return err
+}
+
+// CompleteTransaction 完成交易（更新结束信息）
+func (r *Repository) CompleteTransaction(ctx context.Context, orderNo string, energyKwh, totalAmount float64) error {
+	const q = `UPDATE card_transactions 
+		SET status = 'completed', 
+		    end_time = NOW(),
+		    energy_kwh = $2,
+		    total_amount = $3,
+		    updated_at = NOW()
+		WHERE order_no = $1`
+	_, err := r.Pool.Exec(ctx, q, orderNo, energyKwh, totalAmount)
+	return err
+}
+
+// FailTransaction 标记交易失败
+func (r *Repository) FailTransaction(ctx context.Context, orderNo, reason string) error {
+	const q = `UPDATE card_transactions 
+		SET status = 'failed', failure_reason = $2, updated_at = NOW()
+		WHERE order_no = $1`
+	_, err := r.Pool.Exec(ctx, q, orderNo, reason)
+	return err
+}
+
+// GetCardTransactions 获取卡片的交易记录
+func (r *Repository) GetCardTransactions(ctx context.Context, cardNo string, limit int) ([]CardTransaction, error) {
+	const q = `SELECT id, card_no, device_id, phy_id, order_no, charge_mode,
+		amount, duration_minutes, power_watts, energy_kwh, status,
+		start_time, end_time, created_at, updated_at, failure_reason,
+		price_per_kwh, service_fee_rate, total_amount
+		FROM card_transactions 
+		WHERE card_no = $1
+		ORDER BY created_at DESC
+		LIMIT $2`
+
+	rows, err := r.Pool.Query(ctx, q, cardNo, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var transactions []CardTransaction
+	for rows.Next() {
+		var tx CardTransaction
+		if err := rows.Scan(
+			&tx.ID, &tx.CardNo, &tx.DeviceID, &tx.PhyID, &tx.OrderNo, &tx.ChargeMode,
+			&tx.Amount, &tx.DurationMinutes, &tx.PowerWatts, &tx.EnergyKwh, &tx.Status,
+			&tx.StartTime, &tx.EndTime, &tx.CreatedAt, &tx.UpdatedAt, &tx.FailureReason,
+			&tx.PricePerKwh, &tx.ServiceFeeRate, &tx.TotalAmount,
+		); err != nil {
+			return nil, err
+		}
+		transactions = append(transactions, tx)
+	}
+	return transactions, rows.Err()
+}
