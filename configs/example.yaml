@@ -72,9 +72,18 @@ redis:
 
 thirdparty:
   push:
-    webhook_url: ""
-    secret: ""
-    max_retries: 5
+    webhook_url: "" # 第三方Webhook地址（留空则禁用推送）
+    secret: "" # Webhook签名密钥
+    max_retries: 5 # 最大重试次数
+    worker_count: 3 # 事件队列Worker数量（建议2-5个）
+    dedup_ttl: 1h # 去重TTL（支持s/m/h单位）
+    enable_queue: true # 启用异步事件队列
+    enable_dedup: true # 启用事件去重
+  auth:
+    api_keys: # 第三方API Key列表
+      - "sk_test_1234567890" # 测试环境密钥
+    require_hmac: true # 是否要求HMAC签名
+  ip_whitelist: [] # IP白名单（留空则不限制）
 
 session:
   heartbeat_timeout_sec: 360

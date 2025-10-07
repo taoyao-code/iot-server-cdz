@@ -119,28 +119,32 @@ type DatabaseConfig struct {
 
 // RedisConfig Redis 连接配置 (Week2.2)
 type RedisConfig struct {
-	Enabled      bool          `mapstructure:"enabled"`       // 是否启用Redis
-	Addr         string        `mapstructure:"addr"`          // Redis地址
-	Password     string        `mapstructure:"password"`      // 密码
-	DB           int           `mapstructure:"db"`            // 数据库编号
-	PoolSize     int           `mapstructure:"pool_size"`     // 连接池大小
+	Enabled      bool          `mapstructure:"enabled"`        // 是否启用Redis
+	Addr         string        `mapstructure:"addr"`           // Redis地址
+	Password     string        `mapstructure:"password"`       // 密码
+	DB           int           `mapstructure:"db"`             // 数据库编号
+	PoolSize     int           `mapstructure:"pool_size"`      // 连接池大小
 	MinIdleConns int           `mapstructure:"min_idle_conns"` // 最小空闲连接
-	DialTimeout  time.Duration `mapstructure:"dial_timeout"`  // 连接超时
-	ReadTimeout  time.Duration `mapstructure:"read_timeout"`  // 读超时
-	WriteTimeout time.Duration `mapstructure:"write_timeout"` // 写超时
+	DialTimeout  time.Duration `mapstructure:"dial_timeout"`   // 连接超时
+	ReadTimeout  time.Duration `mapstructure:"read_timeout"`   // 读超时
+	WriteTimeout time.Duration `mapstructure:"write_timeout"`  // 写超时
 }
 
 // ThirdpartyPushConfig 第三方推送配置
 type ThirdpartyPushConfig struct {
-	WebhookURL string `mapstructure:"webhook_url"`
-	Secret     string `mapstructure:"secret"`
-	MaxRetries int    `mapstructure:"max_retries"`
-	Backoff    string `mapstructure:"backoff"`
+	WebhookURL  string        `mapstructure:"webhook_url"`
+	Secret      string        `mapstructure:"secret"`
+	MaxRetries  int           `mapstructure:"max_retries"`
+	WorkerCount int           `mapstructure:"worker_count"` // 事件队列Worker数量
+	DedupTTL    time.Duration `mapstructure:"dedup_ttl"`    // 去重TTL
+	EnableQueue bool          `mapstructure:"enable_queue"` // 是否启用异步队列
+	EnableDedup bool          `mapstructure:"enable_dedup"` // 是否启用去重
 }
 
 // ThirdpartyAuthConfig 第三方鉴权（入站）
 type ThirdpartyAuthConfig struct {
-	APIKeys []string `mapstructure:"api_keys"`
+	APIKeys     []string `mapstructure:"api_keys"`
+	RequireHMAC bool     `mapstructure:"require_hmac"` // 是否要求HMAC签名验证
 }
 
 // ThirdpartyConfig 第三方集成配置
@@ -178,7 +182,7 @@ type Config struct {
 	Logging    LoggingConfig    `mapstructure:"logging"`
 	Metrics    MetricsConfig    `mapstructure:"metrics"`
 	Database   DatabaseConfig   `mapstructure:"database"`
-	Redis      RedisConfig      `mapstructure:"redis"`      // Week2.2: Redis配置
+	Redis      RedisConfig      `mapstructure:"redis"` // Week2.2: Redis配置
 	Thirdparty ThirdpartyConfig `mapstructure:"thirdparty"`
 	Session    SessionConfig    `mapstructure:"session"`
 	API        struct {
@@ -312,13 +316,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tcp.limiting.breaker_timeout", "30s") // 熔断30秒后尝试恢复
 
 	// Week2.2: redis defaults
-	v.SetDefault("redis.enabled", false)             // 默认禁用（需手动启用）
-	v.SetDefault("redis.addr", "localhost:6379")     // 默认Redis地址
-	v.SetDefault("redis.password", "")               // 默认无密码
-	v.SetDefault("redis.db", 0)                      // 默认DB 0
-	v.SetDefault("redis.pool_size", 20)              // 连接池20个
-	v.SetDefault("redis.min_idle_conns", 5)          // 最小空闲5个
-	v.SetDefault("redis.dial_timeout", "5s")         // 连接超时5秒
-	v.SetDefault("redis.read_timeout", "3s")         // 读超时3秒
-	v.SetDefault("redis.write_timeout", "3s")        // 写超时3秒
+	v.SetDefault("redis.enabled", false)         // 默认禁用（需手动启用）
+	v.SetDefault("redis.addr", "localhost:6379") // 默认Redis地址
+	v.SetDefault("redis.password", "")           // 默认无密码
+	v.SetDefault("redis.db", 0)                  // 默认DB 0
+	v.SetDefault("redis.pool_size", 20)          // 连接池20个
+	v.SetDefault("redis.min_idle_conns", 5)      // 最小空闲5个
+	v.SetDefault("redis.dial_timeout", "5s")     // 连接超时5秒
+	v.SetDefault("redis.read_timeout", "3s")     // 读超时3秒
+	v.SetDefault("redis.write_timeout", "3s")    // 写超时3秒
 }

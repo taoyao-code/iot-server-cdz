@@ -20,6 +20,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 	"github.com/taoyao-code/iot-server/internal/session"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
+	"github.com/taoyao-code/iot-server/internal/thirdparty"
 	"go.uber.org/zap"
 )
 
@@ -73,11 +74,20 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	}
 
 	pusher, pushURL := app.NewPusherIfEnabled(cfg.Thirdparty.Push.WebhookURL, cfg.Thirdparty.Push.Secret)
+
+	// 初始化事件队列和去重器
+	var pusherTyped *thirdparty.Pusher
+	if pusher != nil {
+		pusherTyped, _ = pusher.(*thirdparty.Pusher)
+	}
+	eventQueue, _ := app.NewEventQueue(cfg.Thirdparty.Push, redisClient, pusherTyped, log)
+
 	handlerSet := &ap3000.Handlers{Repo: repo, Pusher: pusher, PushURL: pushURL, Metrics: appm}
 	bkvHandlers := bkv.NewHandlers(repo, bkvReason)
 	log.Info("protocol handlers initialized",
 		zap.Bool("ap3000", cfg.Protocols.EnableAP3000),
-		zap.Bool("bkv", cfg.Protocols.EnableBKV))
+		zap.Bool("bkv", cfg.Protocols.EnableBKV),
+		zap.Bool("event_queue", eventQueue != nil))
 
 	// ========== 阶段6: 启动HTTP服务（非阻塞）==========
 	readyFn := func() bool { return ready.Ready() }
@@ -120,6 +130,9 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	log.Info("redis outbound worker started",
 		zap.Int("throttle_ms", cfg.Gateway.ThrottleMs),
 		zap.Int("retry_max", cfg.Gateway.RetryMax))
+
+	// ========== 阶段7.5: 启动事件队列Workers（如果启用）==========
+	app.StartEventQueueWorkers(ctx, eventQueue, cfg.Thirdparty.Push.WorkerCount, log)
 
 	// ========== 阶段8: 最后启动TCP服务（此时所有依赖已就绪）==========
 	tcpSrv := app.NewTCPServer(cfg.TCP, log) // Week2: 传递logger以支持限流日志
