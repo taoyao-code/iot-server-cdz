@@ -68,8 +68,8 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "7054:8080" # HTTP API
-      - "7055:7000" # TCP协议端口
+      - "7055:8080" # HTTP API
+      - "7054:7000" # TCP协议端口
     environment:
       # 数据库配置 - 使用 IOT_ 前缀匹配 viper 环境变量
       - IOT_DATABASE_DSN=postgres://${POSTGRES_USER:-iot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-iot_server}?sslmode=disable
