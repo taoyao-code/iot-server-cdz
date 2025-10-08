@@ -27,14 +27,10 @@ func RegisterReadOnlyRoutes(
 		return
 	}
 
-	// 健康检查和指标端点无需认证（运维需要）
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status": "healthy",
-			"time":   time.Now().Format(time.RFC3339),
-		})
-	})
+	// 注意：健康检查路由(/health, /health/ready, /health/live)
+	// 已由 health.RegisterHTTPRoutes 统一注册，此处不再重复
 
+	// 保留简化版 /ready 路由用于快速检查
 	r.GET("/ready", func(c *gin.Context) {
 		// 检查数据库
 		ctx := c.Request.Context()

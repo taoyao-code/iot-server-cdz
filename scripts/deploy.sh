@@ -102,7 +102,7 @@ run_migration() {
     sleep 10
     
     # 这里应该运行数据库迁移脚本
-    # docker-compose -f docker-compose.prod.yml exec postgres psql -U iot -d iot_server -f /scripts/migrate.sql
+    # docker-compose exec postgres psql -U iot -d iot_server -f /scripts/migrate.sql
     
     log_info "数据库迁移完成 ✓"
 }
@@ -112,15 +112,15 @@ start_services() {
     log_info "启动服务..."
     
     # 使用生产环境配置
-    docker-compose -f docker-compose.prod.yml up -d
+    docker-compose up -d
     
     log_info "等待服务启动..."
     sleep 15
     
     # 检查服务健康状态
-    if docker-compose -f docker-compose.prod.yml ps | grep -q "unhealthy"; then
+    if docker-compose ps | grep -q "unhealthy"; then
         log_error "部分服务不健康，请检查日志"
-        docker-compose -f docker-compose.prod.yml ps
+        docker-compose ps
         exit 1
     fi
     
@@ -132,7 +132,7 @@ health_check() {
     log_info "执行健康检查..."
     
     # 检查HTTP服务
-    if curl -f http://localhost:8080/healthz &> /dev/null; then
+    if curl -f http://localhost:7054/healthz &> /dev/null; then
         log_info "HTTP服务健康 ✓"
     else
         log_error "HTTP服务健康检查失败"
@@ -140,7 +140,7 @@ health_check() {
     fi
     
     # 检查就绪状态
-    if curl -f http://localhost:8080/readyz &> /dev/null; then
+    if curl -f http://localhost:7054/readyz &> /dev/null; then
         log_info "服务就绪 ✓"
     else
         log_warn "服务尚未就绪，可能需要更多时间初始化"
@@ -152,16 +152,16 @@ health_check() {
 # 显示服务状态
 show_status() {
     log_info "服务状态："
-    docker-compose -f docker-compose.prod.yml ps
+    docker-compose ps
     
     echo ""
     log_info "服务访问地址："
-    echo "  - HTTP API: http://localhost:8080"
-    echo "  - TCP端口: localhost:7000"
-    echo "  - Metrics: http://localhost:8080/metrics"
-    echo "  - Health: http://localhost:8080/healthz"
+    echo "  - HTTP API: http://localhost:7054"
+    echo "  - TCP端口: localhost:7055"
+    echo "  - Metrics: http://localhost:7054/metrics"
+    echo "  - Health: http://localhost:7054/healthz"
     
-    if docker-compose -f docker-compose.prod.yml ps | grep -q prometheus; then
+    if docker-compose ps | grep -q prometheus; then
         echo "  - Prometheus: http://localhost:9090"
         echo "  - Grafana: http://localhost:3000"
     fi
@@ -169,13 +169,13 @@ show_status() {
 
 # 显示日志
 show_logs() {
-    docker-compose -f docker-compose.prod.yml logs -f --tail=100 iot-server
+    docker-compose logs -f --tail=100 iot-server
 }
 
 # 停止服务
 stop_services() {
     log_info "停止服务..."
-    docker-compose -f docker-compose.prod.yml down
+    docker-compose down
     log_info "服务已停止 ✓"
 }
 
@@ -185,7 +185,7 @@ cleanup() {
     read -p "确认删除所有数据？(yes/no): " confirm
     
     if [ "$confirm" = "yes" ]; then
-        docker-compose -f docker-compose.prod.yml down -v
+        docker-compose down -v
         log_info "清理完成 ✓"
     else
         log_info "取消清理"

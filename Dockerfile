@@ -1,14 +1,15 @@
-# 构建阶段 - 使用最新稳定版 Go
-FROM golang:alpine AS build
+# 构建阶段 - 使用 Go 1.24
+FROM golang:alpine3.22 AS build
 
-# 配置国内镜像源加速（阿里云）
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
+# 配置清华大学镜像源并安装必要的工具
+RUN echo "https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.22/main" > /etc/apk/repositories && \
+    echo "https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.22/community" >> /etc/apk/repositories && \
     apk add --no-cache git ca-certificates tzdata
 
-# 配置 Go 模块代理（使用 goproxy.cn 加速）
+# 配置 Go 模块代理（使用多个代理源提高稳定性）
 ENV GO111MODULE=on \
-    GOPROXY=https://goproxy.cn,direct \
-    GOSUMDB=sum.golang.org
+    GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,https://goproxy.io,direct \
+    GOSUMDB=off
 
 WORKDIR /src
 
@@ -24,14 +25,9 @@ COPY configs/ ./configs/
 # 更新依赖（确保 go.mod 与代码同步）
 RUN go mod tidy
 
-# 构建参数
-ARG BUILD_VERSION=dev
-ARG BUILD_TIME
-ARG GIT_COMMIT
-
-# 编译二进制文件（添加版本信息）
+# 编译二进制文件
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-w -s -X main.Version=${BUILD_VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
+    -ldflags="-w -s" \
     -o /out/iot-server ./cmd/server
 
 # 运行阶段 - 使用 Debian（国内访问稳定）

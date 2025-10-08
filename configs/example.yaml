@@ -6,12 +6,12 @@ app:
   env: dev
 
 http:
-  addr: ":7055"
+  addr: ":8080" # 容器内部HTTP端口（对外映射7054）
   readTimeout: 30s
   writeTimeout: 30s
 
 tcp:
-  addr: ":7054"
+  addr: ":7000" # 容器内部TCP端口（对外映射7055）
   readTimeout: 300s
   writeTimeout: 30s
   maxConnections: 5000
@@ -51,7 +51,10 @@ metrics:
   path: "/metrics"
 
 database:
-  dsn: "postgres://iot:iot123@localhost:5432/iot_server?sslmode=disable"
+  # 开发环境: localhost:5432 (本地直接运行)
+  # Docker环境: postgres:5432 (容器网络)
+  # 使用环境变量 DATABASE_URL 可以灵活切换
+  dsn: "postgres://iot:iot123@postgres:5432/iot_server?sslmode=disable"
   maxOpenConns: 20
   maxIdleConns: 10
   connMaxLifetime: 1h
@@ -61,7 +64,7 @@ database:
 # Redis用于分布式会话管理和高性能消息队列
 redis:
   enabled: true # 必须为true，否则程序无法启动
-  addr: "localhost:6379" # Redis地址
+  addr: "redis:6379" # Docker环境使用服务名，本地环境改为localhost:6379
   password: "123456" # 密码（无密码留空）
   db: 0 # 数据库编号
   pool_size: 20 # 连接池大小

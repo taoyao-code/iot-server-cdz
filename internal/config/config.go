@@ -251,7 +251,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("protocols.enable_ap3000", true)
 	v.SetDefault("protocols.enable_bkv", true)
 	v.SetDefault("protocols.enable_gn", false)
-	v.SetDefault("protocols.bkv.reason_map_path", "configs/bkv-reason-map.example.yaml")
+	v.SetDefault("protocols.bkv.reason_map_path", "configs/bkv_reason_map.yaml")
 	v.SetDefault("protocols.gn.listen", ":9000")
 	v.SetDefault("protocols.gn.checksum", "sum_mod_256")
 	v.SetDefault("protocols.gn.read_buffer", 4096)
