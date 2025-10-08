@@ -24,13 +24,42 @@ log_error() {
 check_requirements() {
     log_info "检查部署环境..."
     
+    # 检查Docker
     if ! command -v docker &> /dev/null; then
         log_error "Docker未安装，请先安装Docker"
+        log_error "安装指引: https://docs.docker.com/get-docker/"
         exit 1
     fi
     
+    # 检查Docker服务状态
+    if ! docker info &> /dev/null; then
+        log_error "Docker服务未运行，请先启动Docker"
+        exit 1
+    fi
+    
+    # 检查Docker版本（建议20.10+）
+    DOCKER_VERSION=$(docker version --format '{{.Server.Version}}' 2>/dev/null | cut -d. -f1)
+    if [ "$DOCKER_VERSION" -lt 20 ]; then
+        log_warn "Docker版本较低 ($DOCKER_VERSION)，建议升级到20.10或更高版本"
+    fi
+    
+    # 检查Docker Compose
     if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
         log_error "Docker Compose未安装，请先安装Docker Compose"
+        log_error "安装指引: https://docs.docker.com/compose/install/"
+        exit 1
+    fi
+    
+    # 检查必要的命令行工具
+    local missing_tools=()
+    for tool in curl git; do
+        if ! command -v "$tool" &> /dev/null; then
+            missing_tools+=("$tool")
+        fi
+    done
+    
+    if [ ${#missing_tools[@]} -ne 0 ]; then
+        log_error "缺少必要工具: ${missing_tools[*]}"
         exit 1
     fi
     
@@ -41,27 +70,46 @@ check_requirements() {
 check_env() {
     log_info "检查环境变量配置..."
     
+    # 检查.env.example是否存在
+    if [ ! -f .env.example ]; then
+        log_error ".env.example 文件不存在"
+        exit 1
+    fi
+    
+    # 检查.env文件
     if [ ! -f .env ]; then
         log_warn ".env 文件不存在，从示例文件创建..."
         cp .env.example .env
         log_error "请编辑 .env 文件并填写正确的配置值"
+        log_error "必须配置的变量: POSTGRES_PASSWORD, REDIS_PASSWORD, API_KEY, THIRDPARTY_API_KEY"
         exit 1
     fi
     
     # 加载环境变量
+    set -a
     source .env
+    set +a
     
     # 检查必要的环境变量
     required_vars=(
-        "REDIS_PASSWORD"
         "POSTGRES_PASSWORD"
+        "REDIS_PASSWORD"
         "API_KEY"
+        "THIRDPARTY_API_KEY"
     )
     
-    missing_vars=()
+    local missing_vars=()
+    local weak_vars=()
+    
     for var in "${required_vars[@]}"; do
-        if [ -z "${!var}" ]; then
+        local val="${!var}"
+        if [ -z "$val" ]; then
             missing_vars+=("$var")
+        elif [ "$val" = "CHANGE_ME_STRONG_PASSWORD_HERE" ] || \
+             [ "$val" = "CHANGE_ME_REDIS_PASSWORD" ] || \
+             [ "$val" = "CHANGE_ME_32_CHARS_OR_MORE" ] || \
+             [ "${#val}" -lt 16 ]; then
+            weak_vars+=("$var")
         fi
     done
     
@@ -71,7 +119,69 @@ check_env() {
         exit 1
     fi
     
-    log_info "环境变量配置正确 ✓"
+    if [ ${#weak_vars[@]} -ne 0 ]; then
+        log_warn "以下环境变量可能过于简单: ${weak_vars[*]}"
+        log_warn "生产环境建议使用强密钥（openssl rand -base64 32）"
+    fi
+    
+    log_info "环境变量配置检查完成 ✓"
+}
+
+# 网络连通性检查
+check_network() {
+    log_info "检查网络连通性..."
+    
+    local test_urls=(
+        "mirrors.aliyun.com"
+        "goproxy.cn"
+        "registry.hub.docker.com"
+    )
+    
+    local failed_urls=()
+    
+    for url in "${test_urls[@]}"; do
+        if ! curl -s --connect-timeout 5 --max-time 10 "http://$url" > /dev/null 2>&1 && \
+           ! ping -c 2 -W 3 "$url" > /dev/null 2>&1; then
+            failed_urls+=("$url")
+        fi
+    done
+    
+    if [ ${#failed_urls[@]} -ne 0 ]; then
+        log_warn "以下地址连接失败: ${failed_urls[*]}"
+        log_warn "网络可能不稳定，但继续尝试构建..."
+    else
+        log_info "网络连通性检查通过 ✓"
+    fi
+}
+
+# 检查磁盘空间
+check_disk_space() {
+    log_info "检查磁盘空间..."
+    
+    # macOS和Linux兼容的磁盘空间检查
+    local available
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        available=$(df -g . | tail -1 | awk '{print $4}')
+    else
+        # Linux
+        available=$(df -BG . | tail -1 | awk '{print $4}' | sed 's/G//')
+    fi
+    
+    local required=5
+    
+    if [ -z "$available" ]; then
+        log_warn "无法检测磁盘空间，跳过检查"
+        return 0
+    fi
+    
+    if [ "$available" -lt "$required" ]; then
+        log_error "磁盘空间不足（可用: ${available}G，需要: ${required}G）"
+        log_error "建议运行: docker system prune -a"
+        exit 1
+    fi
+    
+    log_info "磁盘空间充足 (${available}G 可用) ✓"
 }
 
 # 构建镜像
@@ -82,15 +192,27 @@ build_image() {
     BUILD_TIME=$(date -u '+%Y-%m-%d %H:%M:%S')
     GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     
-    docker build \
+    log_info "构建信息: version=$BUILD_VERSION, commit=$GIT_COMMIT"
+    
+    # 构建时启用BuildKit以提高性能
+    export DOCKER_BUILDKIT=1
+    
+    if docker build \
         --build-arg BUILD_VERSION="$BUILD_VERSION" \
         --build-arg BUILD_TIME="$BUILD_TIME" \
         --build-arg GIT_COMMIT="$GIT_COMMIT" \
         -t iot-server:"$BUILD_VERSION" \
         -t iot-server:latest \
-        .
-    
-    log_info "镜像构建完成 ✓ (version: $BUILD_VERSION)"
+        . ; then
+        log_info "镜像构建完成 ✓ (version: $BUILD_VERSION)"
+    else
+        log_error "镜像构建失败"
+        log_error "请检查错误信息，常见问题："
+        log_error "  1. 网络连接问题（Alpine源或Go代理）"
+        log_error "  2. 磁盘空间不足"
+        log_error "  3. Docker版本过低"
+        exit 1
+    fi
 }
 
 # 数据库迁移
@@ -198,6 +320,8 @@ main() {
         deploy)
             check_requirements
             check_env
+            check_network
+            check_disk_space
             build_image
             start_services
             run_migration
