@@ -1,13 +1,51 @@
+# Git 相关
 .git
+.github
 .gitignore
+.gitattributes
+
+# IDE 和编辑器
 .cursor
+.idea
+.vscode
 **/.DS_Store
-**/node_modules
-**/bin
-**/*.log
-**/*.tmp
-**/.idea
-**/.vscode
-**/.env*
 
+# 依赖和构建产物
+node_modules
+vendor
+bin
+dist
+build
 
+# 日志和临时文件
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+
+# 环境变量文件
+.env
+.env.*
+!.env.example
+
+# 文档和脚本（构建不需要）
+docs
+*.md
+LICENSE
+Makefile
+scripts/*.sh
+
+# Docker 相关
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# 测试文件
+*_test.go
+testdata
+
+# 其他
+examples
+下一步任务规划.md
+PRODUCTION_DEPLOYMENT_SUMMARY.md

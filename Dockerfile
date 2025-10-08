@@ -1,8 +1,14 @@
-# 构建阶段
-FROM golang:1.22-alpine AS build
+# 构建阶段 - 使用最新稳定版 Go
+FROM golang:alpine AS build
 
-# 安装构建依赖
-RUN apk add --no-cache git ca-certificates tzdata
+# 配置国内镜像源加速（阿里云）
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
+    apk add --no-cache git ca-certificates tzdata
+
+# 配置 Go 模块代理（使用 goproxy.cn 加速）
+ENV GO111MODULE=on \
+    GOPROXY=https://goproxy.cn,direct \
+    GOSUMDB=sum.golang.org
 
 WORKDIR /src
 
@@ -10,8 +16,13 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 
-# 复制源代码
-COPY . .
+# 只复制必要的源代码目录
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+COPY configs/ ./configs/
+
+# 更新依赖（确保 go.mod 与代码同步）
+RUN go mod tidy
 
 # 构建参数
 ARG BUILD_VERSION=dev
@@ -23,12 +34,15 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-w -s -X main.Version=${BUILD_VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
     -o /out/iot-server ./cmd/server
 
-# 运行阶段
-FROM gcr.io/distroless/base-debian12:nonroot
+# 运行阶段 - 使用 Debian（国内访问稳定）
+FROM debian:12-slim
 
-# 复制时区信息
-COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
-COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+# 配置国内镜像源（阿里云）
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates tzdata curl && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd -u 65532 -r -s /bin/false nonroot
 
 WORKDIR /app
 
@@ -36,20 +50,18 @@ WORKDIR /app
 COPY --from=build /out/iot-server /app/iot-server
 
 # 复制配置文件（生产环境会被volume覆盖）
-COPY configs/production.yaml /app/config.yaml
-COPY configs/bkv_reason_map.yaml /app/configs/bkv_reason_map.yaml
+COPY --from=build /src/configs/production.yaml /app/config.yaml
+COPY --from=build /src/configs/bkv_reason_map.yaml /app/configs/bkv_reason_map.yaml
 
 # 创建日志目录
-USER root
-RUN mkdir -p /var/log/iot-server && chown nonroot:nonroot /var/log/iot-server
-USER nonroot:nonroot
+RUN mkdir -p /var/log/iot-server && \
+    chown -R nonroot:nonroot /var/log/iot-server /app
+
+# 切换到非root用户
+USER nonroot
 
 # 暴露端口
 EXPOSE 8080 7000
-
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD ["/app/iot-server", "healthcheck"]
 
 # 环境变量
 ENV IOT_CONFIG=/app/config.yaml

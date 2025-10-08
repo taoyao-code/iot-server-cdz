@@ -11,7 +11,6 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-      - ./configs/redis.conf:/usr/local/etc/redis/redis.conf:ro
     networks:
       - iot-network
     healthcheck:
@@ -69,8 +68,8 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "8080:8080" # HTTP API
-      - "7000:7000" # TCP协议端口
+      - "7054:8080" # HTTP API
+      - "7055:7000" # TCP协议端口
     environment:
       - DATABASE_URL=postgres://${POSTGRES_USER:-iot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-iot_server}?sslmode=disable
       - REDIS_URL=redis:6379
@@ -88,15 +87,7 @@ services:
     networks:
       - iot-network
     healthcheck:
-      test:
-        [
-          "CMD",
-          "wget",
-          "--no-verbose",
-          "--tries=1",
-          "--spider",
-          "http://localhost:8080/healthz",
-        ]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
