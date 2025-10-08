@@ -6,6 +6,7 @@ import (
 	"time"
 
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
+	"github.com/taoyao-code/iot-server/internal/thirdparty"
 )
 
 // repoAPI 抽象（与 ap3000 对齐一部分能力）
@@ -59,8 +60,10 @@ type OutboundSender interface {
 type Handlers struct {
 	Repo        repoAPI
 	Reason      *ReasonMap
-	CardService CardServiceAPI // Week4: 刷卡充电服务
-	Outbound    OutboundSender // Week5: 下行消息发送器
+	CardService CardServiceAPI        // Week4: 刷卡充电服务
+	Outbound    OutboundSender        // Week5: 下行消息发送器
+	EventQueue  *thirdparty.EventQueue // v2.1: 事件队列（第三方推送）
+	Deduper     *thirdparty.Deduper    // v2.1: 去重器
 }
 
 // HandleHeartbeat 处理心跳帧 (cmd=0x0000 或 BKV cmd=0x1017)
