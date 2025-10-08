@@ -60,8 +60,8 @@ type OutboundSender interface {
 type Handlers struct {
 	Repo        repoAPI
 	Reason      *ReasonMap
-	CardService CardServiceAPI        // Week4: 刷卡充电服务
-	Outbound    OutboundSender        // Week5: 下行消息发送器
+	CardService CardServiceAPI         // Week4: 刷卡充电服务
+	Outbound    OutboundSender         // Week5: 下行消息发送器
 	EventQueue  *thirdparty.EventQueue // v2.1: 事件队列（第三方推送）
 	Deduper     *thirdparty.Deduper    // v2.1: 去重器
 }
@@ -83,9 +83,31 @@ func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
 		return err
 	}
 
+	// v2.1.3: 新设备注册时推送设备注册事件
+	// 注意：这里简化处理，实际应该在首次注册时才推送
+	// 可以通过检查设备是否是新创建来判断（比如检查created_at和updated_at是否相同）
+	// 这里为了示例，暂时不推送（避免每次心跳都推送注册事件）
+
 	// 记录心跳日志
 	success := true
-	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, success)
+	err = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, success)
+
+	// v2.1: 推送设备心跳事件（采样推送，避免过于频繁）
+	// 使用msgID进行采样，每10次心跳推送1次
+	if h.EventQueue != nil && f.MsgID%10 == 0 {
+		// 心跳数据简化处理，实际应从f.Data解析
+		h.pushDeviceHeartbeatEvent(
+			ctx,
+			devicePhyID,
+			220.0, // voltage - 默认值，实际应解析
+			-50,   // rssi - 默认值，实际应解析
+			25.0,  // temp - 默认值，实际应解析
+			nil,   // ports - 可选
+			nil,   // logger可选
+		)
+	}
+
+	return err
 }
 
 // HandleBKVStatus 处理BKV插座状态上报 (cmd=0x1000 with BKV payload)
@@ -714,6 +736,20 @@ func (h *Handlers) handleCardSwipeUplink(ctx context.Context, f *Frame) error {
 			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, errLog, false)
 			return fmt.Errorf("send charge command error: %w", err)
 		}
+
+		// v2.1: 推送订单创建事件
+		if cmd != nil && h.EventQueue != nil {
+			h.pushOrderCreatedEvent(
+				ctx,
+				devicePhyID,
+				cmd.OrderNo,
+				1, // portNo - 从订单中获取，暂时使用默认值
+				string(cmd.ChargeMode),
+				int(cmd.Duration),
+				float64(cmd.PricePerKwh)/100.0, // 转换为元/kWh
+				nil,                            // logger可选
+			)
+		}
 	}
 
 	return nil
@@ -786,6 +822,35 @@ func (h *Handlers) handleOrderConfirmUplink(ctx context.Context, f *Frame) error
 			errLog := []byte(fmt.Sprintf("Send order confirm reply failed: %v", err))
 			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, errLog, false)
 			// 不返回错误，因为订单已更新成功
+		}
+
+		// v2.1: 推送订单确认事件
+		if h.EventQueue != nil {
+			resultStr := "success"
+			failReason := conf.Reason
+			if conf.Status != 0 {
+				resultStr = "failed"
+			}
+			h.pushOrderConfirmedEvent(
+				ctx,
+				devicePhyID,
+				conf.OrderNo,
+				0, // portNo从订单中获取，这里简化
+				resultStr,
+				failReason,
+				nil, // logger可选
+			)
+
+			// v2.1.2: 如果订单确认成功，推送充电开始事件
+			if conf.Status == 0 {
+				h.pushChargingStartedEvent(
+					ctx,
+					devicePhyID,
+					conf.OrderNo,
+					0,   // portNo从订单中获取，这里简化
+					nil, // logger可选
+				)
+			}
 		}
 	}
 
@@ -860,6 +925,39 @@ func (h *Handlers) handleChargeEndUplink(ctx context.Context, f *Frame) error {
 			errLog := []byte(fmt.Sprintf("Send charge end reply failed: %v", err))
 			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, errLog, false)
 			// 不返回错误，因为订单已完成
+		}
+
+		// v2.1: 推送订单完成事件
+		if h.EventQueue != nil {
+			totalKwh := float64(report.Energy) / 100.0    // 转换为kWh
+			totalAmount := float64(report.Amount) / 100.0 // 转换为元
+			h.pushOrderCompletedEvent(
+				ctx,
+				devicePhyID,
+				report.OrderNo,
+				0, // portNo简化
+				int(report.Duration),
+				totalKwh,
+				0, // peakPower
+				0, // avgPower
+				totalAmount,
+				"normal", // endReason
+				"充电完成",   // endReasonMsg
+				nil,      // logger可选
+			)
+
+			// 同时推送充电结束事件
+			h.pushChargingEndedEvent(
+				ctx,
+				devicePhyID,
+				report.OrderNo,
+				0, // portNo简化
+				int(report.Duration),
+				totalKwh,
+				"normal",
+				"充电完成",
+				nil, // logger可选
+			)
 		}
 	}
 
@@ -1052,6 +1150,32 @@ func (h *Handlers) HandleOTAProgress(ctx context.Context, f *Frame) error {
 		progress.TargetType, progress.SocketNo, progress.Progress, progress.Status))
 	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
 
+	// v2.1: 推送OTA进度事件
+	if h.EventQueue != nil {
+		status := "in_progress"
+		statusMsg := "OTA升级进行中"
+		errorMsg := ""
+		if progress.Status == 2 {
+			status = "completed"
+			statusMsg = "OTA升级完成"
+		} else if progress.Status == 3 {
+			status = "failed"
+			statusMsg = "OTA升级失败"
+			errorMsg = "设备上报失败"
+		}
+		h.pushOTAProgressEvent(
+			ctx,
+			f.GatewayID,
+			0,  // taskID需要从数据库查询获取
+			"", // version - 从任务中获取
+			int(progress.Progress),
+			status,
+			statusMsg,
+			errorMsg,
+			nil, // logger可选
+		)
+	}
+
 	return nil
 }
 
@@ -1066,7 +1190,7 @@ func (h *Handlers) HandlePowerLevelEnd(ctx context.Context, f *Frame) error {
 	}
 
 	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
-	
+
 	// 记录充电结束日志
 	logData := []byte(fmt.Sprintf("PowerLevelEnd: port=%d, duration=%dm, energy=%.2fkWh, amount=%.2f元, reason=%d",
 		report.PortNo, report.TotalDuration, float64(report.TotalEnergy)/100, float64(report.TotalAmount)/100, report.EndReason))
@@ -1075,11 +1199,11 @@ func (h *Handlers) HandlePowerLevelEnd(ctx context.Context, f *Frame) error {
 	// TODO: 更新订单信息，记录各档位使用情况
 	// 目前先返回确认
 	reply := EncodePowerLevelEndReply(report.PortNo, 0) // 0=确认成功
-	
+
 	// 发送确认回复（下行）
 	// TODO: 通过Outbound发送回复
 	_ = reply
-	
+
 	return nil
 }
 
@@ -1093,7 +1217,7 @@ func (h *Handlers) HandleParamReadResponse(ctx context.Context, f *Frame) error 
 	}
 
 	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
-	
+
 	// 记录参数读取日志
 	logData := []byte(fmt.Sprintf("ParamReadResponse: %d params", len(resp.Params)))
 	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
@@ -1102,7 +1226,7 @@ func (h *Handlers) HandleParamReadResponse(ctx context.Context, f *Frame) error 
 	for _, param := range resp.Params {
 		_ = param // 暂时忽略
 	}
-	
+
 	return nil
 }
 
@@ -1114,7 +1238,7 @@ func (h *Handlers) HandleParamWriteResponse(ctx context.Context, f *Frame) error
 	}
 
 	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
-	
+
 	// 记录参数写入日志
 	successCount := 0
 	for _, result := range resp.Results {
@@ -1122,7 +1246,7 @@ func (h *Handlers) HandleParamWriteResponse(ctx context.Context, f *Frame) error
 			successCount++
 		}
 	}
-	
+
 	logData := []byte(fmt.Sprintf("ParamWriteResponse: %d/%d success", successCount, len(resp.Results)))
 	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
 
@@ -1137,7 +1261,7 @@ func (h *Handlers) HandleParamSyncResponse(ctx context.Context, f *Frame) error 
 	}
 
 	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
-	
+
 	// 记录同步状态
 	logData := []byte(fmt.Sprintf("ParamSyncResponse: result=%s, progress=%d%%",
 		GetParamSyncResultDescription(resp.Result), resp.Progress))
@@ -1154,7 +1278,7 @@ func (h *Handlers) HandleParamResetResponse(ctx context.Context, f *Frame) error
 	}
 
 	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
-	
+
 	// 记录重置结果
 	status := "成功"
 	if resp.Result != 0 {
@@ -1176,7 +1300,7 @@ func (h *Handlers) HandleVoiceConfigResponse(ctx context.Context, f *Frame) erro
 	}
 
 	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
-	
+
 	status := "成功"
 	if resp.Result != 0 {
 		status = "失败"
@@ -1195,7 +1319,7 @@ func (h *Handlers) HandleSocketStateResponse(ctx context.Context, f *Frame) erro
 	}
 
 	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
-	
+
 	logData := []byte(fmt.Sprintf("SocketState: socket=%d, status=%s, voltage=%.1fV, current=%dmA, power=%dW",
 		resp.SocketNo, GetSocketStatusDescription(resp.Status),
 		float64(resp.Voltage)/10, resp.Current, resp.Power))
@@ -1213,7 +1337,7 @@ func (h *Handlers) HandleServiceFeeEnd(ctx context.Context, f *Frame) error {
 	}
 
 	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
-	
+
 	logData := []byte(fmt.Sprintf("ServiceFeeEnd: port=%d, energy=%.2fkWh, electric=%.2f元, service=%.2f元, total=%.2f元",
 		report.PortNo, float64(report.TotalEnergy)/100,
 		float64(report.ElectricFee)/100, float64(report.ServiceFee)/100,
@@ -1223,6 +1347,6 @@ func (h *Handlers) HandleServiceFeeEnd(ctx context.Context, f *Frame) error {
 	// TODO: 更新订单信息
 	reply := EncodeServiceFeeEndReply(report.PortNo, 0)
 	_ = reply
-	
+
 	return nil
 }

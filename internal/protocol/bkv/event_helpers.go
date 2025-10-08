@@ -48,7 +48,7 @@ func (h *Handlers) pushEvent(ctx context.Context, event *thirdparty.StandardEven
 	} else {
 		thirdparty.RecordEnqueueSuccess(event.EventType)
 		if logger != nil {
-			logger.Debug("event enqueued",
+			logger.Info("event enqueued successfully",
 				zap.String("event_id", event.EventID),
 				zap.String("event_type", string(event.EventType)))
 		}
@@ -56,24 +56,14 @@ func (h *Handlers) pushEvent(ctx context.Context, event *thirdparty.StandardEven
 }
 
 // pushOrderCreatedEvent 推送订单创建事件
-func (h *Handlers) pushOrderCreatedEvent(ctx context.Context, devicePhyID, orderNo string, portNo int, mode string, data map[string]interface{}, logger *zap.Logger) {
+func (h *Handlers) pushOrderCreatedEvent(ctx context.Context, devicePhyID, orderNo string, portNo int, chargeMode string, duration int, pricePerKwh float64, logger *zap.Logger) {
 	eventData := &thirdparty.OrderCreatedData{
 		OrderNo:     orderNo,
 		PortNo:      portNo,
-		ChargeMode:  mode,
-		PricePerKwh: 1.5, // 示例价格，实际应从订单数据获取
+		ChargeMode:  chargeMode,
+		Duration:    duration,
+		PricePerKwh: pricePerKwh,
 		CreatedAt:   time.Now().Unix(),
-	}
-
-	// 从data中提取可选字段
-	if duration, ok := data["duration"].(int); ok {
-		eventData.Duration = duration
-	}
-	if kwhLimit, ok := data["kwh_limit"].(float64); ok {
-		eventData.KwhLimit = kwhLimit
-	}
-	if powerLevel, ok := data["power_level"].(int); ok {
-		eventData.PowerLevel = powerLevel
 	}
 
 	event := thirdparty.NewEvent(
@@ -86,7 +76,7 @@ func (h *Handlers) pushOrderCreatedEvent(ctx context.Context, devicePhyID, order
 }
 
 // pushOrderConfirmedEvent 推送订单确认事件
-func (h *Handlers) pushOrderConfirmedEvent(ctx context.Context, devicePhyID, orderNo string, portNo int, result string, failReason string, logger *zap.Logger) {
+func (h *Handlers) pushOrderConfirmedEvent(ctx context.Context, devicePhyID, orderNo string, portNo int, result, failReason string, logger *zap.Logger) {
 	eventData := &thirdparty.OrderConfirmedData{
 		OrderNo:     orderNo,
 		PortNo:      portNo,
@@ -166,7 +156,7 @@ func (h *Handlers) pushChargingEndedEvent(ctx context.Context, devicePhyID, orde
 	h.pushEvent(ctx, event, logger)
 }
 
-// pushDeviceHeartbeatEvent 推送设备心跳事件（示例）
+// pushDeviceHeartbeatEvent 推送设备心跳事件
 func (h *Handlers) pushDeviceHeartbeatEvent(ctx context.Context, devicePhyID string, voltage float64, rssi int, temp float64, ports []thirdparty.PortStatus, logger *zap.Logger) {
 	eventData := &thirdparty.DeviceHeartbeatData{
 		Voltage: voltage,
@@ -184,7 +174,7 @@ func (h *Handlers) pushDeviceHeartbeatEvent(ctx context.Context, devicePhyID str
 	h.pushEvent(ctx, event, logger)
 }
 
-// pushOTAProgressEvent 推送OTA进度事件（示例）
+// pushOTAProgressEvent 推送OTA进度事件
 func (h *Handlers) pushOTAProgressEvent(ctx context.Context, devicePhyID string, taskID int64, version string, progress int, status, statusMsg, errorMsg string, logger *zap.Logger) {
 	eventData := &thirdparty.OTAProgressUpdateData{
 		TaskID:    fmt.Sprintf("%d", taskID),
@@ -198,6 +188,67 @@ func (h *Handlers) pushOTAProgressEvent(ctx context.Context, devicePhyID string,
 
 	event := thirdparty.NewEvent(
 		thirdparty.EventOTAProgressUpdate,
+		devicePhyID,
+		eventData.ToMap(),
+	)
+
+	h.pushEvent(ctx, event, logger)
+}
+
+// v2.1.3: 补全的事件推送辅助函数
+
+// pushDeviceRegisteredEvent 推送设备注册事件
+func (h *Handlers) pushDeviceRegisteredEvent(ctx context.Context, devicePhyID, iccid, imei, deviceType, firmware string, portCount int, logger *zap.Logger) {
+	eventData := &thirdparty.DeviceRegisteredData{
+		ICCID:        iccid,
+		IMEI:         imei,
+		DeviceType:   deviceType,
+		Firmware:     firmware,
+		PortCount:    portCount,
+		RegisteredAt: time.Now().Unix(),
+	}
+
+	event := thirdparty.NewEvent(
+		thirdparty.EventDeviceRegistered,
+		devicePhyID,
+		eventData.ToMap(),
+	)
+
+	h.pushEvent(ctx, event, logger)
+}
+
+// pushDeviceAlarmEvent 推送设备告警事件
+func (h *Handlers) pushDeviceAlarmEvent(ctx context.Context, devicePhyID string, alarmType, level, message string, portNo int, metadata map[string]interface{}, logger *zap.Logger) {
+	eventData := &thirdparty.DeviceAlarmData{
+		AlarmType: alarmType,
+		PortNo:    portNo,
+		Level:     level,
+		Message:   message,
+		Metadata:  metadata,
+		AlarmAt:   time.Now().Unix(),
+	}
+
+	event := thirdparty.NewEvent(
+		thirdparty.EventDeviceAlarm,
+		devicePhyID,
+		eventData.ToMap(),
+	)
+
+	h.pushEvent(ctx, event, logger)
+}
+
+// pushSocketStateChangedEvent 推送插座状态变更事件
+func (h *Handlers) pushSocketStateChangedEvent(ctx context.Context, devicePhyID string, portNo int, oldState, newState, stateReason string, logger *zap.Logger) {
+	eventData := &thirdparty.SocketStateChangedData{
+		PortNo:      portNo,
+		OldState:    oldState,
+		NewState:    newState,
+		StateReason: stateReason,
+		ChangedAt:   time.Now().Unix(),
+	}
+
+	event := thirdparty.NewEvent(
+		thirdparty.EventSocketStateChanged,
 		devicePhyID,
 		eventData.ToMap(),
 	)
