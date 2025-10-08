@@ -1,0 +1,37 @@
+# Prometheus 监控配置
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: "iot-server"
+    environment: "production"
+
+# 告警规则文件
+rule_files:
+  # - "alerts/*.yml"
+
+# 抓取配置
+scrape_configs:
+  # IOT Server 指标
+  - job_name: "iot-server"
+    static_configs:
+      - targets: ["iot-server:8080"]
+        labels:
+          service: "iot-server"
+    metrics_path: "/metrics"
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # Redis 指标（如果安装了redis_exporter）
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+        labels:
+          service: "redis"
+
+  # PostgreSQL 指标（如果安装了postgres_exporter）
+  - job_name: "postgres"
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+        labels:
+          service: "postgres"

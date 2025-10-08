@@ -6,12 +6,12 @@ app:
   env: dev
 
 http:
-  addr: ":8080"
+  addr: ":7055"
   readTimeout: 30s
   writeTimeout: 30s
 
 tcp:
-  addr: ":8899"
+  addr: ":7054"
   readTimeout: 300s
   writeTimeout: 30s
   maxConnections: 5000
