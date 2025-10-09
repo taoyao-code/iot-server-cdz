@@ -342,7 +342,7 @@ docker-compose exec postgres pg_dump -U iot iot_server > backup.sql
 4. 推送到分支 (`git push origin feature/amazing-feature`)
 5. 创建 Pull Request
 
-请遵循 [代码规范](docs/CODE_STYLE.md) 和 [提交规范](https://www.conventionalcommits.org/)
+请遵循 [提交规范](https://www.conventionalcommits.org/)
 
 ---
 
