@@ -18,9 +18,12 @@ RUN apk update && \
 
 # 配置 Go 模块代理（使用多个国内代理源）
 ENV GO111MODULE=on \
-    GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,https://goproxy.io,direct \
+    GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,https://proxy.golang.com.cn,direct \
     GOSUMDB=off \
-    CGO_ENABLED=0
+    CGO_ENABLED=0 \
+    GONOPROXY=none \
+    GONOSUMDB=* \
+    GOPRIVATE=""
 
 WORKDIR /src
 
@@ -32,7 +35,7 @@ ARG GIT_COMMIT=unknown
 # 复制依赖文件并下载（利用Docker缓存）
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download && go mod verify
+    go mod download -x && go mod verify
 
 # 只复制必要的源代码目录
 COPY cmd/ ./cmd/

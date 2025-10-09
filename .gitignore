@@ -116,3 +116,5 @@ server
 # 环境配置
 .env
 .env.local
+
+backups
