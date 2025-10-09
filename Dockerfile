@@ -1,7 +1,7 @@
 # ============================================
 # 构建阶段 - 使用 Go 1.24
 # ============================================
-FROM golang:1.24-alpine AS build
+FROM golang:1.25-alpine AS build
 
 # 配置Alpine国内镜像源（解决网络访问问题）
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
