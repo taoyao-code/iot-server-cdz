@@ -7,7 +7,7 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 BUILD_TIME := $(shell date -u '+%Y-%m-%d %H:%M:%S')
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
-.PHONY: all tidy fmt vet build run test clean lint help
+.PHONY: all tidy fmt fmt-check vet build run test clean lint help install-hooks
 
 # 默认目标
 all: tidy fmt vet build
@@ -19,7 +19,18 @@ tidy:
 
 fmt:
 	@echo "格式化代码..."
-	go fmt $(PKG)
+	gofmt -s -w .
+
+fmt-check:
+	@echo "检查代码格式..."
+	@if [ "$$(gofmt -s -l . | wc -l)" -gt 0 ]; then \
+		echo "❌ 以下文件需要格式化:"; \
+		gofmt -s -l .; \
+		echo ""; \
+		echo "运行 'make fmt' 自动修复"; \
+		exit 1; \
+	fi
+	@echo "✅ 代码格式检查通过"
 
 vet:
 	@echo "静态分析..."
@@ -191,6 +202,36 @@ protocol-stats:
 protocol-devices:
 	@./scripts/protocol-monitor.sh devices
 
+# Git Hooks
+install-hooks:
+	@echo "安装 Git hooks..."
+	@chmod +x .git/hooks/pre-commit 2>/dev/null || true
+	@if [ ! -f .git/hooks/pre-commit ]; then \
+		echo '#!/bin/sh' > .git/hooks/pre-commit; \
+		echo 'echo "🔍 运行 pre-commit 检查..."' >> .git/hooks/pre-commit; \
+		echo '' >> .git/hooks/pre-commit; \
+		echo '# 检查代码格式' >> .git/hooks/pre-commit; \
+		echo 'if [ "$$(gofmt -s -l . | wc -l)" -gt 0 ]; then' >> .git/hooks/pre-commit; \
+		echo '    echo "❌ 代码格式检查失败！以下文件需要格式化:"' >> .git/hooks/pre-commit; \
+		echo '    gofmt -s -l .' >> .git/hooks/pre-commit; \
+		echo '    echo ""' >> .git/hooks/pre-commit; \
+		echo '    echo "请运行以下命令修复格式问题："' >> .git/hooks/pre-commit; \
+		echo '    echo "  make fmt"' >> .git/hooks/pre-commit; \
+		echo '    echo ""' >> .git/hooks/pre-commit; \
+		echo '    echo "或者自动修复并重新提交："' >> .git/hooks/pre-commit; \
+		echo '    echo "  make fmt && git add . && git commit --amend --no-edit"' >> .git/hooks/pre-commit; \
+		echo '    exit 1' >> .git/hooks/pre-commit; \
+		echo 'fi' >> .git/hooks/pre-commit; \
+		echo '' >> .git/hooks/pre-commit; \
+		echo 'echo "✅ 代码格式检查通过"' >> .git/hooks/pre-commit; \
+		echo 'exit 0' >> .git/hooks/pre-commit; \
+		chmod +x .git/hooks/pre-commit; \
+		echo "✅ Pre-commit hook 已安装"; \
+	else \
+		echo "⚠️  Pre-commit hook 已存在，跳过安装"; \
+		echo "   如需重新安装，请先删除 .git/hooks/pre-commit"; \
+	fi
+
 # 清理
 clean:
 	@echo "清理构建文件..."
@@ -251,8 +292,10 @@ help:
 	@echo "  make run             - 运行开发服务器"
 	@echo "  make test            - 运行测试"
 	@echo "  make test-coverage   - 生成测试覆盖率报告"
-	@echo "  make fmt             - 格式化代码"
+	@echo "  make fmt             - 格式化代码（自动修复）"
+	@echo "  make fmt-check       - 检查代码格式（不修改）"
 	@echo "  make lint            - 代码检查"
+	@echo "  make install-hooks   - 安装 Git pre-commit hooks"
 	@echo ""
 	@echo "Docker开发环境："
 	@echo "  make compose-up      - 启动开发环境"
