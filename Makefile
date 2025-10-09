@@ -129,8 +129,10 @@ docker-clean:
 .PHONY: deploy backup restore
 
 deploy:
-	@echo "执行部署（自动备份 + 零停机 + 智能检测）..."
-	@echo "💡 提示：首次部署会自动初始化所有服务，后续部署零停机更新"
+	@echo "执行快速部署（测试模式）..."
+	@echo "💡 提示："
+	@echo "   测试环境：make deploy           （快速，不备份）"
+	@echo "   生产环境：BACKUP=true make deploy（安全，带备份）"
 	./scripts/deploy.sh
 
 backup:
@@ -215,7 +217,10 @@ help:
 	@echo "  make prod-down       - 停止生产环境"
 	@echo "  make prod-restart    - 重启生产环境"
 	@echo "  make prod-logs       - 查看生产环境日志"
-	@echo "  make deploy          - 安全部署（推荐：自动备份+零停机+智能检测）"
+	@echo ""
+	@echo "部署相关："
+	@echo "  make deploy                - 快速部署（测试模式，不备份）"
+	@echo "  BACKUP=true make deploy    - 安全部署（生产模式，自动备份）"
 	@echo ""
 	@echo "维护相关："
 	@echo "  make backup          - 备份数据"

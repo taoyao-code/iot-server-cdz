@@ -6,6 +6,11 @@ set -e
 # 特性：自动备份 + 零停机 + 智能检测
 # ============================================
 
+# 环境变量：控制备份行为
+# BACKUP=true   启用备份（生产环境或重要变更）
+# BACKUP=false  跳过备份（测试环境，默认）
+BACKUP=${BACKUP:-false}
+
 # 颜色输出
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -26,7 +31,14 @@ fi
 
 # 备份数据
 backup_data() {
-    log_step "1/6 备份数据库..."
+    # 测试环境默认跳过备份（快速迭代）
+    if [ "$BACKUP" != "true" ]; then
+        log_info "⚡ 跳过备份（测试模式）"
+        log_info "💡 提示：需要备份时执行 BACKUP=true make deploy"
+        return 0
+    fi
+    
+    log_step "备份数据库..."
     
     if ! docker-compose ps | grep -q "postgres.*Up"; then
         log_warn "数据库未运行，跳过备份（可能是首次部署）"
@@ -52,7 +64,7 @@ backup_data() {
 
 # 构建新镜像
 build_image() {
-    log_step "2/6 构建 Docker 镜像..."
+    log_step "1/5 构建 Docker 镜像..."
     
     VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
     BUILD_TIME=$(date -u '+%Y-%m-%d %H:%M:%S')
@@ -77,7 +89,7 @@ build_image() {
 
 # 检查数据卷
 check_volumes() {
-    log_step "3/6 检查数据持久化..."
+    log_step "2/5 检查数据持久化..."
     
     for vol in postgres_data redis_data app_logs; do
         if docker volume ls | grep -q "iot-server_$vol"; then
@@ -91,7 +103,7 @@ check_volumes() {
 
 # 滚动更新应用服务
 update_service() {
-    log_step "4/6 更新应用服务（零停机）..."
+    log_step "3/5 更新应用服务（零停机）..."
     
     # 检查是否首次部署
     if docker-compose ps | grep -q "iot-server"; then
@@ -111,7 +123,7 @@ update_service() {
 
 # 健康检查
 health_check() {
-    log_step "5/6 健康检查..."
+    log_step "4/5 健康检查..."
     
     log_info "等待服务启动..."
     sleep 10
@@ -150,7 +162,7 @@ health_check() {
 
 # 显示状态
 show_status() {
-    log_step "6/6 部署状态..."
+    log_step "5/5 部署状态..."
     
     echo ""
     docker-compose ps
@@ -196,12 +208,20 @@ rollback() {
 # 主流程
 main() {
     log_info "================================"
-    log_info "  IOT Server 安全部署工具"
+    log_info "  IOT Server 快速部署工具"
     log_info "================================"
     echo ""
     
+    # 显示当前模式
+    if [ "$BACKUP" = "true" ]; then
+        log_info "🔒 模式：生产部署（带备份）"
+    else
+        log_info "⚡ 模式：测试部署（快速迭代）"
+    fi
+    echo ""
+    
     # 执行部署步骤
-    backup_data || { log_error "备份失败"; exit 1; }
+    backup_data  # 内部会根据 BACKUP 环境变量决定是否执行
     build_image || { log_error "构建失败"; exit 1; }
     check_volumes
     update_service || { log_error "更新失败"; rollback; exit 1; }
@@ -210,7 +230,11 @@ main() {
         show_status
         echo ""
         log_info "🎉 部署成功！"
-        log_info "💡 数据已保留，未重置"
+        if [ "$BACKUP" = "true" ]; then
+            log_info "💾 数据已备份并保留"
+        else
+            log_info "⚡ 快速部署完成（未备份）"
+        fi
     else
         log_error "健康检查失败"
         rollback
