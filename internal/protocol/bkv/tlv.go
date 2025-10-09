@@ -21,10 +21,10 @@ type TLVField struct {
 
 // BKVPayload BKV子协议数据载荷
 type BKVPayload struct {
-	Cmd        uint16     // BKV命令 (如0x1017)
-	FrameSeq   uint64     // 设备上报帧序列号 (8字节)
-	GatewayID  string     // 网关ID
-	Fields     []TLVField // TLV字段列表
+	Cmd       uint16     // BKV命令 (如0x1017)
+	FrameSeq  uint64     // 设备上报帧序列号 (8字节)
+	GatewayID string     // 网关ID
+	Fields    []TLVField // TLV字段列表
 }
 
 // ParseBKVPayload 解析BKV子协议数据
@@ -44,7 +44,7 @@ func ParseBKVPayload(data []byte) (*BKVPayload, error) {
 	payload.Cmd = binary.BigEndian.Uint16(data[pos+3 : pos+5])
 	pos += 5
 
-	// 解析 0a 01 02 [frameSeq 8bytes] 
+	// 解析 0a 01 02 [frameSeq 8bytes]
 	if pos+11 > len(data) || data[pos] != 0x0a || data[pos+1] != 0x01 || data[pos+2] != 0x02 {
 		return nil, ErrTLVInvalid
 	}
@@ -90,12 +90,12 @@ func ParseBKVPayload(data []byte) (*BKVPayload, error) {
 
 // SocketStatus 插座状态信息
 type SocketStatus struct {
-	SocketNo      uint8  // 插座序号
-	SoftwareVer   uint16 // 软件版本
-	Temperature   uint8  // 温度
-	RSSI          uint8  // 信号强度
-	PortA         *PortStatus
-	PortB         *PortStatus
+	SocketNo    uint8  // 插座序号
+	SoftwareVer uint16 // 软件版本
+	Temperature uint8  // 温度
+	RSSI        uint8  // 信号强度
+	PortA       *PortStatus
+	PortB       *PortStatus
 }
 
 // PortStatus 插孔状态信息
@@ -108,7 +108,7 @@ type ChargingMode uint8
 
 const (
 	ChargingModeByTime  ChargingMode = 1 // 按时长充电
-	ChargingModeByPower ChargingMode = 0 // 按电量充电  
+	ChargingModeByPower ChargingMode = 0 // 按电量充电
 	ChargingModeByLevel ChargingMode = 3 // 按功率充电
 )
 
@@ -130,18 +130,18 @@ const (
 
 // BKVControlCommand BKV控制指令结构（cmd=0x0015）
 type BKVControlCommand struct {
-	SocketNo     uint8        // 插座号
-	Port         PortType     // 插孔号 (0=A孔, 1=B孔)
-	Switch       SwitchState  // 开关状态 (1=开, 0=关)
-	Mode         ChargingMode // 充电模式 (1=按时, 0=按量, 3=按功率)
-	Duration     uint16       // 充电时长，单位分钟(1-900分钟)
-	Energy       uint16       // 充电电量，单位wh
-	BusinessNo   uint16       // 业务号
-	
+	SocketNo   uint8        // 插座号
+	Port       PortType     // 插孔号 (0=A孔, 1=B孔)
+	Switch     SwitchState  // 开关状态 (1=开, 0=关)
+	Mode       ChargingMode // 充电模式 (1=按时, 0=按量, 3=按功率)
+	Duration   uint16       // 充电时长，单位分钟(1-900分钟)
+	Energy     uint16       // 充电电量，单位wh
+	BusinessNo uint16       // 业务号
+
 	// 按功率充电专用字段
-	PaymentAmount uint16         // 支付金额(分)
-	LevelCount    uint8          // 挡位个数(最多5档)
-	PowerLevels   []PowerLevel   // 功率挡位信息
+	PaymentAmount uint16       // 支付金额(分)
+	LevelCount    uint8        // 挡位个数(最多5档)
+	PowerLevels   []PowerLevel // 功率挡位信息
 }
 
 // PowerLevel 功率挡位信息（按功率充电模式）
@@ -165,92 +165,92 @@ const (
 
 // BKVChargingEnd 充电结束上报结构（cmd=0x0015方向为设备->平台）
 type BKVChargingEnd struct {
-	SocketNo        uint8             // 插座号
-	SoftwareVer     uint16            // 插座版本
-	Temperature     uint8             // 插座温度
-	RSSI            uint8             // 信号强度
-	Port            PortType          // 插孔号
-	Status          uint8             // 插座状态位
-	BusinessNo      uint16            // 业务号
-	InstantPower    uint16            // 瞬时功率 (单位W，实际值/10)
-	InstantCurrent  uint16            // 瞬时电流 (单位A，实际值/1000)
-	EnergyUsed      uint16            // 用电量 (单位0.01kWh)
-	ChargingTime    uint16            // 充电时间 (分钟)
-	EndReason       ChargingEndReason // 结束原因
-	
+	SocketNo       uint8             // 插座号
+	SoftwareVer    uint16            // 插座版本
+	Temperature    uint8             // 插座温度
+	RSSI           uint8             // 信号强度
+	Port           PortType          // 插孔号
+	Status         uint8             // 插座状态位
+	BusinessNo     uint16            // 业务号
+	InstantPower   uint16            // 瞬时功率 (单位W，实际值/10)
+	InstantCurrent uint16            // 瞬时电流 (单位A，实际值/1000)
+	EnergyUsed     uint16            // 用电量 (单位0.01kWh)
+	ChargingTime   uint16            // 充电时间 (分钟)
+	EndReason      ChargingEndReason // 结束原因
+
 	// 按功率充电专用字段
-	EndTime         string            // 结束时间 (格式: YYYYMMDDHHMISS)
-	AmountSpent     uint16            // 花费金额(分)
-	SettlingPower   uint16            // 结算功率(单位0.1W)
-	LevelCount      uint8             // 挡位数
-	LevelDurations  []uint16          // 各挡位充电时间
+	EndTime        string   // 结束时间 (格式: YYYYMMDDHHMISS)
+	AmountSpent    uint16   // 花费金额(分)
+	SettlingPower  uint16   // 结算功率(单位0.1W)
+	LevelCount     uint8    // 挡位数
+	LevelDurations []uint16 // 各挡位充电时间
 }
 
 // CardChargingRequest 刷卡充电请求（BKV子协议）
 type CardChargingRequest struct {
-	SocketNo    uint8  // 插座号
-	Port        PortType // 插孔号
-	BusinessNo  uint16 // 业务号
-	Status      uint8  // 插座状态
-	CardNo      []byte // 卡号（6字节）
-	OfflineParams []byte // 离线卡参数（补0）
+	SocketNo      uint8    // 插座号
+	Port          PortType // 插孔号
+	BusinessNo    uint16   // 业务号
+	Status        uint8    // 插座状态
+	CardNo        []byte   // 卡号（6字节）
+	OfflineParams []byte   // 离线卡参数（补0）
 }
 
 // CardChargingEnd 刷卡充电结束（BKV子协议）
 type CardChargingEnd struct {
-	SocketNo        uint8    // 插座号
-	SoftwareVer     uint16   // 软件版本
-	Temperature     uint8    // 温度
-	RSSI            uint8    // 信号强度
-	Port            PortType // 插孔号
-	Status          uint8    // 插座状态
-	BusinessNo      uint16   // 业务号
-	InstantPower    uint16   // 瞬时功率
-	InstantCurrent  uint16   // 瞬时电流
-	EnergyUsed      uint16   // 用电量
-	ChargingTime    uint16   // 充电时间
-	CardNo          []byte   // 卡号
-	OnlineCard      bool     // 在线卡标志
-	BillingMode     uint8    // 计费模式 (1=按时, 2=按量, 3=按功率)
-	AmountSpent     uint16   // 花费金额（仅按功率）
-	SettlingPower   uint16   // 结算功率（仅按功率）
-	LevelCount      uint8    // 挡位数（仅按功率）
-	LevelDurations  []uint16 // 各挡位时间（仅按功率）
+	SocketNo       uint8    // 插座号
+	SoftwareVer    uint16   // 软件版本
+	Temperature    uint8    // 温度
+	RSSI           uint8    // 信号强度
+	Port           PortType // 插孔号
+	Status         uint8    // 插座状态
+	BusinessNo     uint16   // 业务号
+	InstantPower   uint16   // 瞬时功率
+	InstantCurrent uint16   // 瞬时电流
+	EnergyUsed     uint16   // 用电量
+	ChargingTime   uint16   // 充电时间
+	CardNo         []byte   // 卡号
+	OnlineCard     bool     // 在线卡标志
+	BillingMode    uint8    // 计费模式 (1=按时, 2=按量, 3=按功率)
+	AmountSpent    uint16   // 花费金额（仅按功率）
+	SettlingPower  uint16   // 结算功率（仅按功率）
+	LevelCount     uint8    // 挡位数（仅按功率）
+	LevelDurations []uint16 // 各挡位时间（仅按功率）
 }
 
 // ExceptionEvent 异常事件上报（BKV子协议）
 type ExceptionEvent struct {
-	SocketNo         uint8  // 插座号
-	SocketEventReason uint8  // 插座事件原因
-	SocketEventStatus uint8  // 插座事件状态
-	Port1EventReason  uint8  // 插孔1事件原因
-	Port1EventStatus  uint8  // 插孔1事件状态
-	Port2EventReason  uint8  // 插孔2事件原因
-	Port2EventStatus  uint8  // 插孔2事件状态
-	OverVoltage      uint16 // 过压值
-	UnderVoltage     uint16 // 欠压值
-	Port1LeakCurrent uint16 // 插孔1漏电流
-	Port2LeakCurrent uint16 // 插孔2漏电流
-	Port1OverTemp    uint8  // 插孔1过温值
-	Port2OverTemp    uint8  // 插孔2过温值
-	Port1ChargingStatus uint8 // 插孔1充电状态
-	Port2ChargingStatus uint8 // 插孔2充电状态
+	SocketNo            uint8  // 插座号
+	SocketEventReason   uint8  // 插座事件原因
+	SocketEventStatus   uint8  // 插座事件状态
+	Port1EventReason    uint8  // 插孔1事件原因
+	Port1EventStatus    uint8  // 插孔1事件状态
+	Port2EventReason    uint8  // 插孔2事件原因
+	Port2EventStatus    uint8  // 插孔2事件状态
+	OverVoltage         uint16 // 过压值
+	UnderVoltage        uint16 // 欠压值
+	Port1LeakCurrent    uint16 // 插孔1漏电流
+	Port2LeakCurrent    uint16 // 插孔2漏电流
+	Port1OverTemp       uint8  // 插孔1过温值
+	Port2OverTemp       uint8  // 插孔2过温值
+	Port1ChargingStatus uint8  // 插孔1充电状态
+	Port2ChargingStatus uint8  // 插孔2充电状态
 }
 
 // ParameterQuery 参数查询（BKV子协议）
 type ParameterQuery struct {
-	SocketNo               uint8  // 插座号
-	FullPowerThreshold     uint16 // 充满功率阈值（单位0.1W）
-	TrickleThreshold       uint8  // 涓流阈值（单位%）
-	FullContinueTime       uint16 // 充满续充时间（单位s）
-	NoLoadPowerThreshold   uint16 // 空载功率阈值（单位0.1W）
-	NoLoadDelayTime        uint16 // 空载延时时间（单位s）
-	MaxChargingTime        uint16 // 最大充电时间（单位min）
-	HighTempThreshold      uint8  // 高温阈值
-	PowerLimit             uint16 // 功率限值（单位0.1W）
-	OverCurrentLimit       uint16 // 过流限值（单位0.001A）
-	KeyBaseAmount          uint16 // 按键基础金额
-	AntiPulseTime          uint16 // 防脉冲时间
+	SocketNo             uint8  // 插座号
+	FullPowerThreshold   uint16 // 充满功率阈值（单位0.1W）
+	TrickleThreshold     uint8  // 涓流阈值（单位%）
+	FullContinueTime     uint16 // 充满续充时间（单位s）
+	NoLoadPowerThreshold uint16 // 空载功率阈值（单位0.1W）
+	NoLoadDelayTime      uint16 // 空载延时时间（单位s）
+	MaxChargingTime      uint16 // 最大充电时间（单位min）
+	HighTempThreshold    uint8  // 高温阈值
+	PowerLimit           uint16 // 功率限值（单位0.1W）
+	OverCurrentLimit     uint16 // 过流限值（单位0.001A）
+	KeyBaseAmount        uint16 // 按键基础金额
+	AntiPulseTime        uint16 // 防脉冲时间
 }
 
 // PortStatus 插孔状态信息
@@ -401,7 +401,7 @@ func (p *BKVPayload) GetSocketStatus() (*SocketStatus, error) {
 // parseSocketStatusFields 从所有字段中解析插座状态
 func parseSocketStatusFields(fields []TLVField) (*SocketStatus, error) {
 	status := &SocketStatus{}
-	
+
 	for _, field := range fields {
 		switch field.Tag {
 		case 0x03:
@@ -416,10 +416,10 @@ func parseSocketStatusFields(fields []TLVField) (*SocketStatus, error) {
 				// 软件版本：01 3e ff ff 格式
 				status.SoftwareVer = binary.BigEndian.Uint16(field.Value[1:3])
 			}
-		// 其他字段的解析...
+			// 其他字段的解析...
 		}
 	}
-	
+
 	return status, nil
 }
 
@@ -473,11 +473,11 @@ func ParseBKVControlCommand(data []byte) (*BKVControlCommand, error) {
 	}
 
 	cmd := &BKVControlCommand{
-		SocketNo: data[0],                                                // 插座号
-		Port:     PortType(data[1]),                                      // 插孔号
-		Switch:   SwitchState(data[2]),                                   // 开关状态
-		Mode:     ChargingMode(data[3]),                                  // 充电模式
-		Duration: binary.BigEndian.Uint16(data[4:6]),                     // 充电时长
+		SocketNo: data[0],                            // 插座号
+		Port:     PortType(data[1]),                  // 插孔号
+		Switch:   SwitchState(data[2]),               // 开关状态
+		Mode:     ChargingMode(data[3]),              // 充电模式
+		Duration: binary.BigEndian.Uint16(data[4:6]), // 充电时长
 	}
 
 	if len(data) >= 8 {
@@ -487,7 +487,7 @@ func ParseBKVControlCommand(data []byte) (*BKVControlCommand, error) {
 	// 按功率充电模式有额外字段
 	if cmd.Mode == ChargingModeByLevel && len(data) >= 13 {
 		pos := 8
-		cmd.PaymentAmount = binary.BigEndian.Uint16(data[pos:pos+2]) // 支付金额
+		cmd.PaymentAmount = binary.BigEndian.Uint16(data[pos : pos+2]) // 支付金额
 		pos += 2
 		cmd.LevelCount = data[pos] // 挡位个数
 		pos++
@@ -497,9 +497,9 @@ func ParseBKVControlCommand(data []byte) (*BKVControlCommand, error) {
 		if len(data) >= expectedLen {
 			for i := uint8(0); i < cmd.LevelCount && i < 5; i++ { // 最多5档
 				level := PowerLevel{
-					Power:    binary.BigEndian.Uint16(data[pos:pos+2]),
-					Price:    binary.BigEndian.Uint16(data[pos+2:pos+4]),
-					Duration: binary.BigEndian.Uint16(data[pos+4:pos+6]),
+					Power:    binary.BigEndian.Uint16(data[pos : pos+2]),
+					Price:    binary.BigEndian.Uint16(data[pos+2 : pos+4]),
+					Duration: binary.BigEndian.Uint16(data[pos+4 : pos+6]),
 				}
 				cmd.PowerLevels = append(cmd.PowerLevels, level)
 				pos += 6
@@ -518,16 +518,16 @@ func ParseBKVChargingEnd(data []byte) (*BKVChargingEnd, error) {
 	}
 
 	end := &BKVChargingEnd{
-		SocketNo:       data[0],                                      // 插座号
-		SoftwareVer:    binary.BigEndian.Uint16(data[1:3]),           // 软件版本
-		Temperature:    data[3],                                      // 温度
-		RSSI:           data[4],                                      // 信号强度
-		Port:           PortType(data[5]),                            // 插孔号
-		Status:         data[6],                                      // 插座状态
-		BusinessNo:     binary.BigEndian.Uint16(data[7:9]),           // 业务号
-		InstantPower:   binary.BigEndian.Uint16(data[9:11]),          // 瞬时功率
-		InstantCurrent: binary.BigEndian.Uint16(data[11:13]),         // 瞬时电流
-		EnergyUsed:     binary.BigEndian.Uint16(data[13:15]),         // 用电量
+		SocketNo:       data[0],                              // 插座号
+		SoftwareVer:    binary.BigEndian.Uint16(data[1:3]),   // 软件版本
+		Temperature:    data[3],                              // 温度
+		RSSI:           data[4],                              // 信号强度
+		Port:           PortType(data[5]),                    // 插孔号
+		Status:         data[6],                              // 插座状态
+		BusinessNo:     binary.BigEndian.Uint16(data[7:9]),   // 业务号
+		InstantPower:   binary.BigEndian.Uint16(data[9:11]),  // 瞬时功率
+		InstantCurrent: binary.BigEndian.Uint16(data[11:13]), // 瞬时电流
+		EnergyUsed:     binary.BigEndian.Uint16(data[13:15]), // 用电量
 	}
 
 	if len(data) >= 17 {
@@ -572,7 +572,7 @@ func ParseBKVChargingEnd(data []byte) (*BKVChargingEnd, error) {
 		if pos+1 <= len(data) {
 			end.LevelCount = data[pos] // 挡位数
 			pos++
-			
+
 			// 解析各挡位时间 (每个2字节)
 			for i := uint8(0); i < end.LevelCount && i < 5 && pos+2 <= len(data); i++ {
 				duration := binary.BigEndian.Uint16(data[pos : pos+2])
@@ -597,17 +597,17 @@ func deriveEndReasonFromStatus(status uint8) ChargingEndReason {
 	if (status>>4)&0x01 == 1 {
 		return ReasonNoLoad
 	}
-	
+
 	// 检查温度异常 (bit3 = 0表示异常)
 	if (status>>3)&0x01 == 0 {
 		return ReasonOverTemp
 	}
-	
+
 	// 检查电流异常 (bit2 = 0表示异常)
 	if (status>>2)&0x01 == 0 {
 		return ReasonOverCurrent
 	}
-	
+
 	// 默认正常结束
 	return ReasonNormal
 }
@@ -617,7 +617,7 @@ func GetControlCommandType(data []byte) string {
 	if len(data) < 4 {
 		return "unknown"
 	}
-	
+
 	mode := ChargingMode(data[3])
 	switch mode {
 	case ChargingModeByTime:
@@ -634,7 +634,7 @@ func GetControlCommandType(data []byte) string {
 // ParseBKVExceptionEvent 解析BKV异常事件上报
 func ParseBKVExceptionEvent(payload *BKVPayload) (*ExceptionEvent, error) {
 	event := &ExceptionEvent{}
-	
+
 	for _, field := range payload.Fields {
 		switch field.Tag {
 		case 0x4A: // 插座号
@@ -699,14 +699,14 @@ func ParseBKVExceptionEvent(payload *BKVPayload) (*ExceptionEvent, error) {
 			}
 		}
 	}
-	
+
 	return event, nil
 }
 
 // ParseBKVParameterQuery 解析BKV参数查询
 func ParseBKVParameterQuery(payload *BKVPayload) (*ParameterQuery, error) {
 	param := &ParameterQuery{}
-	
+
 	for _, field := range payload.Fields {
 		switch field.Tag {
 		case 0x4A: // 插座号
@@ -759,6 +759,6 @@ func ParseBKVParameterQuery(payload *BKVPayload) (*ParameterQuery, error) {
 			}
 		}
 	}
-	
+
 	return param, nil
 }

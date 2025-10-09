@@ -772,23 +772,23 @@ func (r *Repository) UpdateSocketStatus(ctx context.Context, gatewayID string, s
 
 // OTATask OTA升级任务
 type OTATask struct {
-	ID               int64
-	DeviceID         int64
-	TargetType       int
-	TargetSocketNo   *int
-	FirmwareVersion  string
-	FTPServer        string
-	FTPPort          int
-	FileName         string
-	FileSize         *int64
-	Status           int
-	Progress         int
-	ErrorMsg         *string
-	MsgID            *int
-	StartedAt        *time.Time
-	CompletedAt      *time.Time
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID              int64
+	DeviceID        int64
+	TargetType      int
+	TargetSocketNo  *int
+	FirmwareVersion string
+	FTPServer       string
+	FTPPort         int
+	FileName        string
+	FileSize        *int64
+	Status          int
+	Progress        int
+	ErrorMsg        *string
+	MsgID           *int
+	StartedAt       *time.Time
+	CompletedAt     *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // CreateOTATask 创建OTA升级任务
@@ -797,7 +797,7 @@ func (r *Repository) CreateOTATask(ctx context.Context, task *OTATask) (int64, e
 	           (device_id, target_type, target_socket_no, firmware_version, ftp_server, ftp_port, file_name, file_size, status, created_at)
 	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 	           RETURNING id`
-	
+
 	var id int64
 	err := r.Pool.QueryRow(ctx, q,
 		task.DeviceID,
@@ -809,7 +809,7 @@ func (r *Repository) CreateOTATask(ctx context.Context, task *OTATask) (int64, e
 		task.FileName,
 		task.FileSize,
 		task.Status).Scan(&id)
-	
+
 	return id, err
 }
 
@@ -818,17 +818,17 @@ func (r *Repository) GetOTATask(ctx context.Context, taskID int64) (*OTATask, er
 	const q = `SELECT id, device_id, target_type, target_socket_no, firmware_version, ftp_server, ftp_port, 
 	                  file_name, file_size, status, progress, error_msg, msg_id, started_at, completed_at, created_at, updated_at
 	           FROM ota_tasks WHERE id = $1`
-	
+
 	var task OTATask
 	err := r.Pool.QueryRow(ctx, q, taskID).Scan(
 		&task.ID, &task.DeviceID, &task.TargetType, &task.TargetSocketNo, &task.FirmwareVersion,
 		&task.FTPServer, &task.FTPPort, &task.FileName, &task.FileSize, &task.Status, &task.Progress,
 		&task.ErrorMsg, &task.MsgID, &task.StartedAt, &task.CompletedAt, &task.CreatedAt, &task.UpdatedAt)
-	
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &task, nil
 }
 
@@ -837,7 +837,7 @@ func (r *Repository) UpdateOTATaskStatus(ctx context.Context, taskID int64, stat
 	const q = `UPDATE ota_tasks 
 	           SET status = $2, error_msg = $3, updated_at = NOW()
 	           WHERE id = $1`
-	
+
 	_, err := r.Pool.Exec(ctx, q, taskID, status, errorMsg)
 	return err
 }
@@ -847,7 +847,7 @@ func (r *Repository) UpdateOTATaskProgress(ctx context.Context, taskID int64, pr
 	const q = `UPDATE ota_tasks 
 	           SET progress = $2, status = $3, updated_at = NOW()
 	           WHERE id = $1`
-	
+
 	_, err := r.Pool.Exec(ctx, q, taskID, progress, status)
 	return err
 }
@@ -858,16 +858,16 @@ func (r *Repository) CompleteOTATask(ctx context.Context, taskID int64, success 
 	if !success {
 		status = 4 // 失败
 	}
-	
+
 	const q = `UPDATE ota_tasks 
 	           SET status = $2, progress = $3, error_msg = $4, completed_at = NOW(), updated_at = NOW()
 	           WHERE id = $1`
-	
+
 	progress := 100
 	if !success {
 		progress = 0
 	}
-	
+
 	_, err := r.Pool.Exec(ctx, q, taskID, status, progress, errorMsg)
 	return err
 }
@@ -880,13 +880,13 @@ func (r *Repository) GetDeviceOTATasks(ctx context.Context, deviceID int64, limi
 	           WHERE device_id = $1
 	           ORDER BY created_at DESC
 	           LIMIT $2`
-	
+
 	rows, err := r.Pool.Query(ctx, q, deviceID, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	
+
 	var tasks []OTATask
 	for rows.Next() {
 		var task OTATask
@@ -899,7 +899,7 @@ func (r *Repository) GetDeviceOTATasks(ctx context.Context, deviceID int64, limi
 		}
 		tasks = append(tasks, task)
 	}
-	
+
 	return tasks, rows.Err()
 }
 
@@ -908,7 +908,7 @@ func (r *Repository) SetOTATaskMsgID(ctx context.Context, taskID int64, msgID in
 	const q = `UPDATE ota_tasks 
 	           SET msg_id = $2, status = 1, started_at = NOW(), updated_at = NOW()
 	           WHERE id = $1`
-	
+
 	_, err := r.Pool.Exec(ctx, q, taskID, msgID)
 	return err
 }

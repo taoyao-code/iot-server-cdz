@@ -11,10 +11,10 @@ import (
 type DevicesRepo interface {
 	// UpsertHeartbeat 插入或更新设备心跳信息
 	UpsertHeartbeat(ctx context.Context, deviceID string, gatewayID string, iccid string, rssi int, fwVer string) error
-	
+
 	// FindByID 根据设备ID查找设备
 	FindByID(ctx context.Context, deviceID string) (*Device, error)
-	
+
 	// UpdateSeen 更新设备最后见时间
 	UpdateSeen(ctx context.Context, deviceID string) error
 }
@@ -23,7 +23,7 @@ type DevicesRepo interface {
 type PortsRepo interface {
 	// UpsertPortSnapshot 批量更新端口快照
 	UpsertPortSnapshot(ctx context.Context, deviceID string, ports []PortSnapshot) error
-	
+
 	// ListByDevice 获取设备的所有端口
 	ListByDevice(ctx context.Context, deviceID string) ([]PortSnapshot, error)
 }
@@ -38,19 +38,19 @@ type InboundLogsRepo interface {
 type OutboundQueueRepo interface {
 	// Enqueue 入队出站消息
 	Enqueue(ctx context.Context, deviceID string, cmd int, seq int, payload []byte) (int64, error)
-	
+
 	// DequeueDue 获取到期的待发送消息
 	DequeueDue(ctx context.Context, limit int) ([]OutboundMessage, error)
-	
+
 	// MarkSent 标记消息已发送
 	MarkSent(ctx context.Context, id int64, nextTS time.Time) error
-	
+
 	// Ack 确认消息
 	Ack(ctx context.Context, deviceID string, seq int) error
-	
+
 	// MarkDead 标记消息为死信
 	MarkDead(ctx context.Context, id int64, reason string) error
-	
+
 	// ListStuckSince 获取卡住的消息
 	ListStuckSince(ctx context.Context, ts time.Time) ([]OutboundMessage, error)
 }
@@ -59,10 +59,10 @@ type OutboundQueueRepo interface {
 type ParamsPendingRepo interface {
 	// Add 添加待处理参数
 	Add(ctx context.Context, deviceID string, paramID int, value string, seq int) error
-	
+
 	// ListByDevice 获取设备的待处理参数
 	ListByDevice(ctx context.Context, deviceID string) ([]ParamPending, error)
-	
+
 	// Pop 移除已处理的参数
 	Pop(ctx context.Context, deviceID string, paramID int) error
 }
@@ -83,11 +83,11 @@ type PortSnapshot struct {
 	PortNo     int       `json:"port_no"`
 	StatusBits int       `json:"status_bits"`
 	BizNo      string    `json:"biz_no"`
-	Voltage    float64   `json:"voltage"`    // V
-	Current    float64   `json:"current"`    // A
-	Power      float64   `json:"power"`      // W
-	Energy     float64   `json:"energy"`     // kWh
-	Duration   int       `json:"duration"`   // minutes
+	Voltage    float64   `json:"voltage"`  // V
+	Current    float64   `json:"current"`  // A
+	Power      float64   `json:"power"`    // W
+	Energy     float64   `json:"energy"`   // kWh
+	Duration   int       `json:"duration"` // minutes
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
@@ -127,14 +127,14 @@ func NewPostgresRepos(pool *pgxpool.Pool) *PostgresRepos {
 	repos := &PostgresRepos{
 		pool: pool,
 	}
-	
+
 	// 创建具体实现
 	repos.Devices = &postgresDevicesRepo{pool: pool}
 	repos.Ports = &postgresPortsRepo{pool: pool}
 	repos.Inbound = &postgresInboundLogsRepo{pool: pool}
 	repos.Outbound = &postgresOutboundQueueRepo{pool: pool}
 	repos.Params = &postgresParamsPendingRepo{pool: pool}
-	
+
 	return repos
 }
 
@@ -161,16 +161,16 @@ func (r *postgresDevicesRepo) UpsertHeartbeat(ctx context.Context, deviceID stri
 func (r *postgresDevicesRepo) FindByID(ctx context.Context, deviceID string) (*Device, error) {
 	const q = `SELECT phy_id, gateway_id, iccid, last_seen_at, rssi, fw_ver
                FROM devices WHERE phy_id = $1`
-	
+
 	device := &Device{}
 	err := r.pool.QueryRow(ctx, q, deviceID).Scan(
-		&device.DeviceID, &device.GatewayID, &device.ICCID, 
+		&device.DeviceID, &device.GatewayID, &device.ICCID,
 		&device.LastSeen, &device.RSSI, &device.FwVer)
-	
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return device, nil
 }
 
@@ -189,14 +189,14 @@ func (r *postgresPortsRepo) UpsertPortSnapshot(ctx context.Context, deviceID str
 	if len(ports) == 0 {
 		return nil
 	}
-	
+
 	// 首先获取设备内部ID
 	var internalDeviceID int64
 	err := r.pool.QueryRow(ctx, `SELECT id FROM devices WHERE phy_id = $1`, deviceID).Scan(&internalDeviceID)
 	if err != nil {
 		return err
 	}
-	
+
 	// 批量更新端口
 	for _, port := range ports {
 		const q = `INSERT INTO ports (device_id, port_no, status, status_bits, biz_no, voltage, current, power, energy, duration, updated_at)
@@ -211,14 +211,14 @@ func (r *postgresPortsRepo) UpsertPortSnapshot(ctx context.Context, deviceID str
                      energy = EXCLUDED.energy,
                      duration = EXCLUDED.duration,
                      updated_at = NOW()`
-		
-		_, err = r.pool.Exec(ctx, q, internalDeviceID, port.PortNo, port.StatusBits, 
+
+		_, err = r.pool.Exec(ctx, q, internalDeviceID, port.PortNo, port.StatusBits,
 			port.StatusBits, port.BizNo, port.Voltage, port.Current, port.Power, port.Energy, port.Duration)
 		if err != nil {
 			return err
 		}
 	}
-	
+
 	return nil
 }
 
@@ -228,27 +228,27 @@ func (r *postgresPortsRepo) ListByDevice(ctx context.Context, deviceID string) (
                JOIN devices d ON p.device_id = d.id 
                WHERE d.phy_id = $1 
                ORDER BY p.port_no`
-	
+
 	rows, err := r.pool.Query(ctx, q, deviceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	
+
 	var ports []PortSnapshot
 	for rows.Next() {
 		var port PortSnapshot
 		port.DeviceID = deviceID
-		
+
 		err := rows.Scan(&port.PortNo, &port.StatusBits, &port.BizNo,
 			&port.Voltage, &port.Current, &port.Power, &port.Energy, &port.Duration, &port.UpdatedAt)
 		if err != nil {
 			return nil, err
 		}
-		
+
 		ports = append(ports, port)
 	}
-	
+
 	return ports, rows.Err()
 }
 
@@ -264,7 +264,7 @@ func (r *postgresInboundLogsRepo) Append(ctx context.Context, deviceID string, c
 	if err != nil {
 		return err
 	}
-	
+
 	const q = `INSERT INTO inbound_logs (device_id, cmd, seq, payload_hex, parsed_ok, reason, created_at)
                VALUES ($1, $2, $3, $4, $5, $6, NOW())`
 	_, err = r.pool.Exec(ctx, q, internalDeviceID, cmd, seq, payloadHex, parsedOK, reason)
@@ -283,11 +283,11 @@ func (r *postgresOutboundQueueRepo) Enqueue(ctx context.Context, deviceID string
 	if err != nil {
 		return 0, err
 	}
-	
+
 	const q = `INSERT INTO outbound_queue (device_id, cmd, seq, payload, status, tries, created_at)
                VALUES ($1, $2, $3, $4, 0, 0, NOW())
                RETURNING id`
-	
+
 	var id int64
 	err = r.pool.QueryRow(ctx, q, internalDeviceID, cmd, seq, payload).Scan(&id)
 	return id, err
@@ -300,13 +300,13 @@ func (r *postgresOutboundQueueRepo) DequeueDue(ctx context.Context, limit int) (
                WHERE o.status IN (0, 1) AND (o.next_ts IS NULL OR o.next_ts <= NOW())
                ORDER BY o.created_at
                LIMIT $1`
-	
+
 	rows, err := r.pool.Query(ctx, q, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	
+
 	var messages []OutboundMessage
 	for rows.Next() {
 		var msg OutboundMessage
@@ -316,7 +316,7 @@ func (r *postgresOutboundQueueRepo) DequeueDue(ctx context.Context, limit int) (
 		}
 		messages = append(messages, msg)
 	}
-	
+
 	return messages, rows.Err()
 }
 
@@ -345,13 +345,13 @@ func (r *postgresOutboundQueueRepo) ListStuckSince(ctx context.Context, ts time.
                FROM outbound_queue o
                JOIN devices d ON o.device_id = d.id
                WHERE o.status = 1 AND o.next_ts < $1`
-	
+
 	rows, err := r.pool.Query(ctx, q, ts)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	
+
 	var messages []OutboundMessage
 	for rows.Next() {
 		var msg OutboundMessage
@@ -361,7 +361,7 @@ func (r *postgresOutboundQueueRepo) ListStuckSince(ctx context.Context, ts time.
 		}
 		messages = append(messages, msg)
 	}
-	
+
 	return messages, rows.Err()
 }
 
@@ -377,7 +377,7 @@ func (r *postgresParamsPendingRepo) Add(ctx context.Context, deviceID string, pa
 	if err != nil {
 		return err
 	}
-	
+
 	const q = `INSERT INTO params_pending (device_id, param_id, value, seq, created_at)
                VALUES ($1, $2, $3, $4, NOW())`
 	_, err = r.pool.Exec(ctx, q, internalDeviceID, paramID, value, seq)
@@ -390,13 +390,13 @@ func (r *postgresParamsPendingRepo) ListByDevice(ctx context.Context, deviceID s
                JOIN devices d ON p.device_id = d.id
                WHERE d.phy_id = $1
                ORDER BY p.created_at`
-	
+
 	rows, err := r.pool.Query(ctx, q, deviceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	
+
 	var params []ParamPending
 	for rows.Next() {
 		var param ParamPending
@@ -406,7 +406,7 @@ func (r *postgresParamsPendingRepo) ListByDevice(ctx context.Context, deviceID s
 		}
 		params = append(params, param)
 	}
-	
+
 	return params, rows.Err()
 }
 

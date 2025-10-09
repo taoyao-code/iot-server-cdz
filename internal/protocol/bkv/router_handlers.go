@@ -90,17 +90,17 @@ func RegisterHandlers(adapter *Adapter, handlers *Handlers) {
 	adapter.Register(0x0001, func(f *Frame) error {
 		return handlers.HandleParamReadResponse(context.Background(), f)
 	})
-	
+
 	// 0x02: 批量写入参数（上行响应）
 	adapter.Register(0x0002, func(f *Frame) error {
 		return handlers.HandleParamWriteResponse(context.Background(), f)
 	})
-	
+
 	// 0x03: 参数同步（上行响应）
 	adapter.Register(0x0003, func(f *Frame) error {
 		return handlers.HandleParamSyncResponse(context.Background(), f)
 	})
-	
+
 	// 0x04: 参数重置（上行响应）
 	adapter.Register(0x0004, func(f *Frame) error {
 		return handlers.HandleParamResetResponse(context.Background(), f)
@@ -111,7 +111,7 @@ func RegisterHandlers(adapter *Adapter, handlers *Handlers) {
 	adapter.Register(0x001B, func(f *Frame) error {
 		return handlers.HandleVoiceConfigResponse(context.Background(), f)
 	})
-	
+
 	// 0x0D/0x0E/0x1D: 查询插座状态（上行响应）
 	adapter.Register(0x000D, func(f *Frame) error {
 		return handlers.HandleSocketStateResponse(context.Background(), f)
@@ -122,7 +122,7 @@ func RegisterHandlers(adapter *Adapter, handlers *Handlers) {
 	adapter.Register(0x001D, func(f *Frame) error {
 		return handlers.HandleSocketStateResponse(context.Background(), f)
 	})
-	
+
 	// 0x19: 服务费充电结束（上行）
 	adapter.Register(0x0019, func(f *Frame) error {
 		return handlers.HandleServiceFeeEnd(context.Background(), f)

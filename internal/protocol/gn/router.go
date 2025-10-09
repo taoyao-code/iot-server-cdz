@@ -9,14 +9,14 @@ import (
 
 // GN协议命令常量
 const (
-	CmdHeartbeat     = 0x0000 // A1 心跳/时间同步
-	CmdStatusReport  = 0x1000 // A3 插座状态上报
-	CmdStatusQuery   = 0x1001 // A4 查询插座状态
-	CmdControl       = 0x2000 // C1 控制指令
-	CmdControlEnd    = 0x2001 // C2 结束上报
-	CmdParamSet      = 0x3000 // E2 参数设置
-	CmdParamQuery    = 0x3001 // E3 参数查询
-	CmdException     = 0x4000 // F1 异常上报
+	CmdHeartbeat    = 0x0000 // A1 心跳/时间同步
+	CmdStatusReport = 0x1000 // A3 插座状态上报
+	CmdStatusQuery  = 0x1001 // A4 查询插座状态
+	CmdControl      = 0x2000 // C1 控制指令
+	CmdControlEnd   = 0x2001 // C2 结束上报
+	CmdParamSet     = 0x3000 // E2 参数设置
+	CmdParamQuery   = 0x3001 // E3 参数查询
+	CmdException    = 0x4000 // F1 异常上报
 )
 
 // Handler 定义GN协议消息处理器接口
@@ -85,49 +85,49 @@ func NewDefaultHandler() *DefaultHandler {
 }
 
 func (h *DefaultHandler) HandleHeartbeat(ctx context.Context, frame *Frame, gwid string, payload []byte) error {
-	fmt.Printf("GN Heartbeat: gwid=%s, seq=0x%08X, payload=%s\n", 
+	fmt.Printf("GN Heartbeat: gwid=%s, seq=0x%08X, payload=%s\n",
 		gwid, frame.Sequence, hex.EncodeToString(payload))
 	return nil
 }
 
 func (h *DefaultHandler) HandleStatusReport(ctx context.Context, frame *Frame, gwid string, payload []byte) error {
-	fmt.Printf("GN Status Report: gwid=%s, seq=0x%08X, payload_len=%d\n", 
+	fmt.Printf("GN Status Report: gwid=%s, seq=0x%08X, payload_len=%d\n",
 		gwid, frame.Sequence, len(payload))
 	return nil
 }
 
 func (h *DefaultHandler) HandleStatusQuery(ctx context.Context, frame *Frame, gwid string, payload []byte) error {
-	fmt.Printf("GN Status Query: gwid=%s, seq=0x%08X\n", 
+	fmt.Printf("GN Status Query: gwid=%s, seq=0x%08X\n",
 		gwid, frame.Sequence)
 	return nil
 }
 
 func (h *DefaultHandler) HandleControl(ctx context.Context, frame *Frame, gwid string, payload []byte) error {
-	fmt.Printf("GN Control: gwid=%s, seq=0x%08X, payload=%s\n", 
+	fmt.Printf("GN Control: gwid=%s, seq=0x%08X, payload=%s\n",
 		gwid, frame.Sequence, hex.EncodeToString(payload))
 	return nil
 }
 
 func (h *DefaultHandler) HandleControlEnd(ctx context.Context, frame *Frame, gwid string, payload []byte) error {
-	fmt.Printf("GN Control End: gwid=%s, seq=0x%08X, payload=%s\n", 
+	fmt.Printf("GN Control End: gwid=%s, seq=0x%08X, payload=%s\n",
 		gwid, frame.Sequence, hex.EncodeToString(payload))
 	return nil
 }
 
 func (h *DefaultHandler) HandleParamSet(ctx context.Context, frame *Frame, gwid string, payload []byte) error {
-	fmt.Printf("GN Param Set: gwid=%s, seq=0x%08X, payload=%s\n", 
+	fmt.Printf("GN Param Set: gwid=%s, seq=0x%08X, payload=%s\n",
 		gwid, frame.Sequence, hex.EncodeToString(payload))
 	return nil
 }
 
 func (h *DefaultHandler) HandleParamQuery(ctx context.Context, frame *Frame, gwid string, payload []byte) error {
-	fmt.Printf("GN Param Query: gwid=%s, seq=0x%08X\n", 
+	fmt.Printf("GN Param Query: gwid=%s, seq=0x%08X\n",
 		gwid, frame.Sequence)
 	return nil
 }
 
 func (h *DefaultHandler) HandleException(ctx context.Context, frame *Frame, gwid string, payload []byte) error {
-	fmt.Printf("GN Exception: gwid=%s, seq=0x%08X, payload=%s\n", 
+	fmt.Printf("GN Exception: gwid=%s, seq=0x%08X, payload=%s\n",
 		gwid, frame.Sequence, hex.EncodeToString(payload))
 	return nil
 }
@@ -142,12 +142,12 @@ func ParseHeartbeat(payload []byte) (iccid string, rssi int, fwVer string, err e
 	// ICCID (18字节的BCD编码) + 固件版本 + RSSI
 	iccidBytes := payload[:18]
 	iccid = hex.EncodeToString(iccidBytes)
-	
+
 	// 查找RSSI (通常在末尾)
 	if len(payload) > 18 {
 		rssi = int(payload[len(payload)-1])
 	}
-	
+
 	// 固件版本在ICCID和RSSI之间
 	if len(payload) > 19 {
 		fwVerBytes := payload[18 : len(payload)-1]
@@ -205,7 +205,7 @@ func ParseSocketStatus(payload []byte) ([]SocketInfo, error) {
 			if err != nil {
 				continue
 			}
-			
+
 			port := PortInfo{}
 			for _, pTLV := range portTLVs {
 				switch pTLV.Tag {
@@ -227,7 +227,7 @@ func ParseSocketStatus(payload []byte) ([]SocketInfo, error) {
 					port.Duration = int(pTLV.GetUint16())
 				}
 			}
-			
+
 			if currentSocket != nil {
 				currentSocket.Ports = append(currentSocket.Ports, port)
 			}
@@ -256,11 +256,11 @@ type PortInfo struct {
 	Number     int     `json:"number"`
 	StatusBits int     `json:"status_bits"`
 	BizNo      uint16  `json:"biz_no"`
-	Voltage    float64 `json:"voltage"`    // V
-	Power      float64 `json:"power"`      // W
-	Current    float64 `json:"current"`    // A
-	Energy     float64 `json:"energy"`     // kWh
-	Duration   int     `json:"duration"`   // minutes
+	Voltage    float64 `json:"voltage"`  // V
+	Power      float64 `json:"power"`    // W
+	Current    float64 `json:"current"`  // A
+	Energy     float64 `json:"energy"`   // kWh
+	Duration   int     `json:"duration"` // minutes
 }
 
 // BuildStatusQuery 构建状态查询命令载荷

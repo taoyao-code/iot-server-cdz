@@ -69,37 +69,37 @@ func (f *Frame) Encode() ([]byte, error) {
 
 	// 构建帧数据 (不含校验和和帧尾)
 	buf := make([]byte, 0, totalLen+4) // +4 for header and tail
-	
+
 	// 帧头
 	buf = append(buf, byte(f.Header>>8), byte(f.Header&0xFF))
-	
+
 	// 长度
 	buf = append(buf, byte(f.Length>>8), byte(f.Length&0xFF))
-	
+
 	// 命令字
 	buf = append(buf, byte(f.Command>>8), byte(f.Command&0xFF))
-	
+
 	// 序列号
-	buf = append(buf, byte(f.Sequence>>24), byte(f.Sequence>>16), 
+	buf = append(buf, byte(f.Sequence>>24), byte(f.Sequence>>16),
 		byte(f.Sequence>>8), byte(f.Sequence&0xFF))
-	
+
 	// 方向
 	buf = append(buf, f.Direction)
-	
+
 	// 网关ID
 	buf = append(buf, f.GatewayID...)
-	
+
 	// 载荷
 	buf = append(buf, f.Payload...)
-	
+
 	// 计算校验和 (从长度字段开始到载荷结束)
 	checksum := calculateChecksum(buf[2:]) // 从长度字段开始
 	f.Checksum = checksum
 	buf = append(buf, checksum)
-	
+
 	// 帧尾
 	buf = append(buf, byte(FrameTail>>8), byte(FrameTail&0xFF))
-	
+
 	return buf, nil
 }
 
@@ -124,7 +124,7 @@ func ParseFrame(data []byte) (*Frame, error) {
 	// 解析帧头
 	frame.Header = binary.BigEndian.Uint16(data[offset:])
 	offset += 2
-	
+
 	if frame.Header != FrameHeaderUplink && frame.Header != FrameHeaderDownlink {
 		return nil, fmt.Errorf("invalid frame header: 0x%04X", frame.Header)
 	}
@@ -136,7 +136,7 @@ func ParseFrame(data []byte) (*Frame, error) {
 	// 验证帧长度: length字段 + 帧头(2) + 帧尾(2)
 	expectedFrameSize := int(frame.Length) + 4
 	if len(data) < expectedFrameSize {
-		return nil, fmt.Errorf("incomplete frame: expected %d bytes, got %d", 
+		return nil, fmt.Errorf("incomplete frame: expected %d bytes, got %d",
 			expectedFrameSize, len(data))
 	}
 
@@ -160,7 +160,7 @@ func ParseFrame(data []byte) (*Frame, error) {
 	// 计算载荷长度: 实际测试显示，载荷比计算的少2字节
 	// 看起来长度字段可能包含了一些不明确的部分
 	// 基于实际示例调整: 载荷 = length - (cmd+seq+dir+gwid+checksum) - 2
-	baseLen := 2 + 4 + 1 + 7 + 1 // cmd + seq + dir + gwid + checksum
+	baseLen := 2 + 4 + 1 + 7 + 1                  // cmd + seq + dir + gwid + checksum
 	payloadLen := int(frame.Length) - baseLen - 2 // 减去额外的2字节
 	if payloadLen < 0 {
 		payloadLen = 0
@@ -178,7 +178,7 @@ func ParseFrame(data []byte) (*Frame, error) {
 	offset += 1
 
 	// 验证校验和: 从长度字段开始到载荷结束(不包含校验和本身)
-	checksumData := data[2:offset-1]  // 从长度字段开始
+	checksumData := data[2 : offset-1] // 从长度字段开始
 	expectedChecksum := calculateChecksum(checksumData)
 	if frame.Checksum != expectedChecksum {
 		return nil, fmt.Errorf("checksum mismatch: expected 0x%02X, got 0x%02X (checksum at offset %d)",

@@ -106,11 +106,11 @@ func TestParsePowerLevelEndReport(t *testing.T) {
 		{
 			name: "Simple End Report",
 			data: []byte{
-				0x01,                   // port_no = 1
-				0x00, 0x1E,             // total_duration = 30分钟
+				0x01,       // port_no = 1
+				0x00, 0x1E, // total_duration = 30分钟
 				0x00, 0x00, 0x03, 0xE8, // total_energy = 1000 (10度)
 				0x00, 0x00, 0x01, 0xF4, // total_amount = 500分 (5元)
-				0x00,                   // end_reason = 0 (正常结束)
+				0x00, // end_reason = 0 (正常结束)
 			},
 			expected: &PowerLevelEndReport{
 				PortNo:        1,
@@ -123,20 +123,20 @@ func TestParsePowerLevelEndReport(t *testing.T) {
 		{
 			name: "End Report with Level Usage",
 			data: []byte{
-				0x02,                   // port_no = 2
-				0x00, 0x3C,             // total_duration = 60分钟
+				0x02,       // port_no = 2
+				0x00, 0x3C, // total_duration = 60分钟
 				0x00, 0x00, 0x07, 0xD0, // total_energy = 2000 (20度)
 				0x00, 0x00, 0x03, 0xE8, // total_amount = 1000分 (10元)
-				0x00,                   // end_reason = 0 (正常结束)
-				0x02,                   // level_count = 2
+				0x00, // end_reason = 0 (正常结束)
+				0x02, // level_count = 2
 				// Level 1
-				0x01,                   // level_no = 1
-				0x00, 0x14,             // duration = 20min
+				0x01,       // level_no = 1
+				0x00, 0x14, // duration = 20min
 				0x00, 0x00, 0x03, 0x20, // energy = 800 (8度)
 				0x00, 0x00, 0x01, 0x90, // amount = 400分 (4元)
 				// Level 2
-				0x02,                   // level_no = 2
-				0x00, 0x28,             // duration = 40min
+				0x02,       // level_no = 2
+				0x00, 0x28, // duration = 40min
 				0x00, 0x00, 0x04, 0xB0, // energy = 1200 (12度)
 				0x00, 0x00, 0x02, 0x58, // amount = 600分 (6元)
 			},
@@ -155,11 +155,11 @@ func TestParsePowerLevelEndReport(t *testing.T) {
 		{
 			name: "User Stopped",
 			data: []byte{
-				0x03,                   // port_no = 3
-				0x00, 0x0A,             // total_duration = 10分钟
+				0x03,       // port_no = 3
+				0x00, 0x0A, // total_duration = 10分钟
 				0x00, 0x00, 0x00, 0xC8, // total_energy = 200 (2度)
 				0x00, 0x00, 0x00, 0x64, // total_amount = 100分 (1元)
-				0x01,                   // end_reason = 1 (用户停止)
+				0x01, // end_reason = 1 (用户停止)
 			},
 			expected: &PowerLevelEndReport{
 				PortNo:        3,
@@ -308,9 +308,9 @@ func TestPowerLevel_E2E(t *testing.T) {
 			PortNo:     1,
 			LevelCount: 3,
 			Levels: []PowerLevelV2{
-				{PowerW: 500, PriceCents: 40, Duration: 10},   // 0.5kW, 0.4元/度, 10分钟
-				{PowerW: 1000, PriceCents: 50, Duration: 20},  // 1kW, 0.5元/度, 20分钟
-				{PowerW: 1500, PriceCents: 60, Duration: 30},  // 1.5kW, 0.6元/度, 30分钟
+				{PowerW: 500, PriceCents: 40, Duration: 10},  // 0.5kW, 0.4元/度, 10分钟
+				{PowerW: 1000, PriceCents: 50, Duration: 20}, // 1kW, 0.5元/度, 20分钟
+				{PowerW: 1500, PriceCents: 60, Duration: 30}, // 1.5kW, 0.6元/度, 30分钟
 			},
 		}
 
@@ -325,12 +325,12 @@ func TestPowerLevel_E2E(t *testing.T) {
 
 		// 4. 模拟充电完成上报
 		endData := []byte{
-			0x01,                   // port_no = 1
-			0x00, 0x3C,             // total_duration = 60分钟
+			0x01,       // port_no = 1
+			0x00, 0x3C, // total_duration = 60分钟
 			0x00, 0x00, 0x0B, 0xB8, // total_energy = 3000 (30度)
 			0x00, 0x00, 0x05, 0xDC, // total_amount = 1500分 (15元)
-			0x00,                   // end_reason = 0 (正常结束)
-			0x03,                   // level_count = 3
+			0x00, // end_reason = 0 (正常结束)
+			0x03, // level_count = 3
 			// Level 1: 10分钟
 			0x01, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x52, 0x00, 0x00, 0x00, 0x28,
 			// Level 2: 20分钟
@@ -389,4 +389,3 @@ func TestGetPowerLevelEndReasonDescription(t *testing.T) {
 		}
 	}
 }
-

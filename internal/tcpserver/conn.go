@@ -46,8 +46,12 @@ func (cc *ConnContext) SetProtocol(p string) { cc.proto.Store(p) }
 // Protocol 返回连接的协议标记
 func (cc *ConnContext) Protocol() string {
 	v := cc.proto.Load()
-	if v == nil { return "" }
-	if s, ok := v.(string); ok { return s }
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
 	return ""
 }
 

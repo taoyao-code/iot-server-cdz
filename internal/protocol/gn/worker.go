@@ -13,22 +13,22 @@ import (
 
 // Worker GN协议出站可靠性工作器
 type Worker struct {
-	mu           sync.RWMutex
-	running      bool
-	done         chan struct{}
-	wg           sync.WaitGroup
-	
-	repos        *gnStorage.PostgresRepos
-	sender       Sender
-	
+	mu      sync.RWMutex
+	running bool
+	done    chan struct{}
+	wg      sync.WaitGroup
+
+	repos  *gnStorage.PostgresRepos
+	sender Sender
+
 	// 配置
 	scanInterval time.Duration // 扫描间隔
 	retryBackoff time.Duration // 重试退避时间
 	maxRetries   int           // 最大重试次数
 	batchSize    int           // 批处理大小
-	
+
 	// 指标
-	metrics      *WorkerMetrics
+	metrics *WorkerMetrics
 }
 
 // Sender 发送器接口
@@ -82,21 +82,21 @@ func NewWorker(repos *gnStorage.PostgresRepos, sender Sender, config WorkerConfi
 func (w *Worker) Start(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	
+
 	if w.running {
 		return fmt.Errorf("worker already running")
 	}
-	
+
 	w.running = true
-	
+
 	// 启动冷启动扫描
 	w.wg.Add(1)
 	go w.coldStartScan(ctx)
-	
+
 	// 启动定期扫描
 	w.wg.Add(1)
 	go w.periodicScan(ctx)
-	
+
 	log.Printf("GN outbound worker started")
 	return nil
 }
@@ -105,15 +105,15 @@ func (w *Worker) Start(ctx context.Context) error {
 func (w *Worker) Stop() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	
+
 	if !w.running {
 		return
 	}
-	
+
 	w.running = false
 	close(w.done)
 	w.wg.Wait()
-	
+
 	log.Printf("GN outbound worker stopped")
 }
 
@@ -134,9 +134,9 @@ func (w *Worker) GetMetrics() WorkerMetrics {
 // coldStartScan 冷启动扫描：查找卡住的消息并重新发送
 func (w *Worker) coldStartScan(ctx context.Context) {
 	defer w.wg.Done()
-	
+
 	log.Printf("GN worker: starting cold-start scan")
-	
+
 	// 查找所有卡住的消息（status=1且next_ts已过期）
 	stuckSince := time.Now().Add(-w.retryBackoff)
 	stuckMessages, err := w.repos.Outbound.ListStuckSince(ctx, stuckSince)
@@ -144,31 +144,31 @@ func (w *Worker) coldStartScan(ctx context.Context) {
 		log.Printf("GN worker: cold-start scan failed: %v", err)
 		return
 	}
-	
+
 	log.Printf("GN worker: found %d stuck messages for cold-start", len(stuckMessages))
-	
+
 	for _, msg := range stuckMessages {
 		select {
 		case <-w.done:
 			return
 		default:
 		}
-		
+
 		if err := w.processMessage(ctx, msg); err != nil {
 			log.Printf("GN worker: cold-start process message %d failed: %v", msg.ID, err)
 		}
 	}
-	
+
 	log.Printf("GN worker: cold-start scan completed")
 }
 
 // periodicScan 定期扫描：处理到期的消息
 func (w *Worker) periodicScan(ctx context.Context) {
 	defer w.wg.Done()
-	
+
 	ticker := time.NewTicker(w.scanInterval)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-w.done:
@@ -187,20 +187,20 @@ func (w *Worker) scanAndProcess(ctx context.Context) {
 		log.Printf("GN worker: dequeue failed: %v", err)
 		return
 	}
-	
+
 	if len(messages) == 0 {
 		return
 	}
-	
+
 	log.Printf("GN worker: processing %d messages", len(messages))
-	
+
 	for _, msg := range messages {
 		select {
 		case <-w.done:
 			return
 		default:
 		}
-		
+
 		if err := w.processMessage(ctx, msg); err != nil {
 			log.Printf("GN worker: process message %d failed: %v", msg.ID, err)
 		}
@@ -216,47 +216,47 @@ func (w *Worker) processMessage(ctx context.Context, msg gnStorage.OutboundMessa
 		if err != nil {
 			return fmt.Errorf("mark dead failed: %w", err)
 		}
-		
+
 		w.mu.Lock()
 		w.metrics.DeadTotal++
 		w.mu.Unlock()
-		
+
 		log.Printf("GN worker: message %d marked as dead (max retries exceeded)", msg.ID)
 		return nil
 	}
-	
+
 	// 发送消息
 	err := w.sendMessage(ctx, msg)
 	if err != nil {
 		log.Printf("GN worker: send message %d failed: %v", msg.ID, err)
-		
+
 		// 计算下次重试时间
 		nextTS := time.Now().Add(w.retryBackoff)
-		
+
 		// 更新状态为已发送（准备重试）
 		if markErr := w.repos.Outbound.MarkSent(ctx, msg.ID, nextTS); markErr != nil {
 			log.Printf("GN worker: mark sent failed: %v", markErr)
 		}
-		
+
 		w.mu.Lock()
 		w.metrics.RetriesTotal++
 		w.mu.Unlock()
-		
+
 		return err
 	}
-	
+
 	// 发送成功，标记为已发送
 	nextTS := time.Now().Add(w.retryBackoff)
 	err = w.repos.Outbound.MarkSent(ctx, msg.ID, nextTS)
 	if err != nil {
 		return fmt.Errorf("mark sent failed: %w", err)
 	}
-	
+
 	w.mu.Lock()
 	w.metrics.SentTotal++
 	w.metrics.InFlight++
 	w.mu.Unlock()
-	
+
 	log.Printf("GN worker: message %d sent successfully", msg.ID)
 	return nil
 }
@@ -268,19 +268,19 @@ func (w *Worker) sendMessage(ctx context.Context, msg gnStorage.OutboundMessage)
 	if err != nil || len(gwid) != 7 {
 		return fmt.Errorf("invalid device ID format: %s", msg.DeviceID)
 	}
-	
+
 	// 创建下行帧
 	frame, err := NewFrame(uint16(msg.Cmd), uint32(msg.Seq), gwid, msg.Payload, true)
 	if err != nil {
 		return fmt.Errorf("create frame failed: %w", err)
 	}
-	
+
 	// 编码帧
 	data, err := frame.Encode()
 	if err != nil {
 		return fmt.Errorf("encode frame failed: %w", err)
 	}
-	
+
 	// 发送数据
 	return w.sender.Send(ctx, msg.DeviceID, data)
 }
@@ -291,14 +291,14 @@ func (w *Worker) AckMessage(ctx context.Context, deviceID string, seq int) error
 	if err != nil {
 		return err
 	}
-	
+
 	w.mu.Lock()
 	w.metrics.AcksTotal++
 	if w.metrics.InFlight > 0 {
 		w.metrics.InFlight--
 	}
 	w.mu.Unlock()
-	
+
 	log.Printf("GN worker: message acked for device %s, seq %d", deviceID, seq)
 	return nil
 }
@@ -330,17 +330,17 @@ func NewMockSender() *MockSender {
 func (s *MockSender) Send(ctx context.Context, deviceID string, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	if s.shouldFail {
 		return fmt.Errorf("mock send failure")
 	}
-	
+
 	s.sentMessages = append(s.sentMessages, SentMessage{
 		DeviceID: deviceID,
 		Data:     data,
 		SentAt:   time.Now(),
 	})
-	
+
 	return nil
 }
 

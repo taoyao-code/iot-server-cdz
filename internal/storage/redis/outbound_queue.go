@@ -11,9 +11,9 @@ import (
 
 const (
 	// Redis Key前缀
-	outboundQueueKey     = "outbound:queue"          // 待处理队列（Sorted Set，按优先级+时间排序）
+	outboundQueueKey      = "outbound:queue"         // 待处理队列（Sorted Set，按优先级+时间排序）
 	outboundProcessingKey = "outbound:processing:%s" // 处理中（Hash，设备维度）
-	outboundDeadKey      = "outbound:dead"           // 死信队列（List）
+	outboundDeadKey       = "outbound:dead"          // 死信队列（List）
 )
 
 // OutboundMessage 下行消息结构 (Week2.2)
@@ -83,7 +83,7 @@ func (q *OutboundQueue) Dequeue(ctx context.Context) (*OutboundMessage, error) {
 // MarkProcessing 标记消息为处理中
 func (q *OutboundQueue) MarkProcessing(ctx context.Context, msg *OutboundMessage) error {
 	processingKey := fmt.Sprintf(outboundProcessingKey, msg.PhyID)
-	
+
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -94,7 +94,7 @@ func (q *OutboundQueue) MarkProcessing(ctx context.Context, msg *OutboundMessage
 	pipe.HSet(ctx, processingKey, msg.ID, data)
 	pipe.Expire(ctx, processingKey, time.Duration(msg.Timeout)*time.Millisecond*2)
 	_, err = pipe.Exec(ctx)
-	
+
 	return err
 }
 
@@ -107,7 +107,7 @@ func (q *OutboundQueue) MarkSuccess(ctx context.Context, msg *OutboundMessage) e
 // MarkFailed 标记消息处理失败（重试或进入死信队列）
 func (q *OutboundQueue) MarkFailed(ctx context.Context, msg *OutboundMessage, errMsg string) error {
 	processingKey := fmt.Sprintf(outboundProcessingKey, msg.PhyID)
-	
+
 	// 先从处理中删除
 	if err := q.client.HDel(ctx, processingKey, msg.ID).Err(); err != nil {
 		return err
@@ -124,12 +124,12 @@ func (q *OutboundQueue) MarkFailed(ctx context.Context, msg *OutboundMessage, er
 
 	// 超过最大重试次数，进入死信队列
 	deadMsg := map[string]interface{}{
-		"message":    msg,
-		"error":      errMsg,
-		"failed_at":  time.Now(),
+		"message":   msg,
+		"error":     errMsg,
+		"failed_at": time.Now(),
 	}
 	data, _ := json.Marshal(deadMsg)
-	
+
 	return q.client.LPush(ctx, outboundDeadKey, data).Err()
 }
 
@@ -143,13 +143,13 @@ func (q *OutboundQueue) GetProcessingCount(ctx context.Context) (int64, error) {
 	// 扫描所有processing:*的key
 	var cursor uint64
 	var count int64
-	
+
 	for {
 		keys, nextCursor, err := q.client.Scan(ctx, cursor, "outbound:processing:*", 100).Result()
 		if err != nil {
 			return 0, err
 		}
-		
+
 		for _, key := range keys {
 			n, err := q.client.HLen(ctx, key).Result()
 			if err != nil {
@@ -157,13 +157,13 @@ func (q *OutboundQueue) GetProcessingCount(ctx context.Context) (int64, error) {
 			}
 			count += n
 		}
-		
+
 		cursor = nextCursor
 		if cursor == 0 {
 			break
 		}
 	}
-	
+
 	return count, nil
 }
 
@@ -188,7 +188,7 @@ func parseMessage(member string) (*OutboundMessage, error) {
 			break
 		}
 	}
-	
+
 	if colonIdx == -1 {
 		return nil, fmt.Errorf("invalid message format")
 	}

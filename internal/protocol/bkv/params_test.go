@@ -20,7 +20,7 @@ func TestParamReadRequest(t *testing.T) {
 			paramIDs: []uint16{0x0001, 0x0002, 0x0003, 0x0010, 0x0020},
 		},
 		{
-			name:     "Max Params",
+			name: "Max Params",
 			paramIDs: func() []uint16 {
 				ids := make([]uint16, 20)
 				for i := 0; i < 20; i++ {
@@ -143,7 +143,7 @@ func TestParamWriteResponse(t *testing.T) {
 			data: []byte{
 				0x02,       // count = 2
 				0x00, 0x01, // param_id = 1
-				0x00, // result = 0 (成功)
+				0x00,       // result = 0 (成功)
 				0x00, 0x02, // param_id = 2
 				0x00, // result = 0 (成功)
 			},
@@ -153,9 +153,9 @@ func TestParamWriteResponse(t *testing.T) {
 			data: []byte{
 				0x03,       // count = 3
 				0x00, 0x01, // param_id = 1
-				0x00, // result = 0 (成功)
+				0x00,       // result = 0 (成功)
 				0x00, 0x02, // param_id = 2
-				0x02, // result = 2 (参数不存在)
+				0x02,       // result = 2 (参数不存在)
 				0x00, 0x03, // param_id = 3
 				0x03, // result = 3 (值无效)
 			},
@@ -258,7 +258,7 @@ func TestParamReset(t *testing.T) {
 
 	t.Run("Parse Response", func(t *testing.T) {
 		data := []byte{
-			0x00,                     // result = 0 (成功)
+			0x00,                    // result = 0 (成功)
 			'R', 'e', 's', 'e', 't', // message = "Reset"
 		}
 
@@ -312,7 +312,7 @@ func TestParamManagement_E2E(t *testing.T) {
 		// 3. 修改参数值
 		writeReq := &ParamWriteRequest{
 			Params: []ParamValue{
-				{ParamID: 0x0001, Value: []byte{0x00, 0xC8}}, // 200
+				{ParamID: 0x0001, Value: []byte{0x00, 0xC8}},             // 200
 				{ParamID: 0x0002, Value: []byte{0x00, 0x00, 0x07, 0xD0}}, // 2000
 			},
 		}
@@ -323,7 +323,7 @@ func TestParamManagement_E2E(t *testing.T) {
 		writeRespData := []byte{
 			0x02,       // count = 2
 			0x00, 0x01, // param_id = 1
-			0x00, // result = 0 (成功)
+			0x00,       // result = 0 (成功)
 			0x00, 0x02, // param_id = 2
 			0x00, // result = 0 (成功)
 		}
@@ -348,4 +348,3 @@ func TestParamManagement_E2E(t *testing.T) {
 		t.Logf("✅ E2E Test passed: Complete param lifecycle")
 	})
 }
-

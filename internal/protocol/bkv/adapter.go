@@ -31,6 +31,6 @@ func (a *Adapter) Sniff(prefix []byte) bool {
 	if len(prefix) < 2 {
 		return false
 	}
-	return (prefix[0] == magicUplink[0] && prefix[1] == magicUplink[1]) || 
-		   (prefix[0] == magicDownlink[0] && prefix[1] == magicDownlink[1])
+	return (prefix[0] == magicUplink[0] && prefix[1] == magicUplink[1]) ||
+		(prefix[0] == magicDownlink[0] && prefix[1] == magicDownlink[1])
 }

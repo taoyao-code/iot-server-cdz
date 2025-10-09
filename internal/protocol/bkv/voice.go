@@ -9,8 +9,8 @@ import (
 
 // VoiceConfigCommand 语音配置命令（下行）
 type VoiceConfigCommand struct {
-	PeriodCount uint8          // 静音时段数量（最多2个）
-	Periods     []VoicePeriod  // 静音时段列表
+	PeriodCount uint8         // 静音时段数量（最多2个）
+	Periods     []VoicePeriod // 静音时段列表
 }
 
 // VoicePeriod 静音时段
@@ -27,10 +27,10 @@ func EncodeVoiceConfigCommand(cmd *VoiceConfigCommand) []byte {
 	if count > 2 {
 		count = 2 // 最多2个时段
 	}
-	
+
 	buf := make([]byte, 1+int(count)*4)
 	buf[0] = count
-	
+
 	offset := 1
 	for i := 0; i < int(count); i++ {
 		buf[offset] = cmd.Periods[i].StartHour
@@ -39,7 +39,7 @@ func EncodeVoiceConfigCommand(cmd *VoiceConfigCommand) []byte {
 		buf[offset+3] = cmd.Periods[i].EndMinute
 		offset += 4
 	}
-	
+
 	return buf
 }
 
@@ -54,15 +54,15 @@ func ParseVoiceConfigResponse(data []byte) (*VoiceConfigResponse, error) {
 	if len(data) < 1 {
 		return nil, fmt.Errorf("voice config response too short")
 	}
-	
+
 	resp := &VoiceConfigResponse{
 		Result: data[0],
 	}
-	
+
 	if len(data) > 1 {
 		resp.Message = string(data[1:])
 	}
-	
+
 	return resp, nil
 }
 
@@ -80,14 +80,14 @@ func ValidateVoicePeriod(period *VoicePeriod) error {
 	if period.EndMinute > 59 {
 		return fmt.Errorf("invalid end_minute: %d", period.EndMinute)
 	}
-	
+
 	startMin := int(period.StartHour)*60 + int(period.StartMinute)
 	endMin := int(period.EndHour)*60 + int(period.EndMinute)
-	
+
 	if startMin >= endMin {
 		return fmt.Errorf("start time must be before end time")
 	}
-	
+
 	return nil
 }
 
@@ -120,7 +120,7 @@ func ParseSocketStateResponse(data []byte) (*SocketStateResponse, error) {
 	if len(data) < 14 {
 		return nil, fmt.Errorf("socket state response too short: %d bytes", len(data))
 	}
-	
+
 	resp := &SocketStateResponse{
 		SocketNo:    data[0],
 		Status:      data[1],
@@ -131,11 +131,11 @@ func ParseSocketStateResponse(data []byte) (*SocketStateResponse, error) {
 		Duration:    binary.BigEndian.Uint16(data[12:14]),
 		Temperature: 0,
 	}
-	
+
 	if len(data) >= 15 {
 		resp.Temperature = data[14]
 	}
-	
+
 	return resp, nil
 }
 
@@ -157,11 +157,11 @@ func GetSocketStatusDescription(status uint8) string {
 
 // ServiceFeeCommand 服务费充电命令（下行）
 type ServiceFeeCommand struct {
-	PortNo       uint8  // 端口号
-	Mode         uint8  // 充电模式: 0=按时, 1=按电量
-	Duration     uint16 // 充电时长（分钟）或电量（0.01度）
-	ElectricFee  uint16 // 电费（分/度）
-	ServiceFee   uint16 // 服务费（分/度）
+	PortNo      uint8  // 端口号
+	Mode        uint8  // 充电模式: 0=按时, 1=按电量
+	Duration    uint16 // 充电时长（分钟）或电量（0.01度）
+	ElectricFee uint16 // 电费（分/度）
+	ServiceFee  uint16 // 服务费（分/度）
 }
 
 // EncodeServiceFeeCommand 编码服务费充电命令
@@ -192,7 +192,7 @@ func ParseServiceFeeEndReport(data []byte) (*ServiceFeeEndReport, error) {
 	if len(data) < 20 {
 		return nil, fmt.Errorf("service fee end report too short: %d bytes", len(data))
 	}
-	
+
 	report := &ServiceFeeEndReport{
 		PortNo:        data[0],
 		TotalDuration: binary.BigEndian.Uint16(data[1:3]),
@@ -202,7 +202,7 @@ func ParseServiceFeeEndReport(data []byte) (*ServiceFeeEndReport, error) {
 		TotalAmount:   binary.BigEndian.Uint32(data[15:19]),
 		EndReason:     data[19],
 	}
-	
+
 	return report, nil
 }
 
@@ -210,4 +210,3 @@ func ParseServiceFeeEndReport(data []byte) (*ServiceFeeEndReport, error) {
 func EncodeServiceFeeEndReply(portNo uint8, result uint8) []byte {
 	return []byte{portNo, result}
 }
-

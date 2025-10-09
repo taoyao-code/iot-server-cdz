@@ -18,7 +18,7 @@ type RedisWorker struct {
 	retryMax   int
 	stopC      chan struct{}
 	getConn    func(phyID string) (interface{}, bool)
-	
+
 	// 统计
 	sent      atomic.Int64
 	failed    atomic.Int64
@@ -50,7 +50,7 @@ func (w *RedisWorker) SetGetConn(fn func(phyID string) (interface{}, bool)) {
 // Start 启动Worker
 func (w *RedisWorker) Start(ctx context.Context) {
 	w.logger.Info("redis outbound worker started")
-	
+
 	ticker := time.NewTicker(time.Duration(w.throttleMs) * time.Millisecond)
 	defer ticker.Stop()
 
@@ -81,14 +81,14 @@ func (w *RedisWorker) processOne(ctx context.Context) {
 		w.logger.Error("dequeue failed", zap.Error(err))
 		return
 	}
-	
+
 	if msg == nil {
 		return // 队列为空
 	}
 
 	// 标记为处理中
 	if err := w.queue.MarkProcessing(ctx, msg); err != nil {
-		w.logger.Error("mark processing failed", 
+		w.logger.Error("mark processing failed",
 			zap.String("msg_id", msg.ID),
 			zap.Error(err))
 		return
@@ -164,7 +164,7 @@ func (w *RedisWorker) markFailed(ctx context.Context, msg *redisstorage.Outbound
 // Stats 获取统计信息
 func (w *RedisWorker) Stats(ctx context.Context) map[string]interface{} {
 	queueStats, _ := w.queue.Stats(ctx)
-	
+
 	return map[string]interface{}{
 		"sent":       w.sent.Load(),
 		"failed":     w.failed.Load(),

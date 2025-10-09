@@ -33,7 +33,7 @@ func Parse(b []byte) (*Frame, error) {
 	// 解析包长度 (长度字段后面的数据长度)
 	dataLen := binary.BigEndian.Uint16(b[2:4])
 	totalLen := 4 + int(dataLen) // magic(2) + len(2) + data(dataLen)
-	
+
 	if len(b) < totalLen {
 		return nil, ErrBadLen
 	}
@@ -49,7 +49,7 @@ func Parse(b []byte) (*Frame, error) {
 		Tail:  tailMagic,
 	}
 
-	pos := 4 // 跳过magic和len
+	pos := 4                // 跳过magic和len
 	dataEnd := totalLen - 2 // 排除包尾fcee
 
 	// 解析命令码 (2字节)
@@ -131,7 +131,7 @@ func (d *StreamDecoder) Feed(p []byte) ([]*Frame, error) {
 		// 读取数据长度
 		dataLen := binary.BigEndian.Uint16(d.buf[2:4])
 		totalLen := 4 + int(dataLen) // magic(2) + len(2) + data(dataLen)
-		
+
 		if dataLen < 2 { // 至少需要包尾fcee
 			// 长度无效，跳过这个magic
 			d.buf = d.buf[1:]
@@ -168,5 +168,3 @@ func (d *StreamDecoder) findFrameStart() int {
 	}
 	return -1
 }
-
-

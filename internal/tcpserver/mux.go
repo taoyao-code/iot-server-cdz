@@ -49,6 +49,8 @@ func (m *Mux) BindToConn(cc *ConnContext) {
 				return
 			}
 		}
-		if handler != nil { handler(p) }
+		if handler != nil {
+			handler(p)
+		}
 	})
 }

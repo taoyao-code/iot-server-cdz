@@ -33,7 +33,7 @@ func ParseTLVs(data []byte) (TLVList, error) {
 
 		// 检查是否有足够的数据
 		if offset+int(tlv.Length) > len(data) {
-			return nil, fmt.Errorf("TLV length %d exceeds remaining data %d at offset %d", 
+			return nil, fmt.Errorf("TLV length %d exceeds remaining data %d at offset %d",
 				tlv.Length, len(data)-offset, offset-2)
 		}
 
@@ -148,11 +148,11 @@ func NewTLVString(tag uint8, value string) TLV {
 // GN协议中的主要TLV标签常量
 const (
 	// 设备信息相关
-	TagSocketNumber   = 0x4A // 插座序号
-	TagSoftwareVer    = 0x3E // 插座软件版本
-	TagTemperature    = 0x07 // 温度
-	TagRSSI           = 0x96 // RSSI信号强度
-	TagSocketAttr     = 0x5B // 插孔属性
+	TagSocketNumber = 0x4A // 插座序号
+	TagSoftwareVer  = 0x3E // 插座软件版本
+	TagTemperature  = 0x07 // 温度
+	TagRSSI         = 0x96 // RSSI信号强度
+	TagSocketAttr   = 0x5B // 插孔属性
 
 	// 插孔属性相关
 	TagPortNumber     = 0x08 // 插孔号
@@ -165,7 +165,7 @@ const (
 	TagDuration       = 0x0E // 充电时间
 
 	// 网关信息相关
-	TagGatewayID      = 0x03 // 网关ID
-	TagICCID          = 0x01 // ICCID
-	TagDeviceID       = 0x02 // 设备ID
+	TagGatewayID = 0x03 // 网关ID
+	TagICCID     = 0x01 // ICCID
+	TagDeviceID  = 0x02 // 设备ID
 )

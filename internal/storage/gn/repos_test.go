@@ -107,29 +107,29 @@ func (r *MockInboundLogsRepo) Append(ctx context.Context, deviceID string, cmd i
 func TestMockDevicesRepo(t *testing.T) {
 	repo := NewMockDevicesRepo()
 	ctx := context.Background()
-	
+
 	// 测试UpsertHeartbeat
 	deviceID := "test_device_001"
 	gatewayID := "82200520004869"
 	iccid := "89860463112070319417"
 	rssi := 31
 	fwVer := "v1.2.3"
-	
+
 	err := repo.UpsertHeartbeat(ctx, deviceID, gatewayID, iccid, rssi, fwVer)
 	if err != nil {
 		t.Fatalf("UpsertHeartbeat failed: %v", err)
 	}
-	
+
 	// 测试FindByID
 	device, err := repo.FindByID(ctx, deviceID)
 	if err != nil {
 		t.Fatalf("FindByID failed: %v", err)
 	}
-	
+
 	if device == nil {
 		t.Fatal("Device should not be nil")
 	}
-	
+
 	if device.DeviceID != deviceID {
 		t.Errorf("DeviceID mismatch: expected %s, got %s", deviceID, device.DeviceID)
 	}
@@ -148,21 +148,21 @@ func TestMockDevicesRepo(t *testing.T) {
 	if device.LastSeen == nil {
 		t.Error("LastSeen should not be nil")
 	}
-	
+
 	// 测试UpdateSeen
 	originalTime := *device.LastSeen
 	time.Sleep(1 * time.Millisecond) // 确保时间差异
-	
+
 	err = repo.UpdateSeen(ctx, deviceID)
 	if err != nil {
 		t.Fatalf("UpdateSeen failed: %v", err)
 	}
-	
+
 	updatedDevice, err := repo.FindByID(ctx, deviceID)
 	if err != nil {
 		t.Fatalf("FindByID after UpdateSeen failed: %v", err)
 	}
-	
+
 	if !updatedDevice.LastSeen.After(originalTime) {
 		t.Error("LastSeen should be updated to a more recent time")
 	}
@@ -172,7 +172,7 @@ func TestMockPortsRepo(t *testing.T) {
 	repo := NewMockPortsRepo()
 	ctx := context.Background()
 	deviceID := "test_device_001"
-	
+
 	// 测试UpsertPortSnapshot
 	ports := []PortSnapshot{
 		{
@@ -200,25 +200,25 @@ func TestMockPortsRepo(t *testing.T) {
 			UpdatedAt:  time.Now(),
 		},
 	}
-	
+
 	err := repo.UpsertPortSnapshot(ctx, deviceID, ports)
 	if err != nil {
 		t.Fatalf("UpsertPortSnapshot failed: %v", err)
 	}
-	
+
 	// 测试ListByDevice
 	retrievedPorts, err := repo.ListByDevice(ctx, deviceID)
 	if err != nil {
 		t.Fatalf("ListByDevice failed: %v", err)
 	}
-	
+
 	if len(retrievedPorts) != len(ports) {
 		t.Fatalf("Expected %d ports, got %d", len(ports), len(retrievedPorts))
 	}
-	
+
 	for i, expectedPort := range ports {
 		actualPort := retrievedPorts[i]
-		
+
 		if actualPort.DeviceID != expectedPort.DeviceID {
 			t.Errorf("Port %d DeviceID mismatch: expected %s, got %s", i, expectedPort.DeviceID, actualPort.DeviceID)
 		}
@@ -237,7 +237,7 @@ func TestMockPortsRepo(t *testing.T) {
 func TestMockInboundLogsRepo(t *testing.T) {
 	repo := NewMockInboundLogsRepo()
 	ctx := context.Background()
-	
+
 	// 测试Append
 	deviceID := "test_device_001"
 	cmd := 0x0000
@@ -245,17 +245,17 @@ func TestMockInboundLogsRepo(t *testing.T) {
 	payloadHex := "20200730164545"
 	parsedOK := true
 	reason := "success"
-	
+
 	err := repo.Append(ctx, deviceID, cmd, seq, payloadHex, parsedOK, reason)
 	if err != nil {
 		t.Fatalf("Append failed: %v", err)
 	}
-	
+
 	// 验证日志被正确添加
 	if len(repo.logs) != 1 {
 		t.Fatalf("Expected 1 log entry, got %d", len(repo.logs))
 	}
-	
+
 	log := repo.logs[0]
 	if log.DeviceID != deviceID {
 		t.Errorf("DeviceID mismatch: expected %s, got %s", deviceID, log.DeviceID)
@@ -283,17 +283,17 @@ func TestReposIntegration(t *testing.T) {
 	devicesRepo := NewMockDevicesRepo()
 	portsRepo := NewMockPortsRepo()
 	inboundRepo := NewMockInboundLogsRepo()
-	
+
 	ctx := context.Background()
 	deviceID := "test_device_001"
 	gatewayID := "82200520004869"
-	
+
 	// 1. 设备心跳更新
 	err := devicesRepo.UpsertHeartbeat(ctx, deviceID, gatewayID, "89860463112070319417", 31, "v1.2.3")
 	if err != nil {
 		t.Fatalf("Device heartbeat failed: %v", err)
 	}
-	
+
 	// 2. 端口状态更新
 	ports := []PortSnapshot{
 		{
@@ -309,59 +309,59 @@ func TestReposIntegration(t *testing.T) {
 			UpdatedAt:  time.Now(),
 		},
 	}
-	
+
 	err = portsRepo.UpsertPortSnapshot(ctx, deviceID, ports)
 	if err != nil {
 		t.Fatalf("Port snapshot failed: %v", err)
 	}
-	
+
 	// 3. 记录入站日志
 	err = inboundRepo.Append(ctx, deviceID, 0x1000, 12345, "4a01013e02ffff", true, "parsed_successfully")
 	if err != nil {
 		t.Fatalf("Inbound log failed: %v", err)
 	}
-	
+
 	// 4. 验证数据一致性
 	device, err := devicesRepo.FindByID(ctx, deviceID)
 	if err != nil {
 		t.Fatalf("Find device failed: %v", err)
 	}
-	
+
 	if device.GatewayID != gatewayID {
 		t.Errorf("Device gateway ID mismatch")
 	}
-	
+
 	retrievedPorts, err := portsRepo.ListByDevice(ctx, deviceID)
 	if err != nil {
 		t.Fatalf("List ports failed: %v", err)
 	}
-	
+
 	if len(retrievedPorts) != 1 {
 		t.Errorf("Expected 1 port, got %d", len(retrievedPorts))
 	}
-	
+
 	if len(inboundRepo.logs) != 1 {
 		t.Errorf("Expected 1 log entry, got %d", len(inboundRepo.logs))
 	}
-	
-	t.Logf("Integration test passed: device=%+v, ports=%+v, logs=%d", 
+
+	t.Logf("Integration test passed: device=%+v, ports=%+v, logs=%d",
 		device, retrievedPorts, len(inboundRepo.logs))
 }
 
 // TestPostgresReposInterface 测试PostgreSQL仓储接口（仅编译时检查）
 func TestPostgresReposInterface(t *testing.T) {
 	// 这个测试主要是编译时检查，确保PostgreSQL实现符合接口
-	
+
 	// 如果有真实的数据库连接，可以测试实际功能
 	// pool := getTestDBPool() // 实际测试时需要
 	// repos := NewPostgresRepos(pool)
-	
+
 	// 模拟接口检查
 	var _ DevicesRepo = (*postgresDevicesRepo)(nil)
 	var _ PortsRepo = (*postgresPortsRepo)(nil)
 	var _ InboundLogsRepo = (*postgresInboundLogsRepo)(nil)
 	var _ OutboundQueueRepo = (*postgresOutboundQueueRepo)(nil)
 	var _ ParamsPendingRepo = (*postgresParamsPendingRepo)(nil)
-	
+
 	t.Log("All repository interfaces are properly implemented")
 }

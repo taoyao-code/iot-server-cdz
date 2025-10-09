@@ -44,7 +44,7 @@ func TestFrame_EncodeDecodeRoundTrip(t *testing.T) {
 		t.Errorf("Direction mismatch: expected 0x%02X, got 0x%02X", frame.Direction, decoded.Direction)
 	}
 	if decoded.GetGatewayIDHex() != frame.GetGatewayIDHex() {
-		t.Errorf("GatewayID mismatch: expected %s, got %s", 
+		t.Errorf("GatewayID mismatch: expected %s, got %s",
 			frame.GetGatewayIDHex(), decoded.GetGatewayIDHex())
 	}
 }
@@ -81,7 +81,7 @@ func TestParseFrame_RealExample(t *testing.T) {
 		t.Errorf("Expected gateway ID %s, got %s", expectedGWID, frame.GetGatewayIDHex())
 	}
 
-	t.Logf("Parsed frame successfully: cmd=0x%04X, seq=0x%08X, gwid=%s", 
+	t.Logf("Parsed frame successfully: cmd=0x%04X, seq=0x%08X, gwid=%s",
 		frame.Command, frame.Sequence, frame.GetGatewayIDHex())
 	t.Logf("Payload: %s", hex.EncodeToString(frame.Payload))
 }
@@ -113,7 +113,7 @@ func TestFrame_InvalidGatewayID(t *testing.T) {
 
 func TestParseFrame_InvalidHeader(t *testing.T) {
 	// 测试无效帧头
-	data := []byte{0xFF, 0xFF, 0x00, 0x18} // 无效帧头
+	data := []byte{0xFF, 0xFF, 0x00, 0x18}   // 无效帧头
 	data = append(data, make([]byte, 20)...) // 填充足够长度
 
 	_, err := ParseFrame(data)

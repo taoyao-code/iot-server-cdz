@@ -10,12 +10,12 @@ func TestParseBKVControlCommand_ByTime(t *testing.T) {
 	// 基于协议文档的按时充电指令: 插座02, A孔, 开启, 按时, 240分钟, 0Wh
 	// 02 00 01 01 00f0 0000
 	data, _ := hex.DecodeString("0200010100f00000")
-	
+
 	cmd, err := ParseBKVControlCommand(data)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
-	
+
 	if cmd.SocketNo != 2 {
 		t.Errorf("expected socket 2, got %d", cmd.SocketNo)
 	}
@@ -43,15 +43,15 @@ func TestParseBKVControlCommand_ByPowerLevel(t *testing.T) {
 		"0fa00032003c" + // 挡位2: 4000W, 50分, 60分钟
 		"17700064003c" + // 挡位3: 6000W, 100分, 60分钟
 		"1f400096003c" + // 挡位4: 8000W, 150分, 60分钟
-		"4e2001f40078"   // 挡位5: 20000W, 500分, 120分钟
-	
+		"4e2001f40078" // 挡位5: 20000W, 500分, 120分钟
+
 	data, _ := hex.DecodeString(hexStr)
-	
+
 	cmd, err := ParseBKVControlCommand(data)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
-	
+
 	if cmd.Mode != ChargingModeByLevel {
 		t.Errorf("expected by power level mode, got %d", cmd.Mode)
 	}
@@ -64,7 +64,7 @@ func TestParseBKVControlCommand_ByPowerLevel(t *testing.T) {
 	if len(cmd.PowerLevels) != 5 {
 		t.Errorf("expected 5 power levels, got %d", len(cmd.PowerLevels))
 	}
-	
+
 	// 检查第一个挡位
 	if cmd.PowerLevels[0].Power != 2000 {
 		t.Errorf("expected power 2000W, got %d", cmd.PowerLevels[0].Power)
@@ -79,14 +79,14 @@ func TestParseBKVChargingEnd_Normal(t *testing.T) {
 	// 基于协议文档的充电结束上报
 	// 插座02, 版本5036, 温度30, RSSI20, A孔, 状态98, 业务号0068, 功率0000, 电流0001, 用电量0050, 时间002d
 	hexStr := "02503630200098006800000001005000" + "2d"
-	
+
 	data, _ := hex.DecodeString(hexStr)
-	
+
 	end, err := ParseBKVChargingEnd(data)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
-	
+
 	if end.SocketNo != 2 {
 		t.Errorf("expected socket 2, got %d", end.SocketNo)
 	}
@@ -105,7 +105,7 @@ func TestParseBKVChargingEnd_Normal(t *testing.T) {
 	if end.ChargingTime != 45 { // 0x002d = 45
 		t.Errorf("expected time 45, got %d", end.ChargingTime)
 	}
-	
+
 	// 检查从状态位推导的结束原因
 	// 状态98 = 10011000，bit4=1表示空载
 	if end.EndReason != ReasonNoLoad {
@@ -127,7 +127,7 @@ func TestDeriveEndReasonFromStatus(t *testing.T) {
 		{0x18, ReasonPowerOff, "离线状态 (bit7=0)"},
 		{0xEE, ReasonNormal, "正常状态 (无空载、无异常)"},
 	}
-	
+
 	for _, tc := range testCases {
 		result := deriveEndReasonFromStatus(tc.status)
 		if result != tc.expected {
@@ -149,7 +149,7 @@ func TestGetControlCommandType(t *testing.T) {
 		{[]byte{1, 0, 1, 99}, "unknown", "未知模式"},
 		{[]byte{1, 0}, "unknown", "数据不足"},
 	}
-	
+
 	for _, tc := range testCases {
 		result := GetControlCommandType(tc.data)
 		if result != tc.expected {
@@ -165,12 +165,12 @@ func TestBKVControlCommand_Integration(t *testing.T) {
 	// 插座02, A孔, 开启, 按时, 240分钟(0x00f0), 0Wh
 	protocolExample := "0200010100f00000"
 	data, _ := hex.DecodeString(protocolExample)
-	
+
 	cmd, err := ParseBKVControlCommand(data)
 	if err != nil {
 		t.Fatalf("parse protocol example error: %v", err)
 	}
-	
+
 	// 验证解析结果与协议文档描述一致
 	if cmd.SocketNo != 2 {
 		t.Errorf("expected socket 2, got %d", cmd.SocketNo)

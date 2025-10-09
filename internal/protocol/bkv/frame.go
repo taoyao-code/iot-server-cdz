@@ -27,7 +27,7 @@ func (f *Frame) IsUplink() bool {
 	return f.Direction == 0x01
 }
 
-// IsDownlink 判断是否为下行帧  
+// IsDownlink 判断是否为下行帧
 func (f *Frame) IsDownlink() bool {
 	return f.Direction == 0x00
 }
@@ -82,5 +82,3 @@ var (
 	magicDownlink = []byte{0xFC, 0xFF} // 服务器下行
 	tailMagic     = []byte{0xFC, 0xEE} // 包尾
 )
-
-

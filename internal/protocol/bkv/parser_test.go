@@ -134,5 +134,3 @@ func TestStreamDecoder_HalfPacket(t *testing.T) {
 		t.Errorf("expected cmd 0x0000, got 0x%04x", frames2[0].Cmd)
 	}
 }
-
-

@@ -16,7 +16,7 @@ func Build(cmd uint16, msgID uint32, gatewayID string, data []byte) []byte {
 	// 计算数据部分长度：cmd(2) + msgID(4) + direction(1) + gatewayID + data + checksum(1) + fcee(2)
 	dataLen := 2 + 4 + 1 + len(gatewayIDBytes) + len(data) + 1 + 2
 	totalLen := 4 + dataLen // magic(2) + len(2) + data
-	
+
 	buf := make([]byte, 0, totalLen)
 
 	// 包头 (下行用 fcff)
@@ -65,7 +65,7 @@ func BuildUplink(cmd uint16, msgID uint32, gatewayID string, data []byte) []byte
 
 	dataLen := 2 + 4 + 1 + len(gatewayIDBytes) + len(data) + 1 + 2
 	totalLen := 4 + dataLen
-	
+
 	buf := make([]byte, 0, totalLen)
 
 	// 包头 (上行用 fcfe)
@@ -113,5 +113,3 @@ func calculateChecksum(data []byte) uint8 {
 	}
 	return sum
 }
-
-

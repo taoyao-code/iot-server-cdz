@@ -11,13 +11,13 @@ func TestParseBKVExceptionEvent(t *testing.T) {
 		Cmd:       0x1010,
 		GatewayID: "82230811001447",
 		Fields: []TLVField{
-			{Tag: 0x4A, Value: []byte{0x02}},         // 插座号 = 2
-			{Tag: 0x54, Value: []byte{0x08}},         // 插座事件原因 = 8
-			{Tag: 0x4B, Value: []byte{0x00}},         // 插座事件状态 = 0
-			{Tag: 0x4E, Value: []byte{0x08, 0xBC}},   // 过压值 = 2236
-			{Tag: 0x4F, Value: []byte{0x08, 0xBC}},   // 欠压值 = 2236
-			{Tag: 0x57, Value: []byte{0x80}},         // 插孔1充电状态 = 128
-			{Tag: 0x58, Value: []byte{0xB0}},         // 插孔2充电状态 = 176
+			{Tag: 0x4A, Value: []byte{0x02}},       // 插座号 = 2
+			{Tag: 0x54, Value: []byte{0x08}},       // 插座事件原因 = 8
+			{Tag: 0x4B, Value: []byte{0x00}},       // 插座事件状态 = 0
+			{Tag: 0x4E, Value: []byte{0x08, 0xBC}}, // 过压值 = 2236
+			{Tag: 0x4F, Value: []byte{0x08, 0xBC}}, // 欠压值 = 2236
+			{Tag: 0x57, Value: []byte{0x80}},       // 插孔1充电状态 = 128
+			{Tag: 0x58, Value: []byte{0xB0}},       // 插孔2充电状态 = 176
 		},
 	}
 
@@ -47,18 +47,18 @@ func TestParseBKVParameterQuery(t *testing.T) {
 		Cmd:       0x1012,
 		GatewayID: "82220420000552",
 		Fields: []TLVField{
-			{Tag: 0x4A, Value: []byte{0x02}},         // 插座号 = 2
-			{Tag: 0x23, Value: []byte{0x00, 0x64}},   // 充满功率阈值 = 100 (10.0W)
-			{Tag: 0x60, Value: []byte{0x0A}},         // 涓流阈值 = 10%
-			{Tag: 0x21, Value: []byte{0x1C, 0x20}},   // 充满续充时间 = 7200s
-			{Tag: 0x24, Value: []byte{0x00, 0x08}},   // 空载功率阈值 = 8 (0.8W)
-			{Tag: 0x22, Value: []byte{0x00, 0x78}},   // 空载延时时间 = 120s
-			{Tag: 0x59, Value: []byte{0x02, 0x58}},   // 最大充电时间 = 600min
-			{Tag: 0x25, Value: []byte{0x55}},         // 高温阈值 = 85°C
-			{Tag: 0x11, Value: []byte{0x1B, 0x58}},   // 功率限值 = 7000 (700.0W)
-			{Tag: 0x10, Value: []byte{0x13, 0x88}},   // 过流限值 = 5000 (5A)
-			{Tag: 0x68, Value: []byte{0x00, 0x00}},   // 按键基础金额 = 0
-			{Tag: 0x93, Value: []byte{0x00, 0x2D}},   // 防脉冲时间 = 45
+			{Tag: 0x4A, Value: []byte{0x02}},       // 插座号 = 2
+			{Tag: 0x23, Value: []byte{0x00, 0x64}}, // 充满功率阈值 = 100 (10.0W)
+			{Tag: 0x60, Value: []byte{0x0A}},       // 涓流阈值 = 10%
+			{Tag: 0x21, Value: []byte{0x1C, 0x20}}, // 充满续充时间 = 7200s
+			{Tag: 0x24, Value: []byte{0x00, 0x08}}, // 空载功率阈值 = 8 (0.8W)
+			{Tag: 0x22, Value: []byte{0x00, 0x78}}, // 空载延时时间 = 120s
+			{Tag: 0x59, Value: []byte{0x02, 0x58}}, // 最大充电时间 = 600min
+			{Tag: 0x25, Value: []byte{0x55}},       // 高温阈值 = 85°C
+			{Tag: 0x11, Value: []byte{0x1B, 0x58}}, // 功率限值 = 7000 (700.0W)
+			{Tag: 0x10, Value: []byte{0x13, 0x88}}, // 过流限值 = 5000 (5A)
+			{Tag: 0x68, Value: []byte{0x00, 0x00}}, // 按键基础金额 = 0
+			{Tag: 0x93, Value: []byte{0x00, 0x2D}}, // 防脉冲时间 = 45
 		},
 	}
 
@@ -203,16 +203,16 @@ func TestBKVPayload_IsCardCharging(t *testing.T) {
 func TestBKVCommands_Extension(t *testing.T) {
 	// 测试现有的BKV命令
 	supportedCommands := []uint16{0x0000, 0x1000, 0x0015, 0x0005, 0x0007}
-	
+
 	for _, cmd := range supportedCommands {
 		if !IsBKVCommand(cmd) {
 			t.Errorf("command 0x%04X should be supported", cmd)
 		}
 	}
-	
+
 	// 测试不支持的命令（更新：0x01-0x04已在Week9实现）
 	unsupportedCommands := []uint16{0x0006, 0x0010, 0x1001, 0x2000}
-	
+
 	for _, cmd := range unsupportedCommands {
 		if IsBKVCommand(cmd) {
 			t.Errorf("command 0x%04X should not be supported", cmd)
