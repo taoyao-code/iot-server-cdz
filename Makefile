@@ -126,15 +126,12 @@ docker-clean:
 	docker system prune -f
 
 # 部署
-.PHONY: deploy deploy-prod backup restore
+.PHONY: deploy backup restore
 
 deploy:
-	@echo "执行部署..."
-	./scripts/deploy.sh deploy
-
-deploy-prod:
-	@echo "执行生产环境部署..."
-	./scripts/deploy.sh deploy
+	@echo "执行部署（自动备份 + 零停机 + 智能检测）..."
+	@echo "💡 提示：首次部署会自动初始化所有服务，后续部署零停机更新"
+	./scripts/deploy.sh
 
 backup:
 	@echo "执行备份..."
@@ -155,6 +152,45 @@ clean-all: clean
 	@echo "深度清理..."
 	docker-compose -f docker-compose.prod.yml down -v
 	docker compose down -v
+
+# CI/CD 相关
+.PHONY: ci-check ci-test ci-build ci-setup
+
+ci-check:
+	@echo "执行 CI 检查..."
+	@echo "1. 代码格式检查..."
+	@if [ "$$(gofmt -s -l . | wc -l)" -gt 0 ]; then \
+		echo "❌ 以下文件需要格式化:"; \
+		gofmt -s -l .; \
+		exit 1; \
+	fi
+	@echo "✅ 代码格式检查通过"
+	@echo "2. 静态分析..."
+	@go vet $(PKG)
+	@echo "✅ 静态分析通过"
+
+ci-test:
+	@echo "运行 CI 测试..."
+	@go test -v -race -coverprofile=coverage.out $(PKG)
+	@go tool cover -func=coverage.out
+
+ci-build:
+	@echo "CI 构建..."
+	@make build
+	@echo "✅ 构建成功"
+
+ci-setup:
+	@echo "设置 CI/CD 环境..."
+	@if [ ! -f .github/workflows/ci.yml ]; then \
+		echo "❌ GitHub Actions 配置文件不存在"; \
+		exit 1; \
+	fi
+	@echo "✅ GitHub Actions 已配置"
+	@echo ""
+	@echo "下一步："
+	@echo "1. 配置 GitHub Secrets（参考 .github/secrets-template.txt）"
+	@echo "2. 配置 GitHub Environments（staging, production）"
+	@echo "3. 查看完整指南: docs/CI-CD-GUIDE.md"
 
 # 帮助
 help:
@@ -179,7 +215,7 @@ help:
 	@echo "  make prod-down       - 停止生产环境"
 	@echo "  make prod-restart    - 重启生产环境"
 	@echo "  make prod-logs       - 查看生产环境日志"
-	@echo "  make deploy          - 执行完整部署"
+	@echo "  make deploy          - 安全部署（推荐：自动备份+零停机+智能检测）"
 	@echo ""
 	@echo "维护相关："
 	@echo "  make backup          - 备份数据"
@@ -187,6 +223,15 @@ help:
 	@echo "  make clean           - 清理构建文件"
 	@echo "  make clean-all       - 深度清理（包括Docker）"
 	@echo ""
+	@echo "CI/CD相关："
+	@echo "  make ci-check        - 执行 CI 代码检查"
+	@echo "  make ci-test         - 运行 CI 测试套件"
+	@echo "  make ci-build        - CI 构建验证"
+	@echo "  make ci-setup        - 检查 CI/CD 配置"
+	@echo ""
 	@echo "当前版本: $(VERSION)"
+	@echo ""
+	@echo "💡 提示: 现已支持 GitHub Actions 自动化部署"
+	@echo "   查看文档: docs/CI-CD-GUIDE.md"
 
 

@@ -1,0 +1,38 @@
+# 代码所有者配置
+# 详细说明: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# 默认所有者（所有未匹配的文件）
+* @zhanghai
+
+# 核心代码目录
+/internal/ @zhanghai
+/cmd/ @zhanghai
+
+# 协议相关（需要协议专家审查）
+/internal/protocol/ @zhanghai
+
+# API 和路由
+/internal/api/ @zhanghai
+
+# 配置文件
+/configs/ @zhanghai
+*.yaml @zhanghai
+*.yml @zhanghai
+
+# 数据库迁移（需要 DBA 审查）
+/db/migrations/ @zhanghai
+
+# CI/CD 配置（需要 DevOps 审查）
+/.github/workflows/ @zhanghai
+/scripts/deploy.sh @zhanghai
+/Dockerfile @zhanghai
+/docker-compose*.yml @zhanghai
+
+# 文档
+/docs/ @zhanghai
+/*.md @zhanghai
+
+# 依赖管理
+/go.mod @zhanghai
+/go.sum @zhanghai
+

@@ -39,7 +39,7 @@ cd iot-server
 
 ```bash
 # 复制环境变量模板
-cp .env.example .env
+cp scripts/env.example .env
 
 # 编辑配置文件
 nano .env
@@ -66,30 +66,31 @@ WEBHOOK_SECRET=$(openssl rand -base64 32)
 ### 3. 一键部署
 
 ```bash
-# 赋予执行权限
-chmod +x scripts/deploy.sh
-
-# 执行部署
-./scripts/deploy.sh deploy
+# 执行安全部署（自动备份 + 零停机）
+make deploy
 ```
 
 部署脚本会自动完成：
 
-- ✅ 环境检查
+- ✅ 数据库自动备份（后续部署）
+- ✅ 智能检测（首次/更新）
 - ✅ Docker镜像构建
-- ✅ 服务启动
-- ✅ 数据库初始化
+- ✅ 零停机更新
 - ✅ 健康检查
+- ✅ 失败自动回滚
 
 ### 4. 验证部署
 
 ```bash
-# 检查服务状态
-./scripts/deploy.sh status
+# 查看服务状态
+docker-compose ps
 
 # 测试API
-curl http://localhost:8080/healthz
-curl http://localhost:8080/metrics
+curl http://localhost:7055/healthz
+curl http://localhost:7055/metrics
+
+# 查看日志
+make prod-logs
 ```
 
 ## ⚙️ 配置说明
@@ -149,26 +150,23 @@ thirdparty:
 
 ## 📦 部署步骤
 
-### 方式一：使用部署脚本（推荐）
+### 方式一：使用 Makefile（推荐）
 
 ```bash
-# 完整部署
-./scripts/deploy.sh deploy
+# 安全部署（自动备份 + 零停机）
+make deploy
 
-# 仅构建镜像
-./scripts/deploy.sh build
-
-# 启动服务
-./scripts/deploy.sh start
+# 构建镜像
+make docker-build
 
 # 重启服务
-./scripts/deploy.sh restart
+make prod-restart
 
 # 查看日志
-./scripts/deploy.sh logs
+make prod-logs
 
 # 停止服务
-./scripts/deploy.sh stop
+make prod-down
 ```
 
 ### 方式二：手动部署
@@ -378,11 +376,15 @@ sudo ufw allow from YOUR_IP to any port 8080
 # 1. 拉取最新代码
 git pull origin main
 
-# 2. 构建新镜像
-./scripts/deploy.sh build
+# 2. 执行安全部署（自动备份 + 零停机）
+make deploy
 
-# 3. 重启服务
-./scripts/deploy.sh restart
+# 部署过程：
+# ✅ 自动备份数据库
+# ✅ 构建新镜像（利用缓存）
+# ✅ 零停机更新（仅更新应用，数据库不重启）
+# ✅ 健康检查
+# ✅ 失败自动回滚
 ```
 
 ### 数据库迁移

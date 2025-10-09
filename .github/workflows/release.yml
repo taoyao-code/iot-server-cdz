@@ -1,0 +1,72 @@
+name: Release - 版本发布
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  create-release:
+    name: 创建 GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 生成变更日志
+        id: changelog
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # 提取 CHANGELOG.md 中当前版本的内容
+          if grep -q "$VERSION" CHANGELOG.md; then
+            CHANGELOG=$(sed -n "/## \[$VERSION\]/,/## \[/p" CHANGELOG.md | sed '$d' | tail -n +2)
+            echo "changelog<<EOF" >> $GITHUB_OUTPUT
+            echo "$CHANGELOG" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "changelog=无变更日志" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 创建 Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ steps.changelog.outputs.version }}
+          body: |
+            ## 🎉 版本发布: ${{ steps.changelog.outputs.version }}
+
+            ### 📝 变更内容
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ### 📦 部署
+
+            ```bash
+            # 拉取镜像
+            docker pull ${{ secrets.DOCKER_USERNAME }}/iot-server:${{ steps.changelog.outputs.version }}
+
+            # 部署
+            export BUILD_VERSION=${{ steps.changelog.outputs.version }}
+            docker-compose up -d
+            ```
+
+            ### 🔗 相关链接
+
+            - [部署文档](./DEPLOYMENT.md)
+            - [API文档](./docs/api/)
+            - [变更日志](./CHANGELOG.md)
+          draft: false
+          prerelease: false
+
+      - name: 上传构建产物
+        run: |
+          echo "📦 构建产物上传功能（可选）"
+          # 可以上传编译好的二进制文件

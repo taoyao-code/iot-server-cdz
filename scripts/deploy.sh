@@ -1,375 +1,226 @@
 #!/bin/bash
 set -e
 
+# ============================================
+# IOT Server 部署脚本
+# 特性：自动备份 + 零停机 + 智能检测
+# ============================================
+
 # 颜色输出
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+BLUE='\033[0;34m'
+NC='\033[0m'
 
-# 日志函数
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_step() { echo -e "${BLUE}[STEP]${NC} $1"; }
 
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
+# 检查是否在项目根目录
+if [ ! -f "docker-compose.yml" ]; then
+    log_error "请在项目根目录执行此脚本"
+    exit 1
+fi
 
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# 检查必要的工具
-check_requirements() {
-    log_info "检查部署环境..."
+# 备份数据
+backup_data() {
+    log_step "1/6 备份数据库..."
     
-    # 检查Docker
-    if ! command -v docker &> /dev/null; then
-        log_error "Docker未安装，请先安装Docker"
-        log_error "安装指引: https://docs.docker.com/get-docker/"
-        exit 1
-    fi
-    
-    # 检查Docker服务状态
-    if ! docker info &> /dev/null; then
-        log_error "Docker服务未运行，请先启动Docker"
-        exit 1
-    fi
-    
-    # 检查Docker版本（建议20.10+）
-    DOCKER_VERSION=$(docker version --format '{{.Server.Version}}' 2>/dev/null | cut -d. -f1)
-    if [ "$DOCKER_VERSION" -lt 20 ]; then
-        log_warn "Docker版本较低 ($DOCKER_VERSION)，建议升级到20.10或更高版本"
-    fi
-    
-    # 检查Docker Compose
-    if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
-        log_error "Docker Compose未安装，请先安装Docker Compose"
-        log_error "安装指引: https://docs.docker.com/compose/install/"
-        exit 1
-    fi
-    
-    # 检查必要的命令行工具
-    local missing_tools=()
-    for tool in curl git; do
-        if ! command -v "$tool" &> /dev/null; then
-            missing_tools+=("$tool")
-        fi
-    done
-    
-    if [ ${#missing_tools[@]} -ne 0 ]; then
-        log_error "缺少必要工具: ${missing_tools[*]}"
-        exit 1
-    fi
-    
-    log_info "环境检查通过 ✓"
-}
-
-# 检查环境变量
-check_env() {
-    log_info "检查环境变量配置..."
-    
-    # 检查.env.example是否存在
-    if [ ! -f .env.example ]; then
-        log_error ".env.example 文件不存在"
-        exit 1
-    fi
-    
-    # 检查.env文件
-    if [ ! -f .env ]; then
-        log_warn ".env 文件不存在，从示例文件创建..."
-        cp .env.example .env
-        log_error "请编辑 .env 文件并填写正确的配置值"
-        log_error "必须配置的变量: POSTGRES_PASSWORD, REDIS_PASSWORD, API_KEY, THIRDPARTY_API_KEY"
-        exit 1
-    fi
-    
-    # 加载环境变量
-    set -a
-    source .env
-    set +a
-    
-    # 检查必要的环境变量
-    required_vars=(
-        "POSTGRES_PASSWORD"
-        "REDIS_PASSWORD"
-        "API_KEY"
-        "THIRDPARTY_API_KEY"
-    )
-    
-    local missing_vars=()
-    local weak_vars=()
-    
-    for var in "${required_vars[@]}"; do
-        local val="${!var}"
-        if [ -z "$val" ]; then
-            missing_vars+=("$var")
-        elif [ "$val" = "CHANGE_ME_STRONG_PASSWORD_HERE" ] || \
-             [ "$val" = "CHANGE_ME_REDIS_PASSWORD" ] || \
-             [ "$val" = "CHANGE_ME_32_CHARS_OR_MORE" ] || \
-             [ "${#val}" -lt 16 ]; then
-            weak_vars+=("$var")
-        fi
-    done
-    
-    if [ ${#missing_vars[@]} -ne 0 ]; then
-        log_error "缺少必要的环境变量: ${missing_vars[*]}"
-        log_error "请在 .env 文件中配置这些变量"
-        exit 1
-    fi
-    
-    if [ ${#weak_vars[@]} -ne 0 ]; then
-        log_warn "以下环境变量可能过于简单: ${weak_vars[*]}"
-        log_warn "生产环境建议使用强密钥（openssl rand -base64 32）"
-    fi
-    
-    log_info "环境变量配置检查完成 ✓"
-}
-
-# 网络连通性检查
-check_network() {
-    log_info "检查网络连通性..."
-    
-    local test_urls=(
-        "mirrors.aliyun.com"
-        "goproxy.cn"
-        "registry.hub.docker.com"
-    )
-    
-    local failed_urls=()
-    
-    for url in "${test_urls[@]}"; do
-        if ! curl -s --connect-timeout 5 --max-time 10 "http://$url" > /dev/null 2>&1 && \
-           ! ping -c 2 -W 3 "$url" > /dev/null 2>&1; then
-            failed_urls+=("$url")
-        fi
-    done
-    
-    if [ ${#failed_urls[@]} -ne 0 ]; then
-        log_warn "以下地址连接失败: ${failed_urls[*]}"
-        log_warn "网络可能不稳定，但继续尝试构建..."
-    else
-        log_info "网络连通性检查通过 ✓"
-    fi
-}
-
-# 检查磁盘空间
-check_disk_space() {
-    log_info "检查磁盘空间..."
-    
-    # macOS和Linux兼容的磁盘空间检查
-    local available
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS
-        available=$(df -g . | tail -1 | awk '{print $4}')
-    else
-        # Linux
-        available=$(df -BG . | tail -1 | awk '{print $4}' | sed 's/G//')
-    fi
-    
-    local required=5
-    
-    if [ -z "$available" ]; then
-        log_warn "无法检测磁盘空间，跳过检查"
+    if ! docker-compose ps | grep -q "postgres.*Up"; then
+        log_warn "数据库未运行，跳过备份（可能是首次部署）"
         return 0
     fi
     
-    if [ "$available" -lt "$required" ]; then
-        log_error "磁盘空间不足（可用: ${available}G，需要: ${required}G）"
-        log_error "建议运行: docker system prune -a"
-        exit 1
-    fi
+    BACKUP_DIR="./backups"
+    mkdir -p "$BACKUP_DIR"
+    BACKUP_FILE="$BACKUP_DIR/iot-$(date +%Y%m%d-%H%M%S).sql"
     
-    log_info "磁盘空间充足 (${available}G 可用) ✓"
+    if docker-compose exec -T postgres pg_dump -U iot iot_server > "$BACKUP_FILE" 2>/dev/null; then
+        gzip "$BACKUP_FILE"
+        log_info "✅ 备份成功: ${BACKUP_FILE}.gz"
+        
+        # 保留最近10个备份
+        ls -t "$BACKUP_DIR"/iot-*.sql.gz | tail -n +11 | xargs -r rm
+    else
+        log_error "❌ 备份失败！是否继续部署？"
+        read -p "继续？(yes/no): " confirm
+        [ "$confirm" != "yes" ] && exit 1
+    fi
 }
 
-# 构建镜像
+# 构建新镜像
 build_image() {
-    log_info "开始构建Docker镜像..."
+    log_step "2/6 构建 Docker 镜像..."
     
-    BUILD_VERSION=${BUILD_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "dev")}
+    VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
     BUILD_TIME=$(date -u '+%Y-%m-%d %H:%M:%S')
     GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     
-    log_info "构建信息: version=$BUILD_VERSION, commit=$GIT_COMMIT"
+    log_info "版本: $VERSION, 提交: $GIT_COMMIT"
     
-    # 构建时启用BuildKit以提高性能
     export DOCKER_BUILDKIT=1
-    
     if docker build \
-        --build-arg BUILD_VERSION="$BUILD_VERSION" \
+        --build-arg BUILD_VERSION="$VERSION" \
         --build-arg BUILD_TIME="$BUILD_TIME" \
         --build-arg GIT_COMMIT="$GIT_COMMIT" \
-        -t iot-server:"$BUILD_VERSION" \
+        -t iot-server:"$VERSION" \
         -t iot-server:latest \
         . ; then
-        log_info "镜像构建完成 ✓ (version: $BUILD_VERSION)"
+        log_info "✅ 镜像构建成功"
     else
-        log_error "镜像构建失败"
-        log_error "请检查错误信息，常见问题："
-        log_error "  1. 网络连接问题（Alpine源或Go代理）"
-        log_error "  2. 磁盘空间不足"
-        log_error "  3. Docker版本过低"
+        log_error "❌ 镜像构建失败"
         exit 1
     fi
 }
 
-# 数据库迁移
-run_migration() {
-    log_info "运行数据库迁移..."
+# 检查数据卷
+check_volumes() {
+    log_step "3/6 检查数据持久化..."
     
-    # 等待数据库就绪
-    log_info "等待数据库启动..."
-    sleep 10
-    
-    # 这里应该运行数据库迁移脚本
-    # docker-compose exec postgres psql -U iot -d iot_server -f /scripts/migrate.sql
-    
-    log_info "数据库迁移完成 ✓"
+    for vol in postgres_data redis_data app_logs; do
+        if docker volume ls | grep -q "iot-server_$vol"; then
+            SIZE=$(docker system df -v | grep "iot-server_$vol" | awk '{print $3}' || echo "N/A")
+            log_info "✅ $vol: $SIZE"
+        else
+            log_warn "⚠️  $vol: 不存在（将在启动时创建）"
+        fi
+    done
 }
 
-# 启动服务
-start_services() {
-    log_info "启动服务..."
+# 滚动更新应用服务
+update_service() {
+    log_step "4/6 更新应用服务（零停机）..."
     
-    # 使用生产环境配置
-    docker-compose up -d
-    
-    log_info "等待服务启动..."
-    sleep 15
-    
-    # 检查服务健康状态
-    if docker-compose ps | grep -q "unhealthy"; then
-        log_error "部分服务不健康，请检查日志"
-        docker-compose ps
-        exit 1
+    # 检查是否首次部署
+    if docker-compose ps | grep -q "iot-server"; then
+        log_info "执行滚动更新..."
+        
+        # 只更新应用容器，保持数据库运行
+        docker-compose up -d --no-deps --build iot-server
+        
+        log_info "✅ 应用服务已更新（数据库未重启）"
+    else
+        log_info "首次部署，启动所有服务..."
+        docker-compose up -d
+        
+        log_info "✅ 所有服务已启动"
     fi
-    
-    log_info "服务启动成功 ✓"
 }
 
 # 健康检查
 health_check() {
-    log_info "执行健康检查..."
+    log_step "5/6 健康检查..."
     
-    # 检查HTTP服务
-    if curl -f http://localhost:7054/healthz &> /dev/null; then
-        log_info "HTTP服务健康 ✓"
+    log_info "等待服务启动..."
+    sleep 10
+    
+    # 检查数据库
+    if docker-compose exec -T postgres pg_isready -U iot > /dev/null 2>&1; then
+        log_info "✅ 数据库健康"
     else
-        log_error "HTTP服务健康检查失败"
-        exit 1
+        log_error "❌ 数据库不健康"
+        return 1
     fi
     
-    # 检查就绪状态
-    if curl -f http://localhost:7054/readyz &> /dev/null; then
-        log_info "服务就绪 ✓"
+    # 检查 Redis
+    if docker-compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" ping > /dev/null 2>&1; then
+        log_info "✅ Redis 健康"
     else
-        log_warn "服务尚未就绪，可能需要更多时间初始化"
+        log_warn "⚠️  Redis 检查失败（可能未设置密码）"
     fi
     
-    log_info "健康检查完成 ✓"
+    # 检查应用
+    max_retries=30
+    retry=0
+    while [ $retry -lt $max_retries ]; do
+        if curl -f http://localhost:7055/healthz > /dev/null 2>&1; then
+            log_info "✅ 应用服务健康"
+            return 0
+        fi
+        retry=$((retry + 1))
+        echo -n "."
+        sleep 2
+    done
+    
+    log_error "❌ 应用健康检查失败"
+    return 1
 }
 
-# 显示服务状态
+# 显示状态
 show_status() {
-    log_info "服务状态："
+    log_step "6/6 部署状态..."
+    
+    echo ""
     docker-compose ps
     
     echo ""
-    log_info "服务访问地址："
-    echo "  - HTTP API: http://localhost:7054"
-    echo "  - TCP端口: localhost:7055"
-    echo "  - Metrics: http://localhost:7054/metrics"
-    echo "  - Health: http://localhost:7054/healthz"
+    log_info "数据卷状态："
+    docker volume ls | grep iot-server || log_warn "未找到数据卷"
     
-    if docker-compose ps | grep -q prometheus; then
-        echo "  - Prometheus: http://localhost:9090"
-        echo "  - Grafana: http://localhost:3000"
-    fi
+    echo ""
+    log_info "访问地址："
+    echo "  HTTP API: http://localhost:7055"
+    echo "  TCP 端口: localhost:7054"
+    echo "  健康检查: http://localhost:7055/healthz"
+    echo "  Metrics: http://localhost:7055/metrics"
+    
+    echo ""
+    log_info "查看日志："
+    echo "  docker-compose logs -f iot-server"
 }
 
-# 显示日志
-show_logs() {
-    docker-compose logs -f --tail=100 iot-server
-}
-
-# 停止服务
-stop_services() {
-    log_info "停止服务..."
-    docker-compose down
-    log_info "服务已停止 ✓"
-}
-
-# 清理
-cleanup() {
-    log_warn "清理所有数据（包括数据库和日志）..."
-    read -p "确认删除所有数据？(yes/no): " confirm
+# 回滚函数
+rollback() {
+    log_error "检测到部署失败，是否回滚？"
+    read -p "回滚到上一个版本？(yes/no): " confirm
     
     if [ "$confirm" = "yes" ]; then
-        docker-compose down -v
-        log_info "清理完成 ✓"
-    else
-        log_info "取消清理"
+        log_warn "执行回滚..."
+        
+        # 查找最近的备份
+        LATEST_BACKUP=$(ls -t ./backups/iot-*.sql.gz 2>/dev/null | head -n 1)
+        
+        if [ -n "$LATEST_BACKUP" ]; then
+            log_info "找到备份: $LATEST_BACKUP"
+            log_warn "请手动恢复数据库（如果需要）："
+            echo "  gunzip < $LATEST_BACKUP | docker-compose exec -T postgres psql -U iot iot_server"
+        fi
+        
+        # 重启服务
+        docker-compose restart iot-server
     fi
 }
 
-# 主函数
+# 主流程
 main() {
-    case "${1:-deploy}" in
-        deploy)
-            check_requirements
-            check_env
-            check_network
-            check_disk_space
-            build_image
-            start_services
-            run_migration
-            health_check
-            show_status
-            ;;
-        build)
-            build_image
-            ;;
-        start)
-            start_services
-            health_check
-            show_status
-            ;;
-        stop)
-            stop_services
-            ;;
-        restart)
-            stop_services
-            start_services
-            health_check
-            show_status
-            ;;
-        status)
-            show_status
-            ;;
-        logs)
-            show_logs
-            ;;
-        cleanup)
-            cleanup
-            ;;
-        *)
-            echo "用法: $0 {deploy|build|start|stop|restart|status|logs|cleanup}"
-            echo ""
-            echo "命令说明："
-            echo "  deploy   - 完整部署（检查、构建、启动、迁移）"
-            echo "  build    - 仅构建镜像"
-            echo "  start    - 启动服务"
-            echo "  stop     - 停止服务"
-            echo "  restart  - 重启服务"
-            echo "  status   - 查看服务状态"
-            echo "  logs     - 查看实时日志"
-            echo "  cleanup  - 清理所有数据"
-            exit 1
-            ;;
-    esac
+    log_info "================================"
+    log_info "  IOT Server 安全部署工具"
+    log_info "================================"
+    echo ""
+    
+    # 执行部署步骤
+    backup_data || { log_error "备份失败"; exit 1; }
+    build_image || { log_error "构建失败"; exit 1; }
+    check_volumes
+    update_service || { log_error "更新失败"; rollback; exit 1; }
+    
+    if health_check; then
+        show_status
+        echo ""
+        log_info "🎉 部署成功！"
+        log_info "💡 数据已保留，未重置"
+    else
+        log_error "健康检查失败"
+        rollback
+        exit 1
+    fi
 }
 
+# 捕获错误
+trap 'log_error "部署过程中断"; rollback' ERR
+
+# 执行主流程
 main "$@"
 

@@ -1,0 +1,244 @@
+name: Deploy - 测试环境
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "部署版本（留空则使用最新commit）"
+        required: false
+        type: string
+
+env:
+  REGISTRY: docker.io # 或使用阿里云 registry.cn-hangzhou.aliyuncs.com
+  IMAGE_NAME: iot-server
+  DEPLOY_ENV: staging
+
+jobs:
+  # 构建并推送镜像
+  build-and-push:
+    name: 构建并推送镜像
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 获取完整历史用于版本号生成
+
+      - name: 生成版本号
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev-${GITHUB_SHA::8}")
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📌 部署版本: $VERSION"
+
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 Docker Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Docker 元数据
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=staging-
+            type=raw,value=staging-latest
+            type=raw,value=staging-${{ steps.version.outputs.version }}
+
+      - name: 构建并推送 Docker 镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_VERSION=${{ steps.version.outputs.version }}
+            BUILD_TIME=${{ github.event.head_commit.timestamp }}
+            GIT_COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 镜像扫描
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:staging-latest
+          format: "table"
+          exit-code: "0" # 不因漏洞失败，仅报告
+          severity: "CRITICAL,HIGH"
+
+  # 部署到测试环境
+  deploy:
+    name: 部署到测试服务器
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment:
+      name: staging
+      url: http://${{ secrets.STAGING_HOST }}:7055
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备部署脚本
+        run: |
+          cat > deploy.sh << 'EOF'
+          #!/bin/bash
+          set -e
+
+          echo "🚀 开始部署测试环境..."
+
+          # 加载环境变量
+          export IMAGE_TAG="${{ needs.build-and-push.outputs.image-version }}"
+          export BUILD_VERSION="${{ needs.build-and-push.outputs.image-version }}"
+
+          # 备份当前运行版本
+          docker tag iot-server:latest iot-server:backup-$(date +%Y%m%d-%H%M%S) || true
+
+          # 拉取最新镜像
+          echo "📥 拉取镜像..."
+          docker pull ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:staging-latest
+
+          # 重新标记镜像
+          docker tag ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:staging-latest iot-server:latest
+
+          # 使用 docker-compose 进行滚动更新
+          echo "🔄 更新服务..."
+          cd /opt/iot-server
+          docker-compose up -d --no-deps --build iot-server
+
+          # 等待服务启动
+          echo "⏳ 等待服务启动..."
+          sleep 15
+
+          # 健康检查
+          echo "🏥 健康检查..."
+          max_retries=10
+          retry=0
+          while [ $retry -lt $max_retries ]; do
+            if curl -f http://localhost:7055/healthz; then
+              echo "✅ 服务健康"
+              exit 0
+            fi
+            retry=$((retry + 1))
+            echo "等待中... ($retry/$max_retries)"
+            sleep 5
+          done
+
+          echo "❌ 健康检查失败，开始回滚..."
+          docker tag iot-server:backup-$(date +%Y%m%d)* iot-server:latest || true
+          docker-compose up -d --no-deps iot-server
+          exit 1
+          EOF
+
+          chmod +x deploy.sh
+
+      - name: 部署到服务器
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          port: ${{ secrets.STAGING_PORT || 22 }}
+          script_stop: true
+          script: |
+            # 创建临时部署目录
+            mkdir -p /tmp/deploy-${{ github.run_id }}
+            cd /tmp/deploy-${{ github.run_id }}
+
+            # 执行部署
+            cat > deploy.sh << 'DEPLOY_SCRIPT'
+            ${{ steps.prepare.outputs.script }}
+            DEPLOY_SCRIPT
+
+            chmod +x deploy.sh
+            ./deploy.sh
+
+            # 清理
+            cd /
+            rm -rf /tmp/deploy-${{ github.run_id }}
+
+      - name: 验证部署
+        run: |
+          echo "🔍 验证部署..."
+          # 等待服务完全启动
+          sleep 10
+
+          # 健康检查
+          if curl -f http://${{ secrets.STAGING_HOST }}:7055/healthz; then
+            echo "✅ 健康检查通过"
+          else
+            echo "❌ 健康检查失败"
+            exit 1
+          fi
+
+          # 就绪检查
+          if curl -f http://${{ secrets.STAGING_HOST }}:7055/readyz; then
+            echo "✅ 就绪检查通过"
+          else
+            echo "⚠️ 服务尚未就绪"
+          fi
+
+      - name: 运行集成测试
+        run: |
+          echo "🧪 运行集成测试..."
+          # 这里可以添加集成测试脚本
+          # ./scripts/integration-test.sh ${{ secrets.STAGING_HOST }}
+
+      - name: 通知部署结果
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = '${{ job.status }}' === 'success' ? '✅ 成功' : '❌ 失败';
+            const message = `
+            ## 测试环境部署 ${status}
+
+            **环境**: Staging
+            **版本**: ${{ needs.build-and-push.outputs.image-version }}
+            **提交**: ${{ github.sha }}
+            **作者**: ${{ github.actor }}
+            **时间**: ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}
+
+            **访问地址**: http://${{ secrets.STAGING_HOST }}:7055
+            `;
+
+            // 发送到 GitHub Issue 或 Discussion（如果配置）
+            console.log(message);
+
+  # 清理旧镜像
+  cleanup:
+    name: 清理旧镜像
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: success()
+    steps:
+      - name: 登录 Docker Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: 清理旧的测试镜像
+        run: |
+          echo "🧹 清理策略：保留最近7个版本"
+          # 实际清理逻辑需要根据使用的镜像仓库 API 实现
+          # 这里仅作示例
