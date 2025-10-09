@@ -204,7 +204,7 @@ jobs:
 
       - name: 通知部署结果
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const status = '${{ job.status }}' === 'success' ? '✅ 成功' : '❌ 失败';

@@ -421,7 +421,7 @@ jobs:
           # 可以自动更新部署记录、版本历史等
 
       - name: 发送通知
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const version = '${{ needs.pre-check.outputs.version }}';
