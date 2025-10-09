@@ -80,14 +80,26 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	if pusher != nil {
 		pusherTyped, _ = pusher.(*thirdparty.Pusher)
 	}
-	eventQueue, _ := app.NewEventQueue(cfg.Thirdparty.Push, redisClient, pusherTyped, log)
+	eventQueue, deduper := app.NewEventQueue(cfg.Thirdparty.Push, redisClient, pusherTyped, log)
+
+	// Week5: 创建Outbound适配器（用于BKV下行消息）
+	outboundAdapter := app.NewOutboundAdapter(dbpool, repo)
+
+	// TODO: Week4: 创建CardService（刷卡充电业务）
+	// var cardService bkv.CardServiceAPI = service.NewCardService(...)
 
 	handlerSet := &ap3000.Handlers{Repo: repo, Pusher: pusher, PushURL: pushURL, Metrics: appm}
-	bkvHandlers := bkv.NewHandlers(repo, bkvReason)
+
+	// P1修复: 使用NewHandlersWithServices完整初始化BKV处理器
+	// CardService暂时为nil，待Week4实现刷卡充电服务后启用
+	bkvHandlers := bkv.NewHandlersWithServices(repo, bkvReason, nil, outboundAdapter, eventQueue, deduper)
+
 	log.Info("protocol handlers initialized",
 		zap.Bool("ap3000", cfg.Protocols.EnableAP3000),
 		zap.Bool("bkv", cfg.Protocols.EnableBKV),
-		zap.Bool("event_queue", eventQueue != nil))
+		zap.Bool("event_queue", eventQueue != nil),
+		zap.Bool("outbound", outboundAdapter != nil),
+		zap.Bool("deduper", deduper != nil))
 
 	// ========== 阶段6: 启动HTTP服务（非阻塞）==========
 	readyFn := func() bool { return ready.Ready() }

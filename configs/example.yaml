@@ -6,12 +6,12 @@ app:
   env: dev
 
 http:
-  addr: ":8080" # 容器内部HTTP端口（对外映射7054）
+  addr: ":8080" # 容器内部HTTP端口（对外映射7055）
   readTimeout: 30s
   writeTimeout: 30s
 
 tcp:
-  addr: ":7000" # 容器内部TCP端口（对外映射7055）
+  addr: ":7000" # 容器内部TCP端口（对外映射7054-BKV协议）
   readTimeout: 300s
   writeTimeout: 30s
   maxConnections: 5000
