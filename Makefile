@@ -143,6 +143,54 @@ restore:
 	@echo "恢复备份..."
 	./scripts/backup.sh restore
 
+# 监控和调试
+.PHONY: monitor monitor-diagnose monitor-logs monitor-errors monitor-help
+
+monitor-help:
+	@./scripts/monitor.sh help
+
+monitor:
+	@./scripts/monitor.sh diagnose
+
+monitor-logs:
+	@./scripts/monitor.sh logs
+
+monitor-errors:
+	@./scripts/monitor.sh errors 30
+
+monitor-metrics:
+	@./scripts/monitor.sh metrics
+
+# TCP 模块测试
+.PHONY: tcp-check tcp-connect tcp-metrics tcp-test-all
+
+tcp-check:
+	@./scripts/tcp-test.sh check-port
+
+tcp-connect:
+	@./scripts/tcp-test.sh connect
+
+tcp-metrics:
+	@./scripts/tcp-test.sh metrics
+
+tcp-test-all:
+	@./scripts/tcp-test.sh run-all
+
+# 协议实时监控
+.PHONY: protocol-live protocol-logs protocol-stats protocol-devices
+
+protocol-live:
+	@./scripts/protocol-monitor.sh live
+
+protocol-logs:
+	@./scripts/protocol-monitor.sh logs
+
+protocol-stats:
+	@./scripts/protocol-monitor.sh stats
+
+protocol-devices:
+	@./scripts/protocol-monitor.sh devices
+
 # 清理
 clean:
 	@echo "清理构建文件..."
@@ -221,6 +269,25 @@ help:
 	@echo "部署相关："
 	@echo "  make deploy                - 快速部署（测试模式，不备份）"
 	@echo "  BACKUP=true make deploy    - 安全部署（生产模式，自动备份）"
+	@echo ""
+	@echo "监控调试："
+	@echo "  make monitor               - 运行完整诊断（推荐）"
+	@echo "  make monitor-logs          - 查看实时日志"
+	@echo "  make monitor-errors        - 查看错误日志"
+	@echo "  make monitor-metrics       - 查看业务指标"
+	@echo "  make monitor-help          - 查看所有监控命令"
+	@echo ""
+	@echo "TCP 模块测试："
+	@echo "  make tcp-check             - 检查 TCP 端口"
+	@echo "  make tcp-connect           - 测试 TCP 连接"
+	@echo "  make tcp-metrics           - 查看 TCP 指标"
+	@echo "  make tcp-test-all          - 运行所有 TCP 测试"
+	@echo ""
+	@echo "协议实时监控："
+	@echo "  make protocol-live         - 综合监控（推荐，需 tmux）"
+	@echo "  make protocol-logs         - 实时协议日志"
+	@echo "  make protocol-stats        - 实时统计数据"
+	@echo "  make protocol-devices      - 查看在线设备"
 	@echo ""
 	@echo "维护相关："
 	@echo "  make backup          - 备份数据"
