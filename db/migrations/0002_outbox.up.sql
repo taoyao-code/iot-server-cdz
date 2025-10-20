@@ -1,7 +1,7 @@
 -- Outbox for downlink commands
 CREATE TABLE IF NOT EXISTS outbound_queue (
     id BIGSERIAL PRIMARY KEY,
-    device_id BIGINT NOT NULL,
+    device_id BIGINT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
     phy_id TEXT,
     port_no INT,
     cmd INT NOT NULL,
@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS outbound_queue (
     priority INT NOT NULL DEFAULT 100,
     status INT NOT NULL DEFAULT 0,         -- 0=pending,1=sent,2=done,3=failed
     retry_count INT NOT NULL DEFAULT 0,
+    retries INT NOT NULL DEFAULT 0,        -- 别名,兼容旧代码
     not_before TIMESTAMPTZ,
     timeout_sec INT NOT NULL DEFAULT 15,
     correlation_id TEXT,

@@ -2,15 +2,19 @@
 CREATE TABLE IF NOT EXISTS devices (
     id              BIGSERIAL PRIMARY KEY,
     phy_id          TEXT NOT NULL UNIQUE,
+    gateway_id      TEXT,                -- 网关ID(GN协议使用)
     iccid           TEXT,
     imei            TEXT,
     model           TEXT,
     firmware_ver    TEXT,
+    rssi            INTEGER,             -- 信号强度
+    fw_ver          TEXT,                -- 固件版本(GN协议使用)
     last_seen_at    TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_devices_last_seen_at ON devices(last_seen_at);
+CREATE INDEX IF NOT EXISTS idx_devices_gateway_id ON devices(gateway_id) WHERE gateway_id IS NOT NULL;
 
 -- ports: 设备端口快照
 CREATE TABLE IF NOT EXISTS ports (
@@ -56,19 +60,7 @@ CREATE TABLE IF NOT EXISTS cmd_log (
 CREATE INDEX IF NOT EXISTS idx_cmdlog_device_time ON cmd_log(device_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cmdlog_msg ON cmd_log(msg_id, cmd);
 
--- outbound_queue: 下行任务队列
-CREATE TABLE IF NOT EXISTS outbound_queue (
-    id              BIGSERIAL PRIMARY KEY,
-    device_id       BIGINT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
-    port_no         INT,
-    cmd             INT NOT NULL,
-    payload         BYTEA,
-    priority        SMALLINT NOT NULL DEFAULT 10,
-    retries         INT NOT NULL DEFAULT 0,
-    not_before      TIMESTAMPTZ,
-    status          SMALLINT NOT NULL DEFAULT 0, -- 0=pending,1=sent,2=done,3=dead
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_outq_sched ON outbound_queue(status, priority, not_before NULLS FIRST, created_at);
+-- outbound_queue: 下行任务队列(由 0002_outbox.up.sql 创建)
+-- 此处已移除,避免重复创建
 
 
