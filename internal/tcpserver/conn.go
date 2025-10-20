@@ -92,8 +92,16 @@ func (cc *ConnContext) Close() error {
 // run 启动读/写循环，阻塞直至连接结束
 func (cc *ConnContext) run() {
 	defer cc.Close()
-	// 初始超时
-	_ = cc.c.SetReadDeadline(time.Now().Add(cc.s.cfg.ReadTimeout))
+
+	// ✅ 优化2: 协议识别阶段使用较短的超时 (5秒)
+	// 识别完成后会切换到正常超时 (300秒)
+	identificationTimeout := 5 * time.Second
+	if cc.s.cfg.ReadTimeout > 0 && cc.s.cfg.ReadTimeout < identificationTimeout {
+		identificationTimeout = cc.s.cfg.ReadTimeout
+	}
+
+	// 初始超时 (用于协议识别阶段)
+	_ = cc.c.SetReadDeadline(time.Now().Add(identificationTimeout))
 	_ = cc.c.SetWriteDeadline(time.Now().Add(cc.s.cfg.WriteTimeout))
 
 	// 写循环
@@ -110,9 +118,16 @@ func (cc *ConnContext) run() {
 
 	// 读循环
 	buf := make([]byte, 4096)
+	protocolIdentified := false // 标记协议是否已识别
+
 	for {
 		n, err := cc.c.Read(buf)
 		if n > 0 {
+			// ✅ 首次收到数据,标记协议识别阶段结束
+			if !protocolIdentified {
+				protocolIdentified = true
+			}
+
 			// 记录接收到的数据
 			if cc.s.logger != nil {
 				cc.s.logger.Debug("TCP data received",
@@ -129,7 +144,19 @@ func (cc *ConnContext) run() {
 		}
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				// 读超时，刷新 deadline 继续
+				// ✅ 区分协议识别超时和正常超时
+				if !protocolIdentified {
+					// 协议识别阶段超时 → 直接关闭连接
+					if cc.s.logger != nil {
+						cc.s.logger.Warn("Protocol identification timeout, closing connection",
+							zap.String("remote_addr", cc.c.RemoteAddr().String()),
+							zap.Duration("timeout", identificationTimeout),
+						)
+					}
+					break
+				}
+
+				// 已识别协议后的正常超时 → 刷新deadline继续
 				if cc.s.cfg.ReadTimeout > 0 {
 					_ = cc.c.SetReadDeadline(time.Now().Add(cc.s.cfg.ReadTimeout))
 				}
@@ -157,3 +184,10 @@ func (cc *ConnContext) run() {
 
 // Done 返回连接关闭通知通道
 func (cc *ConnContext) Done() <-chan struct{} { return cc.doneC }
+
+// RestoreNormalTimeout 恢复正常的读超时 (协议识别完成后调用)
+func (cc *ConnContext) RestoreNormalTimeout() {
+	if cc.s.cfg.ReadTimeout > 0 {
+		_ = cc.c.SetReadDeadline(time.Now().Add(cc.s.cfg.ReadTimeout))
+	}
+}

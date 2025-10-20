@@ -1,8 +1,6 @@
 package tcpserver
 
 import (
-	"time"
-
 	padapter "github.com/taoyao-code/iot-server/internal/protocol/adapter"
 	ap "github.com/taoyao-code/iot-server/internal/protocol/ap3000"
 	bk "github.com/taoyao-code/iot-server/internal/protocol/bkv"
@@ -25,23 +23,11 @@ func (m *Mux) BindToConn(cc *ConnContext) {
 	var decided bool
 	var handler func([]byte)
 
-	// ✅ 优化2: 协议识别超时保护 (3秒内必须识别完成)
+	// ✅ 优化2: 记录协议识别开始时间 (用于统计耗时)
 	identificationStartTime := cc.Server().GetCurrentTime()
 
 	cc.SetOnRead(func(p []byte) {
 		if !decided {
-			// ✅ 检查识别超时
-			if cc.Server().GetCurrentTime().Sub(identificationStartTime) > 3*time.Second {
-				if m.server != nil && m.server.logger != nil {
-					m.server.logger.Warn("Protocol identification timeout, closing connection",
-						zap.String("remote_addr", cc.RemoteAddr().String()),
-						zap.Duration("elapsed", cc.Server().GetCurrentTime().Sub(identificationStartTime)),
-					)
-				}
-				_ = cc.Close()
-				return
-			}
-
 			// 取前缀若干字节用于初判
 			pref := p
 			if len(pref) > 8 {
@@ -73,6 +59,10 @@ func (m *Mux) BindToConn(cc *ConnContext) {
 							zap.Duration("identification_duration", identDuration),
 						)
 					}
+
+					// ✅ 识别完成后,恢复正常的读超时 (从5秒→300秒)
+					cc.RestoreNormalTimeout()
+
 					decided = true
 					break
 				}
