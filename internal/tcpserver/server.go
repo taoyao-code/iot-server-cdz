@@ -58,6 +58,11 @@ func (s *Server) GetLogger() *zap.Logger {
 	return s.logger
 }
 
+// GetCurrentTime 获取当前时间 (用于协议识别超时检测)
+func (s *Server) GetCurrentTime() time.Time {
+	return time.Now()
+}
+
 // EnableLimiting 启用限流和熔断（Week2）
 func (s *Server) EnableLimiting(maxConn int, ratePerSec int, rateBurst int, breakerThreshold int, breakerTimeout time.Duration) {
 	s.connLimiter = NewConnectionLimiter(maxConn, 5*time.Second)
@@ -146,6 +151,18 @@ func (s *Server) Start() error {
 				// 短暂错误等待后重试
 				time.Sleep(50 * time.Millisecond)
 				continue
+			}
+
+			// ✅ 优化1: 启用TCP Keepalive,防止NAT超时
+			if tcpConn, ok := conn.(*net.TCPConn); ok {
+				_ = tcpConn.SetKeepAlive(true)
+				_ = tcpConn.SetKeepAlivePeriod(60 * time.Second)
+				if s.logger != nil {
+					s.logger.Debug("TCP keepalive enabled",
+						zap.String("remote_addr", conn.RemoteAddr().String()),
+						zap.Duration("period", 60*time.Second),
+					)
+				}
 			}
 
 			// 记录TCP连接
