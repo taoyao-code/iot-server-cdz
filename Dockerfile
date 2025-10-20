@@ -86,22 +86,25 @@ RUN mkdir -p /var/log/iot-server && \
     chown -R nonroot:root /var/log/iot-server /app
 
 # 创建启动脚本（自动修复日志目录权限）
-RUN echo '#!/bin/sh' > /entrypoint.sh && \
+RUN echo '#!/bin/bash' > /entrypoint.sh && \
     echo 'set -e' >> /entrypoint.sh && \
     echo '# 修复日志目录权限（如果volume挂载导致权限丢失）' >> /entrypoint.sh && \
     echo 'if [ ! -w /var/log/iot-server ]; then' >> /entrypoint.sh && \
     echo '  echo "Fixing log directory permissions..."' >> /entrypoint.sh && \
-    echo '  chown -R nonroot:root /var/log/iot-server 2>/dev/null || true' >> /entrypoint.sh && \
+    echo '  chown -R 65532:root /var/log/iot-server 2>/dev/null || true' >> /entrypoint.sh && \
     echo 'fi' >> /entrypoint.sh && \
-    echo 'exec su-exec nonroot "$@"' >> /entrypoint.sh && \
+    echo '# 切换到 nonroot 用户运行应用' >> /entrypoint.sh && \
+    echo 'exec su-exec 65532:root "$@"' >> /entrypoint.sh && \
     chmod +x /entrypoint.sh
 
-# 安装 su-exec（轻量级 gosu 替代）
-USER root
-RUN apk add --no-cache su-exec
+# 安装 gosu（Debian版本的su-exec）
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gosu && \
+    rm -rf /var/lib/apt/lists/* && \
+    gosu nobody true
 
-# 不在这里切换用户，由 entrypoint 处理
-# USER nonroot
+# 修改entrypoint使用gosu
+RUN sed -i 's/su-exec/gosu/g' /entrypoint.sh
 
 # 暴露端口
 EXPOSE 8080 7000
