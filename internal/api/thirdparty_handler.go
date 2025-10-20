@@ -61,6 +61,18 @@ type StartChargeRequest struct {
 }
 
 // StartCharge 启动充电
+// @Summary 启动充电
+// @Description 第三方平台调用此接口启动设备充电
+// @Tags 第三方API - 充电控制
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "设备物理ID"
+// @Param request body StartChargeRequest true "充电参数"
+// @Success 200 {object} StandardResponse "成功"
+// @Failure 400 {object} StandardResponse "参数错误"
+// @Failure 500 {object} StandardResponse "服务器错误"
+// @Router /api/v1/third/devices/{id}/charge [post]
 func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 	ctx := c.Request.Context()
 	devicePhyID := c.Param("id")
@@ -174,6 +186,18 @@ type StopChargeRequest struct {
 }
 
 // StopCharge 停止充电
+// @Summary 停止充电
+// @Description 第三方平台调用此接口停止设备充电
+// @Tags 第三方API - 充电控制
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "设备物理ID"
+// @Param request body StopChargeRequest true "停止充电参数"
+// @Success 200 {object} StandardResponse "成功"
+// @Failure 404 {object} StandardResponse "订单不存在"
+// @Failure 500 {object} StandardResponse "服务器错误"
+// @Router /api/v1/third/devices/{id}/stop [post]
 func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	ctx := c.Request.Context()
 	devicePhyID := c.Param("id")
@@ -274,6 +298,16 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 }
 
 // GetDevice 查询设备状态
+// @Summary 查询设备状态
+// @Description 查询设备在线状态、端口状态、活动订单等信息
+// @Tags 第三方API - 设备管理
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "设备物理ID"
+// @Success 200 {object} StandardResponse "成功"
+// @Failure 404 {object} StandardResponse "设备不存在"
+// @Failure 500 {object} StandardResponse "服务器错误"
+// @Router /api/v1/third/devices/{id} [get]
 func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 	ctx := c.Request.Context()
 	devicePhyID := c.Param("id")
@@ -354,6 +388,16 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 }
 
 // GetOrder 查询订单详情
+// @Summary 查询订单详情
+// @Description 根据订单号查询订单的详细信息和实时进度
+// @Tags 第三方API - 订单管理
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "订单号"
+// @Success 200 {object} StandardResponse "成功"
+// @Failure 404 {object} StandardResponse "订单不存在"
+// @Failure 500 {object} StandardResponse "服务器错误"
+// @Router /api/v1/third/orders/{id} [get]
 func (h *ThirdPartyHandler) GetOrder(c *gin.Context) {
 	ctx := c.Request.Context()
 	orderNo := c.Param("id")
@@ -421,6 +465,19 @@ func (h *ThirdPartyHandler) GetOrder(c *gin.Context) {
 }
 
 // ListOrders 订单列表（分页）
+// @Summary 订单列表查询
+// @Description 查询订单列表,支持按设备ID、状态筛选和分页
+// @Tags 第三方API - 订单管理
+// @Produce json
+// @Security ApiKeyAuth
+// @Param device_id query string false "设备物理ID"
+// @Param status query string false "订单状态:pending/charging/completed"
+// @Param page query int false "页码(默认1)"
+// @Param page_size query int false "每页数量(默认20,最大100)"
+// @Success 200 {object} StandardResponse "成功"
+// @Failure 400 {object} StandardResponse "参数错误"
+// @Failure 500 {object} StandardResponse "服务器错误"
+// @Router /api/v1/third/orders [get]
 func (h *ThirdPartyHandler) ListOrders(c *gin.Context) {
 	ctx := c.Request.Context()
 	requestID := c.GetString("request_id")
@@ -574,6 +631,18 @@ type ParamItem struct {
 }
 
 // SetParams 设置参数
+// @Summary 设置设备参数
+// @Description 批量设置设备运行参数
+// @Tags 第三方API - 设备管理
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "设备物理ID"
+// @Param request body SetParamsRequest true "参数列表"
+// @Success 200 {object} StandardResponse "成功"
+// @Failure 400 {object} StandardResponse "参数错误"
+// @Failure 500 {object} StandardResponse "服务器错误"
+// @Router /api/v1/third/devices/{id}/params [post]
 func (h *ThirdPartyHandler) SetParams(c *gin.Context) {
 	ctx := c.Request.Context()
 	devicePhyID := c.Param("id")
@@ -671,6 +740,18 @@ type TriggerOTARequest struct {
 }
 
 // TriggerOTA 触发OTA升级
+// @Summary 触发OTA升级
+// @Description 下发固件升级指令到设备
+// @Tags 第三方API - OTA管理
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "设备物理ID"
+// @Param request body TriggerOTARequest true "OTA升级参数"
+// @Success 200 {object} StandardResponse "成功"
+// @Failure 400 {object} StandardResponse "参数错误"
+// @Failure 500 {object} StandardResponse "服务器错误"
+// @Router /api/v1/third/devices/{id}/ota [post]
 func (h *ThirdPartyHandler) TriggerOTA(c *gin.Context) {
 	ctx := c.Request.Context()
 	devicePhyID := c.Param("id")

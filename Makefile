@@ -283,6 +283,35 @@ ci-setup:
 	@echo "2. 配置 GitHub Environments（staging, production）"
 	@echo "3. 查看完整指南: docs/CI-CD-GUIDE.md"
 
+# API文档生成
+.PHONY: swagger-init swagger-gen swagger-validate api-docs
+
+swagger-init:
+	@echo "安装 swag 工具..."
+	@which swag > /dev/null || go install github.com/swaggo/swag/cmd/swag@latest
+	@echo "✅ swag 工具已就绪"
+
+swagger-gen:
+	@echo "生成Swagger API文档..."
+	@which swag > /dev/null || (echo "❌ swag 工具未安装，运行: make swagger-init" && exit 1)
+	swag init -g cmd/server/main.go -o api/swagger --parseDependency --parseInternal
+	@echo "✅ API文档已生成: api/swagger/swagger.json"
+	@echo "   查看文档: api/swagger/swagger.yaml"
+
+swagger-validate:
+	@echo "验证OpenAPI文档..."
+	@which swagger > /dev/null || (echo "⚠️  swagger 工具未安装，跳过验证" && exit 0)
+	swagger validate api/openapi/openapi.yaml
+	@echo "✅ OpenAPI文档验证通过"
+
+api-docs: swagger-init swagger-gen
+	@echo "✅ API文档生成完成"
+	@echo ""
+	@echo "📖 查看API文档:"
+	@echo "   JSON: api/swagger/swagger.json"
+	@echo "   YAML: api/swagger/swagger.yaml"
+	@echo "   HTML: 启动服务后访问 http://localhost:7055/swagger/index.html"
+
 # 帮助
 help:
 	@echo "IOT Server Makefile命令："
@@ -344,9 +373,15 @@ help:
 	@echo "  make ci-build        - CI 构建验证"
 	@echo "  make ci-setup        - 检查 CI/CD 配置"
 	@echo ""
+	@echo "API文档："
+	@echo "  make api-docs        - 生成完整API文档（推荐）"
+	@echo "  make swagger-init    - 安装swagger工具"
+	@echo "  make swagger-gen     - 生成swagger文档"
+	@echo "  make swagger-validate - 验证OpenAPI文档"
+	@echo ""
 	@echo "当前版本: $(VERSION)"
 	@echo ""
-	@echo "💡 提示: 现已支持 GitHub Actions 自动化部署"
-	@echo "   查看文档: docs/CI-CD-GUIDE.md"
+	@echo "💡 提示: 现已支持 Swagger 自动生成API文档"
+	@echo "   运行 'make api-docs' 生成完整文档"
 
 

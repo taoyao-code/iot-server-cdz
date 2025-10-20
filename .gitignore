@@ -79,6 +79,7 @@ internal/docs
 /docs/docs.go
 /docs/swagger.json
 /docs/swagger.yaml
+/api/swagger/
 
 # 可执行文件
 /bin/
