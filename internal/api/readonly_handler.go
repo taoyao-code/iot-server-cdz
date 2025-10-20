@@ -72,11 +72,11 @@ func (h *ReadOnlyHandler) ListDevices(c *gin.Context) {
 // @Tags 内部API - 设备管理
 // @Produce json
 // @Security ApiKeyAuth
-// @Param phyId path string true "设备物理ID"
+// @Param device_id path string true "设备物理ID"
 // @Success 200 {object} map[string]interface{} "成功"
-// @Router /api/devices/{phyId}/ports [get]
+// @Router /api/devices/{device_id}/ports [get]
 func (h *ReadOnlyHandler) ListDevicePorts(c *gin.Context) {
-	phy := c.Param("phyId")
+	phy := c.Param("device_id")
 	ports, err := h.repo.ListPortsByPhyID(c.Request.Context(), phy)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -91,11 +91,11 @@ func (h *ReadOnlyHandler) ListDevicePorts(c *gin.Context) {
 // @Tags 内部API - 参数管理
 // @Produce json
 // @Security ApiKeyAuth
-// @Param phyId path string true "设备物理ID"
+// @Param device_id path string true "设备物理ID"
 // @Success 200 {object} map[string]interface{} "成功"
-// @Router /api/devices/{phyId}/params [get]
+// @Router /api/devices/{device_id}/params [get]
 func (h *ReadOnlyHandler) GetDeviceParams(c *gin.Context) {
-	phy := c.Param("phyId")
+	phy := c.Param("device_id")
 
 	// 获取设备ID
 	device, err := h.repo.GetDeviceByPhyID(c.Request.Context(), phy)
@@ -156,11 +156,11 @@ func (h *ReadOnlyHandler) GetDeviceParams(c *gin.Context) {
 // @Tags 内部API - 会话管理
 // @Produce json
 // @Security ApiKeyAuth
-// @Param phyId path string true "设备物理ID"
+// @Param device_id path string true "设备物理ID"
 // @Success 200 {object} map[string]interface{} "成功"
-// @Router /api/sessions/{phyId} [get]
+// @Router /api/sessions/{device_id} [get]
 func (h *ReadOnlyHandler) GetSessionStatus(c *gin.Context) {
-	phy := c.Param("phyId")
+	phy := c.Param("device_id")
 	online := h.sess.IsOnlineWeighted(phy, time.Now(), h.policy)
 	var lastSeen *time.Time
 	if d, e := h.repo.GetDeviceByPhyID(c.Request.Context(), phy); e == nil {
@@ -175,12 +175,12 @@ func (h *ReadOnlyHandler) GetSessionStatus(c *gin.Context) {
 // @Tags 内部API - 订单管理
 // @Produce json
 // @Security ApiKeyAuth
-// @Param id path int true "订单ID"
+// @Param order_id path int true "订单ID"
 // @Success 200 {object} map[string]interface{} "成功"
 // @Failure 404 {object} map[string]interface{} "订单不存在"
-// @Router /api/orders/{id} [get]
+// @Router /api/orders/{order_id} [get]
 func (h *ReadOnlyHandler) GetOrder(c *gin.Context) {
-	idStr := c.Param("id")
+	idStr := c.Param("order_id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		c.JSON(400, gin.H{"error": "invalid id"})
@@ -200,13 +200,13 @@ func (h *ReadOnlyHandler) GetOrder(c *gin.Context) {
 // @Tags 内部API - 订单管理
 // @Produce json
 // @Security ApiKeyAuth
-// @Param phyId path string true "设备物理ID"
+// @Param device_id path string true "设备物理ID"
 // @Param limit query int false "每页数量(默认100)"
 // @Param offset query int false "偏移量(默认0)"
 // @Success 200 {object} map[string]interface{} "成功"
-// @Router /api/devices/{phyId}/orders [get]
+// @Router /api/devices/{device_id}/orders [get]
 func (h *ReadOnlyHandler) ListDeviceOrders(c *gin.Context) {
-	phy := c.Param("phyId")
+	phy := c.Param("device_id")
 	limit := 100
 	offset := 0
 	if v := c.Query("limit"); v != "" {

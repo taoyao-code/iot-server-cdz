@@ -1,0 +1,62 @@
+version: "3.8"
+
+# 本地开发环境 - 仅启动依赖服务
+# 使用方式: docker-compose -f docker-compose.local.yml up -d
+#
+# 注意：本配置假设本地已有 Redis 运行在 localhost:6379
+# 如需启动独立的 Redis，请取消注释下方 redis 服务配置
+
+services:
+  # Redis服务（本地开发）
+  # 如果本地已有 Redis（如 localhost:6379），可以注释掉此服务
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: iot-redis-dev
+  #   restart: unless-stopped
+  #   command: redis-server --requirepass 123456
+  #   ports:
+  #     - "6380:6379" # 映射到本地 6380 端口，避免与现有 Redis 冲突
+  #   volumes:
+  #     - redis_dev_data:/data
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 3
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "3"
+
+  # PostgreSQL数据库（本地开发）
+  postgres:
+    image: postgres:15-alpine
+    container_name: iot-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: iot
+      POSTGRES_PASSWORD: iot123
+      POSTGRES_DB: iot_server
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432" # 映射到本地 5432 端口
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iot"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  redis_dev_data:
+    driver: local
+  postgres_dev_data:
+    driver: local

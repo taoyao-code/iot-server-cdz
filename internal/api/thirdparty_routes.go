@@ -31,17 +31,17 @@ func RegisterThirdPartyRoutes(
 	}
 
 	// 设备控制API
-	api.POST("/devices/:id/charge", handler.StartCharge) // 启动充电
-	api.POST("/devices/:id/stop", handler.StopCharge)    // 停止充电
-	api.GET("/devices/:id", handler.GetDevice)           // 查询设备状态
+	api.POST("/devices/:device_id/charge", handler.StartCharge) // 启动充电
+	api.POST("/devices/:device_id/stop", handler.StopCharge)    // 停止充电
+	api.GET("/devices/:device_id", handler.GetDevice)           // 查询设备状态
 
 	// 订单查询API
-	api.GET("/orders/:id", handler.GetOrder) // 查询订单详情
-	api.GET("/orders", handler.ListOrders)   // 订单列表（分页）
+	api.GET("/orders/:order_id", handler.GetOrder) // 查询订单详情
+	api.GET("/orders", handler.ListOrders)         // 订单列表（分页）
 
 	// 参数和OTA API
-	api.POST("/devices/:id/params", handler.SetParams) // 设置参数
-	api.POST("/devices/:id/ota", handler.TriggerOTA)   // 触发OTA升级
+	api.POST("/devices/:device_id/params", handler.SetParams) // 设置参数
+	api.POST("/devices/:device_id/ota", handler.TriggerOTA)   // 触发OTA升级
 
 	logger.Info("third party routes registered", zap.Int("endpoints", 7))
 }

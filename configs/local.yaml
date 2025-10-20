@@ -1,0 +1,102 @@
+# IOT Server 本地开发配置
+# 使用方式: IOT_CONFIG=configs/local.yaml go run cmd/server/main.go
+
+app:
+  name: iot-server
+  env: dev
+
+http:
+  addr: ":8080"
+  readTimeout: 30s
+  writeTimeout: 30s
+
+tcp:
+  addr: ":7001" # 本地开发使用 7001（7000 被系统占用）
+  readTimeout: 300s
+  writeTimeout: 30s
+  maxConnections: 5000
+  limiting:
+    enabled: true
+    max_connections: 10000
+    rate_per_second: 100
+    rate_burst: 200
+    breaker_threshold: 5
+    breaker_timeout: 30s
+
+protocols:
+  enable_ap3000: true
+  enable_bkv: true
+  enable_gn: false
+  bkv:
+    reason_map_path: "configs/bkv_reason_map.yaml"
+
+gateway:
+  throttle_ms: 500
+  retry_max: 3
+  dead_retention_days: 7
+
+logging:
+  level: debug # 本地开发使用 debug 级别
+  format: json
+  file:
+    filename: "logs/iot-server.log"
+    maxSize: 100
+    maxBackups: 7
+    maxAge: 30
+    compress: true
+
+metrics:
+  enable: true
+  path: "/metrics"
+
+database:
+  # 本地开发：连接到 localhost:5432 (docker-compose.local.yml 启动的 PostgreSQL)
+  dsn: "postgres://iot:iot123@localhost:5432/iot_server?sslmode=disable"
+  maxOpenConns: 20
+  maxIdleConns: 10
+  connMaxLifetime: 1h
+  autoMigrate: true
+
+# Redis配置（本地开发）
+redis:
+  enabled: true
+  addr: "localhost:6379" # 连接到本地 Docker 容器的 Redis
+  password: "123456"
+  db: 0
+  pool_size: 20
+  min_idle_conns: 5
+  dial_timeout: 5s
+  read_timeout: 3s
+  write_timeout: 3s
+
+thirdparty:
+  push:
+    webhook_url: "" # 本地开发可以留空，或使用 webhook.site 等测试工具
+    secret: ""
+    max_retries: 3
+    worker_count: 2
+    dedup_ttl: 1h
+    enable_queue: true
+    enable_dedup: true
+  auth:
+    api_keys:
+      - "sk_dev_local_test123" # 本地开发测试密钥
+    require_hmac: false # 本地开发关闭 HMAC 验证，方便测试
+  ip_whitelist: [] # 本地开发不限制 IP
+
+session:
+  heartbeat_timeout_sec: 360
+  weighted:
+    enabled: true
+    tcp_down_window_sec: 120
+    ack_window_sec: 30
+    tcp_down_penalty: 0.5
+    ack_timeout_penalty: 0.5
+    threshold: 0.5
+
+# API认证配置（本地开发）
+api:
+  auth:
+    enabled: false # 本地开发关闭认证，方便测试
+    api_keys:
+      - "sk_dev_local_test123"

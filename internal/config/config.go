@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -195,8 +196,9 @@ type Config struct {
 func Load(path string) (*Config, error) {
 	v := viper.New()
 
+	// 优先使用传入的path，否则从环境变量读取
 	if path == "" {
-		path = v.GetString("IOT_CONFIG")
+		path = os.Getenv("IOT_CONFIG")
 	}
 
 	if path != "" {

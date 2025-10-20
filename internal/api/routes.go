@@ -2,10 +2,14 @@ package api
 
 import (
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	"github.com/taoyao-code/iot-server/internal/api/middleware"
 	"github.com/taoyao-code/iot-server/internal/session"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"go.uber.org/zap"
+
+	_ "github.com/taoyao-code/iot-server/api/swagger" // swagger docs
 )
 
 // RegisterReadOnlyRoutes 注册只读查询路由
@@ -25,6 +29,9 @@ func RegisterReadOnlyRoutes(
 	// 创建Handler
 	handler := NewReadOnlyHandler(repo, sess, policy, logger)
 
+	// Swagger 文档(无需认证)
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+
 	// 快速就绪检查(无需认证)
 	r.GET("/ready", handler.Ready)
 
@@ -39,15 +46,15 @@ func RegisterReadOnlyRoutes(
 
 	// 设备管理
 	api.GET("/devices", handler.ListDevices)
-	api.GET("/devices/:phyId/ports", handler.ListDevicePorts)
-	api.GET("/devices/:phyId/params", handler.GetDeviceParams)
+	api.GET("/devices/:device_id/ports", handler.ListDevicePorts)
+	api.GET("/devices/:device_id/params", handler.GetDeviceParams)
 
 	// 会话管理
-	api.GET("/sessions/:phyId", handler.GetSessionStatus)
+	api.GET("/sessions/:device_id", handler.GetSessionStatus)
 
 	// 订单管理
-	api.GET("/orders/:id", handler.GetOrder)
-	api.GET("/devices/:phyId/orders", handler.ListDeviceOrders)
+	api.GET("/orders/:order_id", handler.GetOrder)
+	api.GET("/devices/:device_id/orders", handler.ListDeviceOrders)
 
 	logger.Info("readonly routes registered", zap.Int("endpoints", 6))
 }

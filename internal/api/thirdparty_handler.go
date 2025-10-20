@@ -67,15 +67,15 @@ type StartChargeRequest struct {
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
-// @Param id path string true "设备物理ID"
+// @Param device_id path string true "设备物理ID"
 // @Param request body StartChargeRequest true "充电参数"
 // @Success 200 {object} StandardResponse "成功"
 // @Failure 400 {object} StandardResponse "参数错误"
 // @Failure 500 {object} StandardResponse "服务器错误"
-// @Router /api/v1/third/devices/{id}/charge [post]
+// @Router /api/v1/third/devices/{device_id}/charge [post]
 func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 	ctx := c.Request.Context()
-	devicePhyID := c.Param("id")
+	devicePhyID := c.Param("device_id")
 	requestID := c.GetString("request_id")
 
 	// 解析请求体
@@ -192,15 +192,15 @@ type StopChargeRequest struct {
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
-// @Param id path string true "设备物理ID"
+// @Param device_id path string true "设备物理ID"
 // @Param request body StopChargeRequest true "停止充电参数"
 // @Success 200 {object} StandardResponse "成功"
 // @Failure 404 {object} StandardResponse "订单不存在"
 // @Failure 500 {object} StandardResponse "服务器错误"
-// @Router /api/v1/third/devices/{id}/stop [post]
+// @Router /api/v1/third/devices/{device_id}/stop [post]
 func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	ctx := c.Request.Context()
-	devicePhyID := c.Param("id")
+	devicePhyID := c.Param("device_id")
 	requestID := c.GetString("request_id")
 
 	// 解析请求体
@@ -303,14 +303,14 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 // @Tags 第三方API - 设备管理
 // @Produce json
 // @Security ApiKeyAuth
-// @Param id path string true "设备物理ID"
+// @Param device_id path string true "设备物理ID"
 // @Success 200 {object} StandardResponse "成功"
 // @Failure 404 {object} StandardResponse "设备不存在"
 // @Failure 500 {object} StandardResponse "服务器错误"
-// @Router /api/v1/third/devices/{id} [get]
+// @Router /api/v1/third/devices/{device_id} [get]
 func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 	ctx := c.Request.Context()
-	devicePhyID := c.Param("id")
+	devicePhyID := c.Param("device_id")
 	requestID := c.GetString("request_id")
 
 	h.logger.Info("get device requested", zap.String("device_phy_id", devicePhyID))
@@ -393,14 +393,14 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 // @Tags 第三方API - 订单管理
 // @Produce json
 // @Security ApiKeyAuth
-// @Param id path string true "订单号"
+// @Param order_id path string true "订单号"
 // @Success 200 {object} StandardResponse "成功"
 // @Failure 404 {object} StandardResponse "订单不存在"
 // @Failure 500 {object} StandardResponse "服务器错误"
-// @Router /api/v1/third/orders/{id} [get]
+// @Router /api/v1/third/orders/{order_id} [get]
 func (h *ThirdPartyHandler) GetOrder(c *gin.Context) {
 	ctx := c.Request.Context()
-	orderNo := c.Param("id")
+	orderNo := c.Param("order_id")
 	requestID := c.GetString("request_id")
 
 	h.logger.Info("get order requested", zap.String("order_no", orderNo))
@@ -637,15 +637,15 @@ type ParamItem struct {
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
-// @Param id path string true "设备物理ID"
+// @Param device_id path string true "设备物理ID"
 // @Param request body SetParamsRequest true "参数列表"
 // @Success 200 {object} StandardResponse "成功"
 // @Failure 400 {object} StandardResponse "参数错误"
 // @Failure 500 {object} StandardResponse "服务器错误"
-// @Router /api/v1/third/devices/{id}/params [post]
+// @Router /api/v1/third/devices/{device_id}/params [post]
 func (h *ThirdPartyHandler) SetParams(c *gin.Context) {
 	ctx := c.Request.Context()
-	devicePhyID := c.Param("id")
+	devicePhyID := c.Param("device_id")
 	requestID := c.GetString("request_id")
 
 	// 解析请求体
@@ -746,15 +746,15 @@ type TriggerOTARequest struct {
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
-// @Param id path string true "设备物理ID"
+// @Param device_id path string true "设备物理ID"
 // @Param request body TriggerOTARequest true "OTA升级参数"
 // @Success 200 {object} StandardResponse "成功"
 // @Failure 400 {object} StandardResponse "参数错误"
 // @Failure 500 {object} StandardResponse "服务器错误"
-// @Router /api/v1/third/devices/{id}/ota [post]
+// @Router /api/v1/third/devices/{device_id}/ota [post]
 func (h *ThirdPartyHandler) TriggerOTA(c *gin.Context) {
 	ctx := c.Request.Context()
-	devicePhyID := c.Param("id")
+	devicePhyID := c.Param("device_id")
 	requestID := c.GetString("request_id")
 
 	// 解析请求体

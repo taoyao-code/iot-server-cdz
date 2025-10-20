@@ -78,6 +78,55 @@ test-coverage:
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "覆盖率报告: coverage.html"
 
+# 本地开发环境（仅依赖服务）
+.PHONY: dev-up dev-down dev-logs dev-status dev-run dev-clean dev-all dev-check-ports
+
+dev-check-ports:
+	@./scripts/check-ports.sh
+
+dev-up:
+	@echo "🚀 启动本地开发依赖服务..."
+	docker-compose -f docker-compose.local.yml up -d
+	@echo ""
+	@echo "✅ 依赖服务已启动！"
+	@echo "   PostgreSQL: localhost:5432 (用户: iot, 密码: iot123, 数据库: iot_server)"
+	@echo ""
+	@echo "📝 注意事项："
+	@echo "   - Redis: 使用本地现有 Redis (localhost:6379, 密码: 123456)"
+	@echo "   - 如需独立 Redis，请编辑 docker-compose.local.yml 取消注释"
+	@echo ""
+	@echo "💡 下一步: 运行 'make dev-run' 启动应用服务器"
+
+dev-down:
+	@echo "停止本地开发依赖服务..."
+	docker-compose -f docker-compose.local.yml down
+	@echo "✅ 依赖服务已停止"
+
+dev-logs:
+	@echo "查看依赖服务日志..."
+	docker-compose -f docker-compose.local.yml logs -f
+
+dev-status:
+	@echo "检查依赖服务状态..."
+	docker-compose -f docker-compose.local.yml ps
+
+dev-run:
+	@echo "🚀 启动本地开发服务器..."
+	@echo "配置文件: configs/local.yaml"
+	IOT_CONFIG=configs/local.yaml go run ./cmd/server
+
+dev-clean:
+	@echo "清理本地开发环境（包括数据卷）..."
+	docker-compose -f docker-compose.local.yml down -v
+	@echo "✅ 本地开发环境已清理"
+
+dev-all: dev-up
+	@echo ""
+	@echo "⏳ 等待服务启动 (5秒)..."
+	@sleep 5
+	@echo ""
+	@$(MAKE) dev-run
+
 # Docker Compose - 开发环境
 .PHONY: compose-up compose-down compose-logs
 
@@ -316,9 +365,19 @@ api-docs: swagger-init swagger-gen
 help:
 	@echo "IOT Server Makefile命令："
 	@echo ""
+	@echo "🚀 本地开发（推荐）："
+	@echo "  make dev-all         - 一键启动（依赖服务+应用服务器）"
+	@echo "  make dev-up          - 启动依赖服务（PostgreSQL，复用本地Redis）"
+	@echo "  make dev-run         - 启动应用服务器（需先执行 dev-up）"
+	@echo "  make dev-check-ports - 检查端口占用情况"
+	@echo "  make dev-down        - 停止依赖服务"
+	@echo "  make dev-logs        - 查看依赖服务日志"
+	@echo "  make dev-status      - 检查依赖服务状态"
+	@echo "  make dev-clean       - 清理本地开发环境（包括数据）"
+	@echo ""
 	@echo "开发相关："
 	@echo "  make build           - 构建应用"
-	@echo "  make run             - 运行开发服务器"
+	@echo "  make run             - 运行开发服务器（使用 example.yaml）"
 	@echo "  make test            - 运行测试"
 	@echo "  make test-coverage   - 生成测试覆盖率报告"
 	@echo "  make fmt             - 格式化代码（自动修复）"
