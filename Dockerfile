@@ -57,7 +57,7 @@ RUN /out/iot-server --version 2>/dev/null || echo "Binary built successfully"
 # ============================================
 # 运行阶段 - 使用轻量级Debian镜像
 # ============================================
-FROM debian:12-slim
+FROM debian:13-slim
 
 # 配置国内镜像源（阿里云）并安装运行时依赖
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
