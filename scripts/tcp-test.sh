@@ -24,7 +24,7 @@ log_title() { echo -e "${CYAN}========== $1 ==========${NC}"; }
 
 # 默认配置
 TCP_HOST=${TCP_HOST:-localhost}
-TCP_PORT=${TCP_PORT:-7054}
+TCP_PORT=${TCP_PORT:-7065}
 API_HOST=${API_HOST:-localhost}
 API_PORT=${API_PORT:-7055}
 
@@ -195,7 +195,7 @@ TCP 模块测试工具 - 组网设备 BKV 协议
 
 环境变量：
   TCP_HOST        TCP 服务器地址（默认: localhost）
-  TCP_PORT        TCP 服务器端口（默认: 7054，BKV协议端口）
+  TCP_PORT        TCP 服务器端口（默认: 7065，BKV协议端口）
   API_HOST        API 服务器地址（默认: localhost）
   API_PORT        API 服务器端口（默认: 7055）
 

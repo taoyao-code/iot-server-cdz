@@ -85,8 +85,23 @@ COPY --from=build /src/configs/bkv_reason_map.yaml /app/configs/bkv_reason_map.y
 RUN mkdir -p /var/log/iot-server && \
     chown -R nonroot:root /var/log/iot-server /app
 
-# 切换到非root用户
-USER nonroot
+# 创建启动脚本（自动修复日志目录权限）
+RUN echo '#!/bin/sh' > /entrypoint.sh && \
+    echo 'set -e' >> /entrypoint.sh && \
+    echo '# 修复日志目录权限（如果volume挂载导致权限丢失）' >> /entrypoint.sh && \
+    echo 'if [ ! -w /var/log/iot-server ]; then' >> /entrypoint.sh && \
+    echo '  echo "Fixing log directory permissions..."' >> /entrypoint.sh && \
+    echo '  chown -R nonroot:root /var/log/iot-server 2>/dev/null || true' >> /entrypoint.sh && \
+    echo 'fi' >> /entrypoint.sh && \
+    echo 'exec su-exec nonroot "$@"' >> /entrypoint.sh && \
+    chmod +x /entrypoint.sh
+
+# 安装 su-exec（轻量级 gosu 替代）
+USER root
+RUN apk add --no-cache su-exec
+
+# 不在这里切换用户，由 entrypoint 处理
+# USER nonroot
 
 # 暴露端口
 EXPOSE 8080 7000
@@ -111,7 +126,8 @@ LABEL maintainer="IoT Team" \
       git_commit="${GIT_COMMIT}" \
       description="IoT Server for device communication and management"
 
-# 启动命令
-ENTRYPOINT ["/app/iot-server"]
+# 启动命令（通过entrypoint自动修复权限）
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/app/iot-server"]
 
 

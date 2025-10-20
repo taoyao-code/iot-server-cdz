@@ -4,7 +4,7 @@
 # ============================================
 
 # 端口配置
-export TCP_PORT=7054      # BKV协议TCP端口 (容器内7000)
+export TCP_PORT=7065      # BKV协议TCP端口 (容器内7000)
 export API_PORT=7055      # HTTP API端口 (容器内8080)
 export POSTGRES_PORT=5433 # PostgreSQL数据库端口
 export REDIS_PORT=6380    # Redis端口
@@ -12,7 +12,7 @@ export PROMETHEUS_PORT=9090  # Prometheus监控端口（可选）
 export GRAFANA_PORT=3000     # Grafana可视化端口（可选）
 
 # 端口说明
-# 7054 - TCP设备协议端口（BKV组网协议）
+# 7065 - TCP设备协议端口（BKV组网协议）
 # 7055 - HTTP API/健康检查/Metrics端口
 
 # 颜色输出

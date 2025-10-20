@@ -5,6 +5,8 @@ import (
 	"net"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // ConnContext 为每个 TCP 连接提供读/写循环与回调能力
@@ -36,6 +38,9 @@ func (cc *ConnContext) ID() uint64 { return cc.id }
 
 // RemoteAddr 返回远端地址
 func (cc *ConnContext) RemoteAddr() net.Addr { return cc.c.RemoteAddr() }
+
+// Server 返回所属的服务器实例
+func (cc *ConnContext) Server() *Server { return cc.s }
 
 // SetOnRead 安装读取回调（收到上行原始字节时触发）
 func (cc *ConnContext) SetOnRead(h func([]byte)) { cc.onRead = h }
@@ -108,6 +113,13 @@ func (cc *ConnContext) run() {
 	for {
 		n, err := cc.c.Read(buf)
 		if n > 0 {
+			// 记录接收到的数据
+			if cc.s.logger != nil {
+				cc.s.logger.Debug("TCP data received",
+					zap.String("remote_addr", cc.c.RemoteAddr().String()),
+					zap.Int("bytes", n),
+				)
+			}
 			if cc.s.onRecvBytes != nil {
 				cc.s.onRecvBytes(n)
 			}
@@ -122,6 +134,13 @@ func (cc *ConnContext) run() {
 					_ = cc.c.SetReadDeadline(time.Now().Add(cc.s.cfg.ReadTimeout))
 				}
 				continue
+			}
+			// 记录连接错误
+			if cc.s.logger != nil {
+				cc.s.logger.Info("TCP read error, connection will close",
+					zap.String("remote_addr", cc.c.RemoteAddr().String()),
+					zap.Error(err),
+				)
 			}
 			break
 		}

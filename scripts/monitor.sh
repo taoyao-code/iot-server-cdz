@@ -201,8 +201,8 @@ network() {
     echo -n "HTTP API ($API_PORT): "
     curl -s -o /dev/null -w "%{http_code}" http://localhost:$API_PORT/health && echo " ✅" || echo " ❌"
     
-    echo -n "TCP 端口 (7054-BKV): "
-    timeout 2 bash -c "cat < /dev/null > /dev/tcp/localhost/7054" 2>/dev/null && echo "✅" || echo "❌"
+    echo -n "TCP 端口 (7065-BKV): "
+    timeout 2 bash -c "cat < /dev/null > /dev/tcp/localhost/7065" 2>/dev/null && echo "✅" || echo "❌"
     
     echo -n "Postgres (5433): "
     timeout 2 bash -c "cat < /dev/null > /dev/tcp/localhost/5433" 2>/dev/null && echo "✅" || echo "❌"
@@ -365,7 +365,7 @@ IOT Server 监控与调试工具
   HTTP API:   http://localhost:7055
   健康检查:   http://localhost:7055/health
   Metrics:    http://localhost:7055/metrics
-  TCP 端口:   localhost:7054 (BKV协议)
+  TCP 端口:   localhost:7065 (BKV协议)
 
 环境变量：
   API_PORT    API 服务器端口（默认: 7055）

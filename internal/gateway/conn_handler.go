@@ -12,6 +12,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 	"github.com/taoyao-code/iot-server/internal/session"
 	"github.com/taoyao-code/iot-server/internal/tcpserver"
+	"go.uber.org/zap"
 )
 
 // NewConnHandler 构建 TCP 连接处理器，完成协议识别、会话绑定与指标上报。
@@ -133,6 +134,17 @@ func NewConnHandler(
 			// 通用Handler包装器：添加会话绑定和指标上报
 			wrapBKVHandler := func(handlerFunc func(context.Context, *bkv.Frame) error) func(*bkv.Frame) error {
 				return func(f *bkv.Frame) error {
+					// 记录BKV帧信息
+					if cc.Server() != nil && cc.Server().GetLogger() != nil {
+						cc.Server().GetLogger().Info("BKV frame received",
+							zap.String("cmd", fmt.Sprintf("0x%04X", f.Cmd)),
+							zap.String("gateway_id", f.GatewayID),
+							zap.Uint32("msg_id", f.MsgID),
+							zap.Int("data_len", len(f.Data)),
+							zap.String("remote_addr", cc.RemoteAddr().String()),
+						)
+					}
+
 					if appm != nil {
 						appm.BKVRouteTotal.WithLabelValues(fmt.Sprintf("%04X", f.Cmd)).Inc()
 					}
@@ -141,7 +153,17 @@ func NewConnHandler(
 					if bh == nil {
 						return nil
 					}
-					return handlerFunc(context.Background(), f)
+
+					// 执行Handler并记录结果
+					err := handlerFunc(context.Background(), f)
+					if err != nil && cc.Server() != nil && cc.Server().GetLogger() != nil {
+						cc.Server().GetLogger().Error("BKV handler error",
+							zap.String("cmd", fmt.Sprintf("0x%04X", f.Cmd)),
+							zap.String("gateway_id", f.GatewayID),
+							zap.Error(err),
+						)
+					}
+					return err
 				}
 			}
 
@@ -244,6 +266,7 @@ func NewConnHandler(
 		}
 
 		mux := tcpserver.NewMux(adapters...)
+		mux.SetServer(cc.Server()) // 设置server引用以支持日志
 		mux.BindToConn(cc)
 
 		go func() {

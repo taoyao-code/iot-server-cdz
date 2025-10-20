@@ -111,8 +111,8 @@ echo ""
 
 echo -e "${BLUE}[6] 检查端口配置${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo -n "测试端口 7054 (TCP协议-BKV) 未被占用 ... "
-if ! netstat -tuln 2>/dev/null | grep -q ':7054' && ! lsof -i :7054 2>/dev/null; then
+echo -n "测试端口 7065 (TCP协议-BKV) 未被占用 ... "
+if ! netstat -tuln 2>/dev/null | grep -q ':7065' && ! lsof -i :7065 2>/dev/null; then
     echo -e "${GREEN}✓ 通过${NC}"
     PASSED_TESTS=$((PASSED_TESTS + 1))
 else

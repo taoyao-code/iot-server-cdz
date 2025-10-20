@@ -22,7 +22,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_title() { echo -e "${CYAN}========== $1 ==========${NC}"; }
 log_data() { echo -e "${MAGENTA}[DATA]${NC} $1"; }
 
-TCP_PORT=${TCP_PORT:-7054}
+TCP_PORT=${TCP_PORT:-7065}
 API_PORT=${API_PORT:-7055}
 
 # ============================================
@@ -390,7 +390,7 @@ usage() {
   $0 devices
 
 环境变量：
-  TCP_PORT        TCP 端口（默认: 7054，BKV协议端口）
+  TCP_PORT        TCP 端口（默认: 7065，BKV协议端口）
   API_PORT        API 端口（默认: 7055）
 
 提示：

@@ -174,7 +174,7 @@ show_status() {
     echo ""
     log_info "访问地址："
     echo "  HTTP API: http://localhost:7055"
-    echo "  TCP 端口: localhost:7054"
+    echo "  TCP 端口: localhost:7065"
     echo "  健康检查: http://localhost:7055/healthz"
     echo "  Metrics: http://localhost:7055/metrics"
     

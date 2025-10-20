@@ -53,6 +53,11 @@ func (s *Server) SetLogger(logger *zap.Logger) {
 	s.logger = logger
 }
 
+// GetLogger 获取日志器
+func (s *Server) GetLogger() *zap.Logger {
+	return s.logger
+}
+
 // EnableLimiting 启用限流和熔断（Week2）
 func (s *Server) EnableLimiting(maxConn int, ratePerSec int, rateBurst int, breakerThreshold int, breakerTimeout time.Duration) {
 	s.connLimiter = NewConnectionLimiter(maxConn, 5*time.Second)
@@ -143,6 +148,14 @@ func (s *Server) Start() error {
 				continue
 			}
 
+			// 记录TCP连接
+			if s.logger != nil {
+				s.logger.Info("TCP connection accepted",
+					zap.String("remote_addr", conn.RemoteAddr().String()),
+					zap.String("local_addr", conn.LocalAddr().String()),
+				)
+			}
+
 			if s.onAccept != nil {
 				s.onAccept()
 			}
@@ -193,6 +206,15 @@ func (s *Server) handleConnWithProtection(conn net.Conn) {
 		go func(c net.Conn) {
 			defer s.wg.Done()
 			defer func() {
+				// 记录连接关闭
+				if s.logger != nil {
+					s.logger.Info("TCP connection closed",
+						zap.String("remote_addr", c.RemoteAddr().String()),
+					)
+				}
+				c.Close()
+			}()
+			defer func() {
 				if s.connLimiter != nil {
 					s.connLimiter.Release()
 				}
@@ -200,7 +222,10 @@ func (s *Server) handleConnWithProtection(conn net.Conn) {
 			defer func() {
 				if r := recover(); r != nil {
 					if s.logger != nil {
-						s.logger.Error("panic in handleConn", zap.Any("panic", r))
+						s.logger.Error("panic in handleConn",
+							zap.Any("panic", r),
+							zap.String("remote_addr", c.RemoteAddr().String()),
+						)
 					}
 					// 记录为失败，影响熔断器
 					if s.breaker != nil {

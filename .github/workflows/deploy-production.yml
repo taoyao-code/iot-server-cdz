@@ -332,7 +332,7 @@ jobs:
           max_retries=10
           retry=0
           while [ $retry -lt $max_retries ]; do
-            if curl -f http://${{ secrets.PROD_HOST }}:7054/healthz; then
+            if curl -f http://${{ secrets.PROD_HOST }}:7065/healthz; then
               echo "✅ 生产环境健康检查通过"
               break
             fi
@@ -346,14 +346,14 @@ jobs:
           fi
 
           # 就绪检查
-          if curl -f http://${{ secrets.PROD_HOST }}:7054/readyz; then
+          if curl -f http://${{ secrets.PROD_HOST }}:7065/readyz; then
             echo "✅ 服务就绪"
           else
             echo "⚠️ 服务尚未完全就绪"
           fi
 
           # 业务接口测试
-          # curl -f http://${{ secrets.PROD_HOST }}:7054/api/v1/health
+          # curl -f http://${{ secrets.PROD_HOST }}:7065/api/v1/health
 
       - name: 监控指标检查
         run: |

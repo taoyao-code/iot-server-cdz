@@ -194,7 +194,7 @@ cd /opt/iot-server
 
 # 1. 设置防火墙
 sudo ufw allow 22/tcp
-sudo ufw allow 7054/tcp  # HTTP API
+sudo ufw allow 7065/tcp  # HTTP API
 sudo ufw allow 7055/tcp  # TCP 设备端口
 sudo ufw enable
 
