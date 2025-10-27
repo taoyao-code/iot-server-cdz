@@ -230,7 +230,35 @@ func Load(path string) (*Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
+
+	// 展开环境变量（处理 ${VAR} 格式）
+	expandEnvVars(&cfg)
+
 	return &cfg, nil
+}
+
+// expandEnvVars 展开配置中的环境变量占位符
+func expandEnvVars(cfg *Config) {
+	// 数据库DSN
+	cfg.Database.DSN = os.ExpandEnv(cfg.Database.DSN)
+
+	// Redis配置
+	cfg.Redis.Addr = os.ExpandEnv(cfg.Redis.Addr)
+	cfg.Redis.Password = os.ExpandEnv(cfg.Redis.Password)
+
+	// 第三方推送配置
+	cfg.Thirdparty.Push.WebhookURL = os.ExpandEnv(cfg.Thirdparty.Push.WebhookURL)
+	cfg.Thirdparty.Push.Secret = os.ExpandEnv(cfg.Thirdparty.Push.Secret)
+
+	// 第三方认证API Keys
+	for i := range cfg.Thirdparty.Auth.APIKeys {
+		cfg.Thirdparty.Auth.APIKeys[i] = os.ExpandEnv(cfg.Thirdparty.Auth.APIKeys[i])
+	}
+
+	// API认证Keys
+	for i := range cfg.API.Auth.APIKeys {
+		cfg.API.Auth.APIKeys[i] = os.ExpandEnv(cfg.API.Auth.APIKeys[i])
+	}
 }
 
 func setDefaults(v *viper.Viper) {

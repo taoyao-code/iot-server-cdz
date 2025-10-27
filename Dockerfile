@@ -41,6 +41,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 COPY configs/ ./configs/
+COPY api/ ./api/
 
 # 编译二进制文件（嵌入版本信息）
 RUN --mount=type=cache,target=/root/.cache/go-build \

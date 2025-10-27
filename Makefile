@@ -195,6 +195,11 @@ deploy:
 	@echo "   生产环境：BACKUP=true make deploy（安全，带备份）"
 	./scripts/deploy.sh
 
+quick-deploy:
+	@echo "执行超快速部署（仅替换二进制）..."
+	@echo "⚡ 此方式跳过Docker构建，30秒完成"
+	./scripts/quick-deploy.sh
+
 backup:
 	@echo "执行备份..."
 	./scripts/backup.sh backup

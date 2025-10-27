@@ -117,14 +117,41 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		// 注意：这里不阻止充电指令下发，因为设备可能稍后上线
 	}
 
-	// 3. 生成订单号
+	// 3. 检查端口是否已被占用
+	var existingOrderNo string
+	checkPortSQL := `
+		SELECT order_no FROM orders 
+		WHERE device_id = $1 AND port_no = $2 AND status IN (0, 1)
+		ORDER BY created_at DESC LIMIT 1
+	`
+	err = h.repo.Pool.QueryRow(ctx, checkPortSQL, devID, req.PortNo).Scan(&existingOrderNo)
+	if err == nil {
+		// 端口已被占用
+		h.logger.Warn("port already in use",
+			zap.String("device_phy_id", devicePhyID),
+			zap.Int("port_no", req.PortNo),
+			zap.String("existing_order", existingOrderNo))
+		c.JSON(http.StatusConflict, StandardResponse{
+			Code:    409,
+			Message: "port is busy",
+			Data: map[string]interface{}{
+				"current_order": existingOrderNo,
+				"port_status":   "charging",
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
+	// 4. 生成订单号
 	orderNo := fmt.Sprintf("THD%d%03d", time.Now().Unix(), req.PortNo)
 
-	// 4. 创建订单记录（简化版本，实际应使用CardService）
+	// 5. 创建订单记录（简化版本，实际应使用CardService）
 	// 这里直接使用SQL插入订单
 	insertOrderSQL := `
-		INSERT INTO orders (device_id, order_no, card_no, amount, status, port_no, created_at)
-		VALUES ($1, $2, 'THIRD_PARTY_API', $3, 'pending', $4, NOW())
+		INSERT INTO orders (device_id, order_no, amount_cent, status, port_no, created_at)
+		VALUES ($1, $2, $3, 0, $4, NOW())
 	`
 	_, err = h.repo.Pool.Exec(ctx, insertOrderSQL, devID, orderNo, req.Amount, req.PortNo)
 	if err != nil {
@@ -138,7 +165,7 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		return
 	}
 
-	// 5. 构造并下发充电指令（BKV 0x0B下行）
+	// 6. 构造并下发充电指令（BKV 0x0B下行）
 	// 这里需要构造BKV充电指令的payload
 	if h.outboundQ != nil {
 		// 构造简化的充电指令消息
@@ -164,7 +191,7 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		}
 	}
 
-	// 6. 返回成功响应
+	// 7. 返回成功响应
 	c.JSON(http.StatusOK, StandardResponse{
 		Code:    0,
 		Message: "charge command sent successfully",
@@ -237,7 +264,7 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	var orderNo string
 	queryOrderSQL := `
 		SELECT order_no FROM orders 
-		WHERE device_id = $1 AND port_no = $2 AND status IN ('pending', 'charging')
+		WHERE device_id = $1 AND port_no = $2 AND status IN (0, 1)
 		ORDER BY created_at DESC LIMIT 1
 	`
 	err = h.repo.Pool.QueryRow(ctx, queryOrderSQL, devID, req.PortNo).Scan(&orderNo)
@@ -276,8 +303,8 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		}
 	}
 
-	// 4. 更新订单状态为停止中
-	updateOrderSQL := `UPDATE orders SET status = 'stopping', updated_at = NOW() WHERE order_no = $1`
+	// 4. 更新订单状态为取消（3）
+	updateOrderSQL := `UPDATE orders SET status = 3, updated_at = NOW() WHERE order_no = $1`
 	_, err = h.repo.Pool.Exec(ctx, updateOrderSQL, orderNo)
 	if err != nil {
 		h.logger.Error("failed to update order status", zap.Error(err))
@@ -352,7 +379,7 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 	var activePortNo *int
 	queryActiveOrderSQL := `
 		SELECT order_no, port_no FROM orders 
-		WHERE device_id = $1 AND status IN ('pending', 'charging')
+		WHERE device_id = $1 AND status IN (0, 1)
 		ORDER BY created_at DESC LIMIT 1
 	`
 	err = h.repo.Pool.QueryRow(ctx, queryActiveOrderSQL, devID).Scan(&activeOrderNo, &activePortNo)
@@ -407,22 +434,22 @@ func (h *ThirdPartyHandler) GetOrder(c *gin.Context) {
 
 	// 查询订单详情
 	var deviceID int64
-	var cardNo string
-	var amount int
-	var status string
-	var portNo *int
-	var duration *int
-	var energy *int
+	var amount *int64
+	var status int
+	var portNo int
+	var startTime *time.Time
+	var endTime *time.Time
+	var kwh *int64
 	var createdAt time.Time
 	var updatedAt time.Time
 
 	querySQL := `
-		SELECT device_id, card_no, amount, status, port_no, duration, energy, created_at, updated_at
+		SELECT device_id, amount_cent, status, port_no, start_time, end_time, kwh_0p01, created_at, updated_at
 		FROM orders 
 		WHERE order_no = $1
 	`
 	err := h.repo.Pool.QueryRow(ctx, querySQL, orderNo).Scan(
-		&deviceID, &cardNo, &amount, &status, &portNo, &duration, &energy, &createdAt, &updatedAt)
+		&deviceID, &amount, &status, &portNo, &startTime, &endTime, &kwh, &createdAt, &updatedAt)
 	if err != nil {
 		h.logger.Warn("order not found", zap.String("order_no", orderNo), zap.Error(err))
 		c.JSON(http.StatusNotFound, StandardResponse{
@@ -438,21 +465,23 @@ func (h *ThirdPartyHandler) GetOrder(c *gin.Context) {
 	orderData := map[string]interface{}{
 		"order_no":   orderNo,
 		"device_id":  deviceID,
-		"card_no":    cardNo,
-		"amount":     float64(amount) / 100.0, // 转换为元
-		"status":     status,
+		"port_no":    portNo,
+		"status":     getOrderStatusString(status),
 		"created_at": createdAt.Unix(),
 		"updated_at": updatedAt.Unix(),
 	}
 
-	if portNo != nil {
-		orderData["port_no"] = *portNo
+	if amount != nil {
+		orderData["amount"] = float64(*amount) / 100.0 // 转换为元
 	}
-	if duration != nil {
-		orderData["duration"] = *duration
+	if startTime != nil {
+		orderData["start_time"] = startTime.Unix()
 	}
-	if energy != nil {
-		orderData["energy_kwh"] = float64(*energy) / 100.0 // 转换为kWh
+	if endTime != nil {
+		orderData["end_time"] = endTime.Unix()
+	}
+	if kwh != nil {
+		orderData["energy_kwh"] = float64(*kwh) / 100.0 // 转换为kWh
 	}
 
 	c.JSON(http.StatusOK, StandardResponse{
@@ -543,7 +572,7 @@ func (h *ThirdPartyHandler) ListOrders(c *gin.Context) {
 	offset := (page - 1) * pageSize
 	args = append(args, pageSize, offset)
 	querySQL := fmt.Sprintf(`
-		SELECT order_no, device_id, card_no, amount, status, port_no, duration, energy, created_at, updated_at
+		SELECT order_no, device_id, amount_cent, status, port_no, start_time, end_time, kwh_0p01, created_at, updated_at
 		FROM orders 
 		%s
 		ORDER BY created_at DESC
@@ -567,16 +596,16 @@ func (h *ThirdPartyHandler) ListOrders(c *gin.Context) {
 	for rows.Next() {
 		var orderNo string
 		var deviceID int64
-		var cardNo string
-		var amount int
-		var status string
-		var portNo *int
-		var duration *int
-		var energy *int
+		var amount *int64
+		var status int
+		var portNo int
+		var startTime *time.Time
+		var endTime *time.Time
+		var kwh *int64
 		var createdAt time.Time
 		var updatedAt time.Time
 
-		err := rows.Scan(&orderNo, &deviceID, &cardNo, &amount, &status, &portNo, &duration, &energy, &createdAt, &updatedAt)
+		err := rows.Scan(&orderNo, &deviceID, &amount, &status, &portNo, &startTime, &endTime, &kwh, &createdAt, &updatedAt)
 		if err != nil {
 			h.logger.Error("failed to scan order", zap.Error(err))
 			continue
@@ -585,21 +614,23 @@ func (h *ThirdPartyHandler) ListOrders(c *gin.Context) {
 		orderData := map[string]interface{}{
 			"order_no":   orderNo,
 			"device_id":  deviceID,
-			"card_no":    cardNo,
-			"amount":     float64(amount) / 100.0,
-			"status":     status,
+			"port_no":    portNo,
+			"status":     getOrderStatusString(status),
 			"created_at": createdAt.Unix(),
 			"updated_at": updatedAt.Unix(),
 		}
 
-		if portNo != nil {
-			orderData["port_no"] = *portNo
+		if amount != nil {
+			orderData["amount"] = float64(*amount) / 100.0
 		}
-		if duration != nil {
-			orderData["duration"] = *duration
+		if startTime != nil {
+			orderData["start_time"] = startTime.Unix()
 		}
-		if energy != nil {
-			orderData["energy_kwh"] = float64(*energy) / 100.0
+		if endTime != nil {
+			orderData["end_time"] = endTime.Unix()
+		}
+		if kwh != nil {
+			orderData["energy_kwh"] = float64(*kwh) / 100.0
 		}
 
 		orders = append(orders, orderData)
@@ -886,4 +917,20 @@ func getDeviceStatus(online bool, activeOrderNo *string) string {
 		return "charging"
 	}
 	return "idle"
+}
+
+// getOrderStatusString 将订单状态码转换为字符串
+func getOrderStatusString(status int) string {
+	switch status {
+	case 0:
+		return "pending"
+	case 1:
+		return "charging"
+	case 2:
+		return "completed"
+	case 3:
+		return "cancelled"
+	default:
+		return "unknown"
+	}
 }

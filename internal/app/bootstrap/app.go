@@ -111,6 +111,9 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	app.AddRedisChecker(healthAgg, redisClient)
 	log.Info("health aggregator initialized")
 
+	// ========== 阶段6.5: 初始化Redis队列（需要在HTTP服务注册路由前）==========
+	redisQueue := app.NewRedisOutboundQueue(redisClient)
+
 	// P0修复: 注册路由时传入认证配置
 	// Week2: 同时注册健康检查路由
 	httpSrv.Register(func(r *gin.Engine) {
@@ -119,6 +122,18 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 			Enabled: cfg.API.Auth.Enabled,
 		}
 		api.RegisterReadOnlyRoutes(r, repo, sess, policy, authCfg, log)
+
+		// 注册第三方API路由
+		thirdpartyAuthCfg := middleware.AuthConfig{
+			APIKeys: cfg.Thirdparty.Auth.APIKeys,
+			Enabled: len(cfg.Thirdparty.Auth.APIKeys) > 0,
+		}
+		log.Info("third party api authentication config",
+			zap.Int("api_keys_count", len(thirdpartyAuthCfg.APIKeys)),
+			zap.Bool("enabled", thirdpartyAuthCfg.Enabled),
+			zap.Strings("api_keys", thirdpartyAuthCfg.APIKeys))
+		api.RegisterThirdPartyRoutes(r, repo, sess, redisQueue, eventQueue, thirdpartyAuthCfg, log)
+
 		app.RegisterHealthRoutes(r, healthAgg) // Week2: 健康检查路由
 	})
 
@@ -131,7 +146,6 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 
 	// ========== 阶段7: 启动下行队列Worker（使用Redis队列）==========
 	// Redis队列性能比PostgreSQL轮询快10倍
-	redisQueue := app.NewRedisOutboundQueue(redisClient)
 	redisWorker := app.NewRedisWorker(redisQueue, cfg.Gateway.ThrottleMs, cfg.Gateway.RetryMax, log)
 
 	ctx, wcancel := context.WithCancel(context.Background())
