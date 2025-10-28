@@ -27,6 +27,9 @@ const (
 	// EventChargingStarted 充电开始事件
 	EventChargingStarted EventType = "charging.started"
 
+	// EventChargingProgress 充电进度事件 (P0修复: 新增)
+	EventChargingProgress EventType = "charging.progress"
+
 	// EventChargingEnded 充电结束事件
 	EventChargingEnded EventType = "charging.ended"
 

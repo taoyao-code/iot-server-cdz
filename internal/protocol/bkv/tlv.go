@@ -265,6 +265,24 @@ type PortStatus struct {
 	ChargingTime uint16 // 充电时间 (分钟)
 }
 
+// IsCharging 判断端口是否正在充电
+// 状态位bit7=1表示充电中
+func (p *PortStatus) IsCharging() bool {
+	return (p.Status & 0x80) != 0
+}
+
+// IsIdle 判断端口是否空载
+// 状态位bit3=1表示空载
+func (p *PortStatus) IsIdle() bool {
+	return (p.Status & 0x08) != 0
+}
+
+// IsOnline 判断端口是否在线
+// 状态位bit0=1表示在线
+func (p *PortStatus) IsOnline() bool {
+	return (p.Status & 0x01) != 0
+}
+
 // ParseSocketStatus 解析插座状态上报 (0x94字段)
 func ParseSocketStatus(data []byte) (*SocketStatus, error) {
 	if len(data) < 10 {

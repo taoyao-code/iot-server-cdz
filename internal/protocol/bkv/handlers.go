@@ -36,6 +36,10 @@ type repoAPI interface {
 	UpdateOTATaskStatus(ctx context.Context, taskID int64, status int, errorMsg *string) error
 	UpdateOTATaskProgress(ctx context.Context, taskID int64, progress int, status int) error
 	GetDeviceOTATasks(ctx context.Context, deviceID int64, limit int) ([]pgstorage.OTATask, error)
+
+	// P0修复: 订单状态管理方法
+	GetPendingOrderByPort(ctx context.Context, deviceID int64, portNo int) (*pgstorage.Order, error)
+	UpdateOrderToCharging(ctx context.Context, orderNo string, startTime time.Time) error
 }
 
 // CardServiceAPI 刷卡充电服务接口
@@ -170,6 +174,7 @@ func (h *Handlers) HandleBKVStatus(ctx context.Context, f *Frame) error {
 }
 
 // handleSocketStatusUpdate 处理插座状态更新
+// P0修复: 增强订单状态同步和事件推送
 func (h *Handlers) handleSocketStatusUpdate(ctx context.Context, deviceID int64, payload *BKVPayload) error {
 	// 使用GetSocketStatus方法解析完整的插座状态
 	socketStatus, err := payload.GetSocketStatus()
@@ -178,33 +183,79 @@ func (h *Handlers) handleSocketStatusUpdate(ctx context.Context, deviceID int64,
 		return h.handleSocketStatusUpdateSimple(ctx, deviceID, payload)
 	}
 
-	// 更新端口A状态
-	if socketStatus.PortA != nil {
-		portA := socketStatus.PortA
-		status := int(portA.Status)
-		var powerW *int
-		if portA.Power > 0 {
-			power := int(portA.Power) / 10 // 从0.1W转换为W
-			powerW = &power
-		}
+	devicePhyID := payload.GatewayID
 
-		if err := h.Repo.UpsertPortState(ctx, deviceID, int(portA.PortNo), status, powerW); err != nil {
-			return fmt.Errorf("failed to update port A state: %w", err)
+	// 更新端口A状态并检查订单
+	if socketStatus.PortA != nil {
+		if err := h.updatePortAndOrder(ctx, deviceID, devicePhyID, socketStatus.PortA); err != nil {
+			return fmt.Errorf("failed to update port A: %w", err)
 		}
 	}
 
-	// 更新端口B状态
+	// 更新端口B状态并检查订单
 	if socketStatus.PortB != nil {
-		portB := socketStatus.PortB
-		status := int(portB.Status)
-		var powerW *int
-		if portB.Power > 0 {
-			power := int(portB.Power) / 10 // 从0.1W转换为W
-			powerW = &power
+		if err := h.updatePortAndOrder(ctx, deviceID, devicePhyID, socketStatus.PortB); err != nil {
+			return fmt.Errorf("failed to update port B: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// updatePortAndOrder 更新端口状态并同步订单状态
+// P0修复: 核心逻辑 - 当端口开始充电时自动更新订单状态
+func (h *Handlers) updatePortAndOrder(ctx context.Context, deviceID int64, devicePhyID string, port *PortStatus) error {
+	status := int(port.Status)
+	var powerW *int
+	if port.Power > 0 {
+		power := int(port.Power) / 10 // 从0.1W转换为W
+		powerW = &power
+	}
+
+	// 1. 更新端口状态到数据库
+	if err := h.Repo.UpsertPortState(ctx, deviceID, int(port.PortNo), status, powerW); err != nil {
+		return fmt.Errorf("upsert port state: %w", err)
+	}
+
+	// 2. P0修复: 检查是否需要更新订单状态
+	if port.IsCharging() && port.BusinessNo > 0 {
+		// 端口正在充电且有业务号，查找对应的pending订单
+		order, err := h.Repo.GetPendingOrderByPort(ctx, deviceID, int(port.PortNo))
+		if err != nil {
+			// 订单不存在或查询失败，只记录警告
+			// 不返回错误，因为端口状态已成功更新
+			return nil
 		}
 
-		if err := h.Repo.UpsertPortState(ctx, deviceID, int(portB.PortNo), status, powerW); err != nil {
-			return fmt.Errorf("failed to update port B state: %w", err)
+		// 3. 如果订单存在且是pending状态，更新为charging
+		if order != nil && order.Status == 0 {
+			startTime := time.Now()
+			if err := h.Repo.UpdateOrderToCharging(ctx, order.OrderNo, startTime); err != nil {
+				return fmt.Errorf("update order to charging: %w", err)
+			}
+
+			// 4. P0修复: 推送charging.started事件
+			if h.EventQueue != nil {
+				h.pushChargingStartedEventWithPort(
+					ctx,
+					devicePhyID,
+					order.OrderNo,
+					port,
+					startTime,
+				)
+			}
+		}
+
+		// 5. P0修复: 如果订单已经是charging状态，推送progress事件
+		if order != nil && order.Status == 1 {
+			if h.EventQueue != nil {
+				h.pushChargingProgressEvent(
+					ctx,
+					devicePhyID,
+					order.OrderNo,
+					port,
+				)
+			}
 		}
 	}
 
@@ -1349,4 +1400,73 @@ func (h *Handlers) HandleServiceFeeEnd(ctx context.Context, f *Frame) error {
 	_ = reply
 
 	return nil
+}
+
+// ===== P0修复: 充电事件推送适配方法 =====
+
+// pushChargingStartedEventWithPort 推送充电开始事件（带端口详情）
+// P0修复: 增强版本，包含电压、功率等详细信息
+func (h *Handlers) pushChargingStartedEventWithPort(
+	ctx context.Context,
+	devicePhyID string,
+	orderNo string,
+	port *PortStatus,
+	startTime time.Time,
+) {
+	// 使用已有的pushChargingStartedEvent方法，但需要先存储额外信息到data中
+	// 由于event_helpers.go中的方法签名较简单，这里直接构造完整事件
+	if h.EventQueue == nil {
+		return
+	}
+
+	eventData := map[string]interface{}{
+		"order_no":   orderNo,
+		"port_no":    int(port.PortNo),
+		"started_at": startTime.Unix(),
+		// P0修复: 新增详细充电参数
+		"voltage_v": float64(port.Voltage) / 10.0,   // 0.1V → V
+		"power_w":   float64(port.Power) / 10.0,     // 0.1W → W
+		"current_a": float64(port.Current) / 1000.0, // 0.001A → A
+	}
+
+	event := thirdparty.NewEvent(
+		thirdparty.EventChargingStarted,
+		devicePhyID,
+		eventData,
+	)
+
+	// 使用pushEvent统一推送（包含去重逻辑）
+	h.pushEvent(ctx, event, nil)
+}
+
+// pushChargingProgressEvent 推送充电进度事件
+// P0修复: 新增方法，用于推送充电进度更新
+func (h *Handlers) pushChargingProgressEvent(
+	ctx context.Context,
+	devicePhyID string,
+	orderNo string,
+	port *PortStatus,
+) {
+	if h.EventQueue == nil {
+		return
+	}
+
+	eventData := map[string]interface{}{
+		"order_no":     orderNo,
+		"port_no":      int(port.PortNo),
+		"duration_min": int(port.ChargingTime),         // 分钟
+		"energy_kwh":   float64(port.Energy) / 100.0,   // 0.01kWh → kWh
+		"power_w":      float64(port.Power) / 10.0,     // 0.1W → W
+		"current_a":    float64(port.Current) / 1000.0, // 0.001A → A
+		"voltage_v":    float64(port.Voltage) / 10.0,   // 0.1V → V
+	}
+
+	event := thirdparty.NewEvent(
+		thirdparty.EventChargingProgress,
+		devicePhyID,
+		eventData,
+	)
+
+	// 使用pushEvent统一推送（包含去重逻辑）
+	h.pushEvent(ctx, event, nil)
 }

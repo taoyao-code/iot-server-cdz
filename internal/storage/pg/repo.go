@@ -824,7 +824,6 @@ func (r *Repository) GetOTATask(ctx context.Context, taskID int64) (*OTATask, er
 		&task.ID, &task.DeviceID, &task.TargetType, &task.TargetSocketNo, &task.FirmwareVersion,
 		&task.FTPServer, &task.FTPPort, &task.FileName, &task.FileSize, &task.Status, &task.Progress,
 		&task.ErrorMsg, &task.MsgID, &task.StartedAt, &task.CompletedAt, &task.CreatedAt, &task.UpdatedAt)
-
 	if err != nil {
 		return nil, err
 	}
@@ -911,4 +910,51 @@ func (r *Repository) SetOTATaskMsgID(ctx context.Context, taskID int64, msgID in
 
 	_, err := r.Pool.Exec(ctx, q, taskID, msgID)
 	return err
+}
+
+// ===== P0修复: 订单状态管理方法 =====
+
+// GetPendingOrderByPort 根据设备ID和端口号查询pending状态的订单
+// 用于在端口开始充电时查找对应的订单进行状态更新
+func (r *Repository) GetPendingOrderByPort(ctx context.Context, deviceID int64, portNo int) (*Order, error) {
+	const q = `SELECT id, device_id, port_no, order_no, status, start_time, end_time, 
+	                  amount_cent, kwh_0p01
+	           FROM orders
+	           WHERE device_id = $1 AND port_no = $2 AND status IN (0, 1)
+	           ORDER BY created_at DESC
+	           LIMIT 1`
+
+	var ord Order
+
+	err := r.Pool.QueryRow(ctx, q, deviceID, portNo).Scan(
+		&ord.ID, &ord.DeviceID, &ord.PortNo, &ord.OrderNo, &ord.Status,
+		&ord.StartTime, &ord.EndTime, &ord.AmountCent, &ord.Kwh01,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ord, nil
+}
+
+// UpdateOrderToCharging 将订单状态从pending更新为charging
+// 仅当订单状态为pending(0)时才会更新，实现幂等性
+func (r *Repository) UpdateOrderToCharging(ctx context.Context, orderNo string, startTime time.Time) error {
+	const q = `UPDATE orders 
+	           SET status = 1, start_time = $2, updated_at = NOW()
+	           WHERE order_no = $1 AND status = 0
+	           RETURNING id`
+
+	var id int64
+	err := r.Pool.QueryRow(ctx, q, orderNo, startTime).Scan(&id)
+	// 如果没有行被更新（订单不存在或状态不是pending），不返回错误
+	// 这样可以实现幂等性：多次调用不会出错
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return nil // 幂等：订单已经是charging或不存在
+		}
+		return fmt.Errorf("update order to charging: %w", err)
+	}
+
+	return nil
 }
