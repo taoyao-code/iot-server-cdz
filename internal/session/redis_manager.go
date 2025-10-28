@@ -164,6 +164,7 @@ func (m *RedisManager) OnAckTimeout(phyID string, t time.Time) {
 }
 
 // GetConn 获取绑定的连接对象（仅限本地连接）
+// 增强版：验证连接有效性，包括心跳超时检查
 func (m *RedisManager) GetConn(phyID string) (interface{}, bool) {
 	ctx := context.Background()
 
@@ -178,12 +179,25 @@ func (m *RedisManager) GetConn(phyID string) (interface{}, bool) {
 		return nil, false
 	}
 
+	// 检查心跳是否超时（关键修复点1：防止使用僵尸连接）
+	if time.Since(data.LastSeen) > m.timeout {
+		// 心跳已超时，主动清理Session
+		m.UnbindByPhy(phyID)
+		return nil, false
+	}
+
 	// 从本地缓存获取连接
 	m.mu.RLock()
 	conn, ok := m.localConn[data.ConnID]
 	m.mu.RUnlock()
 
-	return conn, ok
+	if !ok {
+		// 连接已被清理，从Redis也清理
+		m.UnbindByPhy(phyID)
+		return nil, false
+	}
+
+	return conn, true
 }
 
 // IsOnline 判断设备是否在线（仅心跳）

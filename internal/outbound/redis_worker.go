@@ -100,21 +100,59 @@ func (w *RedisWorker) processOne(ctx context.Context) {
 		return
 	}
 
+	// 关键修复点2：获取连接时，Session已经做了心跳超时验证
 	conn, ok := w.getConn(msg.PhyID)
 	if !ok {
-		w.markFailed(ctx, msg, fmt.Sprintf("device %s not connected", msg.PhyID))
+		// 设备不在线或连接已失效（包括心跳超时）
+		w.logger.Warn("device connection not available",
+			zap.String("msg_id", msg.ID),
+			zap.String("phy_id", msg.PhyID),
+			zap.String("reason", "not connected or heartbeat timeout"))
+		w.markFailed(ctx, msg, fmt.Sprintf("device %s not connected or connection invalid", msg.PhyID))
 		return
 	}
 
-	// 发送命令
-	writer, ok := conn.(interface{ Write([]byte) (int, error) })
-	if !ok {
+	// DEBUG: 记录即将发送的命令
+	w.logger.Info("DEBUG: worker准备发送命令",
+		zap.String("msg_id", msg.ID),
+		zap.Int("command_len", len(msg.Command)),
+		zap.String("command_hex", fmt.Sprintf("%x", msg.Command)))
+
+	// 发送命令（兼容两类写入接口）：
+	// 1) net.Conn:          Write([]byte) (int, error)
+	// 2) ConnContext等包装: Write([]byte) error
+	if writer1, ok := conn.(interface{ Write([]byte) (int, error) }); ok {
+		n, err := writer1.Write(msg.Command)
+		if err != nil {
+			// 关键修复点3：写入失败时记录详细错误
+			w.logger.Error("write to device failed",
+				zap.String("msg_id", msg.ID),
+				zap.String("phy_id", msg.PhyID),
+				zap.Int("expected_bytes", len(msg.Command)),
+				zap.Int("written_bytes", n),
+				zap.Error(err))
+			w.markFailed(ctx, msg, fmt.Sprintf("write failed: %v", err))
+			return
+		}
+		// 验证是否完整发送
+		if n != len(msg.Command) {
+			w.logger.Warn("partial write to device",
+				zap.String("msg_id", msg.ID),
+				zap.String("phy_id", msg.PhyID),
+				zap.Int("expected", len(msg.Command)),
+				zap.Int("actual", n))
+		}
+	} else if writer2, ok := conn.(interface{ Write([]byte) error }); ok {
+		if err := writer2.Write(msg.Command); err != nil {
+			w.logger.Error("write to device failed",
+				zap.String("msg_id", msg.ID),
+				zap.String("phy_id", msg.PhyID),
+				zap.Error(err))
+			w.markFailed(ctx, msg, fmt.Sprintf("write failed: %v", err))
+			return
+		}
+	} else {
 		w.markFailed(ctx, msg, "connection does not support Write")
-		return
-	}
-
-	if _, err := writer.Write(msg.Command); err != nil {
-		w.markFailed(ctx, msg, fmt.Sprintf("write failed: %v", err))
 		return
 	}
 
@@ -131,9 +169,10 @@ func (w *RedisWorker) processOne(ctx context.Context) {
 	}
 
 	w.sent.Add(1)
-	w.logger.Debug("message sent",
+	w.logger.Info("downlink message sent",
 		zap.String("msg_id", msg.ID),
-		zap.String("phy_id", msg.PhyID))
+		zap.String("phy_id", msg.PhyID),
+		zap.Int("bytes", len(msg.Command)))
 }
 
 // markFailed 标记失败

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 	"github.com/taoyao-code/iot-server/internal/session"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	redisstorage "github.com/taoyao-code/iot-server/internal/storage/redis"
@@ -165,18 +166,24 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		return
 	}
 
-	// 6. 构造并下发充电指令（BKV 0x0B下行）
-	// 这里需要构造BKV充电指令的payload
+	// 6. 构造并下发充电指令（BKV 0x0015下行）
+	// 按协议 2.2.8：外层BKV命令0x0015，内层控制命令0x07
 	if h.outboundQ != nil {
-		// 构造简化的充电指令消息
 		msgID := uint32(time.Now().Unix() % 65536)
-		cmdData := h.encodeChargeCommand(orderNo, uint8(req.ChargeMode), uint32(req.Amount), uint32(req.Duration), uint16(req.Power), uint32(req.PricePerKwh), uint16(req.ServiceFee))
+		mapped := uint8(mapPort(req.PortNo))
+		biz := deriveBusinessNo(orderNo)
+		// 构造内层payload（命令0x07 + 参数）
+		payload := h.encodeStartControlPayload(uint8(1), mapped, uint8(req.ChargeMode), uint16(req.Duration), biz)
+		h.logger.Info("DEBUG: payload生成", zap.Int("payload_len", len(payload)), zap.String("payload_hex", fmt.Sprintf("%x", payload)))
+		// 构造外层BKV帧（命令0x0015）
+		frame := bkv.Build(0x0015, msgID, devicePhyID, payload)
+		h.logger.Info("DEBUG: BKV帧生成", zap.Int("frame_len", len(frame)), zap.String("frame_hex", fmt.Sprintf("%x", frame)))
 
 		err = h.outboundQ.Enqueue(ctx, &redisstorage.OutboundMessage{
 			ID:        fmt.Sprintf("api_%d", msgID),
 			DeviceID:  devID,
 			PhyID:     devicePhyID,
-			Command:   cmdData,
+			Command:   frame,
 			Priority:  5,
 			MaxRetry:  3,
 			CreatedAt: time.Now(),
@@ -189,6 +196,24 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		} else {
 			h.logger.Info("charge command pushed", zap.String("order_no", orderNo))
 		}
+
+		// 主动查询插座状态（0x001D），避免仅依赖周期性0x94
+		q1ID := msgID + 1
+		qPayload := bkv.EncodeQuerySocketCommand(&bkv.QuerySocketCommand{SocketNo: 1})
+		qFrame := bkv.Build(0x001D, q1ID, devicePhyID, qPayload)
+		_ = h.outboundQ.Enqueue(ctx, &redisstorage.OutboundMessage{
+			ID:        fmt.Sprintf("api_%d", q1ID),
+			DeviceID:  devID,
+			PhyID:     devicePhyID,
+			Command:   qFrame,
+			Priority:  4,
+			MaxRetry:  2,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			Timeout:   3000,
+		})
+
+		// 不再对另一端口重发开始指令，严格按请求端口执行
 	}
 
 	// 7. 返回成功响应
@@ -282,14 +307,15 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	// 3. 下发停止充电指令（BKV 0x0015控制设备）
 	if h.outboundQ != nil {
 		msgID := uint32(time.Now().Unix() % 65536)
-		// 构造停止充电指令（简化版本）
-		stopData := []byte{byte(req.PortNo), 0x00} // 端口号 + 停止命令
+		// 构造停止充电控制负载：socketNo=1, port 映射, switch=0, 其余为0
+		biz := deriveBusinessNo(orderNo)
+		stopData := h.encodeStopControlPayload(uint8(1), uint8(mapPort(req.PortNo)), biz)
 
 		err = h.outboundQ.Enqueue(ctx, &redisstorage.OutboundMessage{
 			ID:        fmt.Sprintf("api_%d", msgID),
 			DeviceID:  devID,
 			PhyID:     devicePhyID,
-			Command:   stopData,
+			Command:   bkv.Build(0x0015, msgID, devicePhyID, stopData),
 			Priority:  8, // 停止命令优先级高
 			MaxRetry:  3,
 			CreatedAt: time.Now(),
@@ -906,6 +932,62 @@ func (h *ThirdPartyHandler) encodeChargeCommand(orderNo string, chargeMode uint8
 	data = append(data, byte(serviceFee>>8), byte(serviceFee))
 
 	return data
+}
+
+// mapPort 将业务端口号(1/2)映射为协议端口(0=A,1=B)
+func mapPort(port int) int {
+	if port <= 1 {
+		return 0
+	}
+	return 1
+}
+
+// encodeStartControlPayload 构造0x0015开始充电控制负载
+// 格式对齐 tlv.go 中的 BKVControlCommand 解析：
+// [socketNo(1)][port(1)][switch(1)][mode(1)][duration(2)][energy(2可0)][金额/档位等可选]
+func (h *ThirdPartyHandler) encodeStartControlPayload(socketNo uint8, port uint8, mode uint8, durationMin uint16, businessNo uint16) []byte {
+	// 0x0015控制命令：按协议2.2.8格式
+	// 格式：BKV子命令0x07(1) + 插座号(1) + 插孔号(1) + 开关(1) + 模式(1) + 时长(2) + 电量(2)
+	buf := make([]byte, 9)
+	buf[0] = 0x07                   // BKV子命令：0x07=控制命令
+	buf[1] = socketNo               // 插座号
+	buf[2] = port                   // 插孔号 (0=A孔, 1=B孔)
+	buf[3] = 0x01                   // 开关：1=开启, 0=关闭
+	buf[4] = mode                   // 充电模式：1=按时长,2=按电量
+	buf[5] = byte(durationMin >> 8) // 时长高字节
+	buf[6] = byte(durationMin)      // 时长低字节
+	buf[7] = 0x00                   // 电量高字节（按时长模式为0）
+	buf[8] = 0x00                   // 电量低字节（按时长模式为0）
+	return buf
+}
+
+// encodeStopControlPayload 构造0x0015停止充电控制负载
+func (h *ThirdPartyHandler) encodeStopControlPayload(socketNo uint8, port uint8, businessNo uint16) []byte {
+	// 0x0015停止命令：开关=0表示关闭
+	// 格式：BKV子命令0x07(1) + 插座号(1) + 插孔号(1) + 开关(1) + 模式(1) + 时长(2) + 电量(2)
+	buf := make([]byte, 9)
+	buf[0] = 0x07     // BKV子命令：0x07=控制命令
+	buf[1] = socketNo // 插座号
+	buf[2] = port     // 插孔号
+	buf[3] = 0x00     // 开关：0=关闭
+	buf[4] = 0x01     // 模式（停止时无意义，填1）
+	buf[5] = 0x00     // 时长高字节
+	buf[6] = 0x00     // 时长低字节
+	buf[7] = 0x00     // 电量高字节
+	buf[8] = 0x00     // 电量低字节
+	return buf
+}
+
+// deriveBusinessNo 从订单号推导16位业务号
+func deriveBusinessNo(orderNo string) uint16 {
+	var sum uint32
+	for i := 0; i < len(orderNo); i++ {
+		sum = (sum*131 + uint32(orderNo[i])) & 0xFFFF
+	}
+	if sum == 0 {
+		sum = 1
+	}
+	return uint16(sum)
 }
 
 // getDeviceStatus 获取设备状态描述
