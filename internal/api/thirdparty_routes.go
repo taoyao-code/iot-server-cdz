@@ -43,5 +43,8 @@ func RegisterThirdPartyRoutes(
 	api.POST("/devices/:device_id/params", handler.SetParams) // 设置参数
 	api.POST("/devices/:device_id/ota", handler.TriggerOTA)   // 触发OTA升级
 
-	logger.Info("third party routes registered", zap.Int("endpoints", 7))
+	// 组网管理API
+	api.POST("/devices/:device_id/network/configure", handler.ConfigureNetwork) // 配置组网
+
+	logger.Info("third party routes registered", zap.Int("endpoints", 8))
 }

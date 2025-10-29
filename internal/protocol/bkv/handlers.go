@@ -111,7 +111,21 @@ func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
 		)
 	}
 
+	// 🔥 关键修复：回复心跳ACK，否则设备会在60秒后断开连接
+	if h.Outbound != nil {
+		ackPayload := encodeHeartbeatAck(devicePhyID)
+		_ = h.Outbound.SendDownlink(devicePhyID, 0x0000, 0, ackPayload)
+	}
+
 	return err
+}
+
+// encodeHeartbeatAck 构造心跳ACK的payload（当前时间）
+// 格式：YYYYMMDDHHmmss (14字节ASCII)
+func encodeHeartbeatAck(gatewayID string) []byte {
+	now := time.Now()
+	timeStr := now.Format("20060102150405") // YYYYMMDDHHmmss
+	return []byte(timeStr)
 }
 
 // HandleBKVStatus 处理BKV插座状态上报 (cmd=0x1000 with BKV payload)

@@ -173,8 +173,16 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		mapped := uint8(mapPort(req.PortNo))
 		biz := deriveBusinessNo(orderNo)
 		// 构造内层payload（命令0x07 + 参数）
-		payload := h.encodeStartControlPayload(uint8(1), mapped, uint8(req.ChargeMode), uint16(req.Duration), biz)
-		h.logger.Info("DEBUG: payload生成", zap.Int("payload_len", len(payload)), zap.String("payload_hex", fmt.Sprintf("%x", payload)))
+		innerPayload := h.encodeStartControlPayload(uint8(1), mapped, uint8(req.ChargeMode), uint16(req.Duration), biz)
+
+		// 【关键修复】根据组网设备协议2.2.8，需要在payload前加2字节长度字段
+		// 格式：[内层payload长度(2字节)] + [内层payload]
+		payload := make([]byte, 2+len(innerPayload))
+		payload[0] = byte(len(innerPayload) >> 8) // 长度高字节
+		payload[1] = byte(len(innerPayload))      // 长度低字节
+		copy(payload[2:], innerPayload)           // 内层payload
+
+		h.logger.Info("DEBUG: payload生成", zap.Int("inner_len", len(innerPayload)), zap.Int("total_len", len(payload)), zap.String("payload_hex", fmt.Sprintf("%x", payload)))
 		// 构造外层BKV帧（命令0x0015）
 		frame := bkv.Build(0x0015, msgID, devicePhyID, payload)
 		h.logger.Info("DEBUG: BKV帧生成", zap.Int("frame_len", len(frame)), zap.String("frame_hex", fmt.Sprintf("%x", frame)))
@@ -199,7 +207,14 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 
 		// 主动查询插座状态（0x001D），避免仅依赖周期性0x94
 		q1ID := msgID + 1
-		qPayload := bkv.EncodeQuerySocketCommand(&bkv.QuerySocketCommand{SocketNo: 1})
+		qInnerPayload := bkv.EncodeQuerySocketCommand(&bkv.QuerySocketCommand{SocketNo: 1})
+
+		// 【关键修复】组网设备协议需要加长度字段
+		qPayload := make([]byte, 2+len(qInnerPayload))
+		qPayload[0] = byte(len(qInnerPayload) >> 8)
+		qPayload[1] = byte(len(qInnerPayload))
+		copy(qPayload[2:], qInnerPayload)
+
 		qFrame := bkv.Build(0x001D, q1ID, devicePhyID, qPayload)
 		_ = h.outboundQ.Enqueue(ctx, &redisstorage.OutboundMessage{
 			ID:        fmt.Sprintf("api_%d", q1ID),
@@ -309,7 +324,13 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		msgID := uint32(time.Now().Unix() % 65536)
 		// 构造停止充电控制负载：socketNo=1, port 映射, switch=0, 其余为0
 		biz := deriveBusinessNo(orderNo)
-		stopData := h.encodeStopControlPayload(uint8(1), uint8(mapPort(req.PortNo)), biz)
+		innerStopData := h.encodeStopControlPayload(uint8(1), uint8(mapPort(req.PortNo)), biz)
+
+		// 【关键修复】组网设备协议需要加长度字段
+		stopData := make([]byte, 2+len(innerStopData))
+		stopData[0] = byte(len(innerStopData) >> 8)
+		stopData[1] = byte(len(innerStopData))
+		copy(stopData[2:], innerStopData)
 
 		err = h.outboundQ.Enqueue(ctx, &redisstorage.OutboundMessage{
 			ID:        fmt.Sprintf("api_%d", msgID),

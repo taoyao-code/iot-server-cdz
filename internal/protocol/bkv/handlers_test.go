@@ -3,8 +3,10 @@ package bkv
 import (
 	"context"
 	"encoding/hex"
-	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"testing"
+	"time"
+
+	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 )
 
 type fakeRepo struct {
@@ -80,6 +82,15 @@ func (f *fakeRepo) ConfirmParamWrite(ctx context.Context, deviceID int64, paramI
 
 func (f *fakeRepo) FailParamWrite(ctx context.Context, deviceID int64, paramID int, msgID int, errMsg string) error {
 	f.logs++
+	return nil
+}
+
+// P0修复: 订单状态管理方法
+func (f *fakeRepo) GetPendingOrderByPort(ctx context.Context, deviceID int64, portNo int) (*pgstorage.Order, error) {
+	return nil, nil
+}
+
+func (f *fakeRepo) UpdateOrderToCharging(ctx context.Context, orderNo string, startTime time.Time) error {
 	return nil
 }
 
@@ -409,9 +420,11 @@ func TestIsBKVCommand(t *testing.T) {
 func (f *fakeRepo) UpsertGatewaySocket(ctx context.Context, socket *pgstorage.GatewaySocket) error {
 	return nil
 }
+
 func (f *fakeRepo) DeleteGatewaySocket(ctx context.Context, gatewayID string, socketNo int) error {
 	return nil
 }
+
 func (f *fakeRepo) GetGatewaySockets(ctx context.Context, gatewayID string) ([]pgstorage.GatewaySocket, error) {
 	return nil, nil
 }
@@ -420,15 +433,19 @@ func (f *fakeRepo) GetGatewaySockets(ctx context.Context, gatewayID string) ([]p
 func (f *fakeRepo) CreateOTATask(ctx context.Context, task *pgstorage.OTATask) (int64, error) {
 	return 1, nil
 }
+
 func (f *fakeRepo) GetOTATask(ctx context.Context, taskID int64) (*pgstorage.OTATask, error) {
 	return nil, nil
 }
+
 func (f *fakeRepo) UpdateOTATaskStatus(ctx context.Context, taskID int64, status int, errorMsg *string) error {
 	return nil
 }
+
 func (f *fakeRepo) UpdateOTATaskProgress(ctx context.Context, taskID int64, progress int, status int) error {
 	return nil
 }
+
 func (f *fakeRepo) GetDeviceOTATasks(ctx context.Context, deviceID int64, limit int) ([]pgstorage.OTATask, error) {
 	return nil, nil
 }

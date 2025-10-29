@@ -3,6 +3,7 @@ package bkv
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
@@ -465,6 +466,15 @@ func (m *MockRepo) FailParamWrite(ctx context.Context, deviceID int64, paramID i
 	return nil
 }
 
+// P0修复: 订单状态管理方法
+func (m *MockRepo) GetPendingOrderByPort(ctx context.Context, deviceID int64, portNo int) (*pgstorage.Order, error) {
+	return nil, nil
+}
+
+func (m *MockRepo) UpdateOrderToCharging(ctx context.Context, orderNo string, startTime time.Time) error {
+	return nil
+}
+
 // Week 6: 组网管理方法（测试桩）
 func (m *MockRepo) UpsertGatewaySocket(ctx context.Context, socket *pgstorage.GatewaySocket) error {
 	return nil
@@ -592,15 +602,19 @@ func EncodeBalanceQuery(query *BalanceQuery) []byte {
 func (m *MockRepo) CreateOTATask(ctx context.Context, task *pgstorage.OTATask) (int64, error) {
 	return 1, nil
 }
+
 func (m *MockRepo) GetOTATask(ctx context.Context, taskID int64) (*pgstorage.OTATask, error) {
 	return nil, nil
 }
+
 func (m *MockRepo) UpdateOTATaskStatus(ctx context.Context, taskID int64, status int, errorMsg *string) error {
 	return nil
 }
+
 func (m *MockRepo) UpdateOTATaskProgress(ctx context.Context, taskID int64, progress int, status int) error {
 	return nil
 }
+
 func (m *MockRepo) GetDeviceOTATasks(ctx context.Context, deviceID int64, limit int) ([]pgstorage.OTATask, error) {
 	return nil, nil
 }

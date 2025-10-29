@@ -82,8 +82,12 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	}
 	eventQueue, deduper := app.NewEventQueue(cfg.Thirdparty.Push, redisClient, pusherTyped, log)
 
+	// 🔥 修复：提前初始化Redis队列，供OutboundAdapter使用
+	redisQueue := app.NewRedisOutboundQueue(redisClient)
+
 	// Week5: 创建Outbound适配器（用于BKV下行消息）
-	outboundAdapter := app.NewOutboundAdapter(dbpool, repo)
+	// 🔥 修复：传入Redis队列，确保心跳ACK能被worker立即发送
+	outboundAdapter := app.NewOutboundAdapter(dbpool, repo, redisQueue)
 
 	// TODO: Week4: 创建CardService（刷卡充电业务）
 	// var cardService bkv.CardServiceAPI = service.NewCardService(...)
@@ -110,9 +114,6 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	// Week2.2: 添加Redis健康检查器（如果Redis已启用）
 	app.AddRedisChecker(healthAgg, redisClient)
 	log.Info("health aggregator initialized")
-
-	// ========== 阶段6.5: 初始化Redis队列（需要在HTTP服务注册路由前）==========
-	redisQueue := app.NewRedisOutboundQueue(redisClient)
 
 	// P0修复: 注册路由时传入认证配置
 	// Week2: 同时注册健康检查路由
