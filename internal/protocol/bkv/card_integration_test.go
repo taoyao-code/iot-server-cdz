@@ -479,6 +479,10 @@ func (m *MockRepo) UpdateOrderToCharging(ctx context.Context, orderNo string, st
 	return nil
 }
 
+func (m *MockRepo) CancelOrderByPort(ctx context.Context, deviceID int64, portNo int) error {
+	return nil
+}
+
 // Week 6: 组网管理方法（测试桩）
 func (m *MockRepo) UpsertGatewaySocket(ctx context.Context, socket *pgstorage.GatewaySocket) error {
 	return nil

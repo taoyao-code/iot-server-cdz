@@ -19,8 +19,8 @@ NC='\033[0m'
 SERVER="${SERVER:-182.43.177.92}"
 HTTP_PORT="${HTTP_PORT:-7055}"
 API_KEY="${API_KEY:-sk_test_thirdparty_key_for_testing_12345678}"
-DEVICE_ID="${DEVICE_ID:-82210225000520}"
-PORT_NO="${PORT_NO:-1}"
+DEVICE_ID="${DEVICE_ID:-82241218000382}"
+PORT_NO="${PORT_NO:-2}"  # 默认B孔，如需A孔请设置 PORT_NO=1
 
 # 测试参数
 MODE="duration"  # duration/amount/kwh
@@ -288,15 +288,16 @@ check_device_online() {
     fi
 }
 
-# 创建充电订单
+# 创建充电订单（返回订单号到stdout，其他输出到stderr）
 create_charge_order() {
     local payload=$(build_charge_payload "$MODE" "$VALUE")
     
-    print_info "发送充电请求..."
-    echo ""
-    echo "请求详情:"
-    echo "$payload" | jq '.' 2>/dev/null
-    echo ""
+    # 所有提示信息输出到stderr
+    print_info "发送充电请求..." >&2
+    echo "" >&2
+    echo "请求详情:" >&2
+    echo "$payload" | jq '.' 2>&1 >&2
+    echo "" >&2
     
     log "==================== API调用 ===================="
     log "充电请求payload: $payload"
@@ -315,34 +316,38 @@ create_charge_order() {
     log "响应body: $body"
     log "================================================="
     
-    echo "响应: HTTP $http_code (耗时: ${elapsed}ms)"
+    echo "响应: HTTP $http_code (耗时: ${elapsed}ms)" >&2
     
     if [ "$http_code" = "200" ]; then
         local order_no=$(echo "$body" | jq -r '.data.order_no // empty')
         if [ -n "$order_no" ] && [ "$order_no" != "null" ]; then
-            echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "✅ 订单创建成功"
-            echo "   订单号: $order_no"
-            echo "   设备: $DEVICE_ID"
-            echo "   端口: $PORT_NO"
-            echo "   模式: $MODE"
-            echo "   值: $VALUE"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo ""
-            print_success "订单号: $order_no"
+            # 所有提示输出到stderr
+            echo "" >&2
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+            echo "✅ 订单创建成功" >&2
+            echo "   订单号: $order_no" >&2
+            echo "   设备: $DEVICE_ID" >&2
+            echo "   端口: $PORT_NO" >&2
+            echo "   模式: $MODE" >&2
+            echo "   值: $VALUE" >&2
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+            echo "" >&2
+            # print_success也输出到stderr
+            echo -e "${GREEN}✓${NC} 订单号: $order_no" | tee -a "$LOG_FILE" >&2
+            ((TEST_PASSED++))
+            # 只有订单号输出到stdout（被调用者捕获）
             echo "$order_no"
             return 0
         else
-            print_failure "未获取到订单号"
-            echo "$body" | jq '.' 2>/dev/null || echo "$body"
+            print_failure "未获取到订单号" >&2
+            echo "$body" | jq '.' 2>/dev/null >&2 || echo "$body" >&2
             log "订单创建失败：未获取订单号"
             echo ""  # 返回空字符串表示失败
             return 1
         fi
     else
-        print_failure "API调用失败 (HTTP $http_code)"
-        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        print_failure "API调用失败 (HTTP $http_code)" >&2
+        echo "$body" | jq '.' 2>/dev/null >&2 || echo "$body" >&2
         log "订单创建失败：HTTP $http_code"
         echo ""  # 返回空字符串表示失败
         return 1
@@ -360,8 +365,16 @@ wait_for_order_status() {
     
     while [ $elapsed -lt $timeout ]; do
         local response=$(api_call "GET" "/api/v1/third/orders/$order_no" "")
+        local http_code=$(extract_http_code "$response")
         local body=$(extract_body "$response")
-        local status=$(echo "$body" | jq -r '.data.status // empty')
+        
+        # 调试日志
+        if [ $elapsed -eq 0 ]; then
+            log "首次查询订单: HTTP $http_code, body长度: ${#body}"
+            log "Body前100字符: ${body:0:100}"
+        fi
+        
+        local status=$(echo "$body" | jq -r '.data.status // empty' 2>>$LOG_FILE)
         
         if [ "$status" = "$target_status" ]; then
             print_success "订单状态已变为: $status"

@@ -8,8 +8,8 @@
 SERVER="182.43.177.92"
 HTTP_PORT="7055"
 API_KEY="sk_test_thirdparty_key_for_testing_12345678"
-DEVICE_ID="${DEVICE_ID:-82210225000520}"
-PORT_NO="${PORT_NO:-1}"
+DEVICE_ID="${DEVICE_ID:-82241218000382}"
+PORT_NO="${PORT_NO:-2}"  # 默认B孔，如需A孔请设置 PORT_NO=1
 DURATION="${1:-60}"
 
 echo "=========================================="

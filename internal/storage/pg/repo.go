@@ -968,3 +968,14 @@ func (r *Repository) UpdateOrderToCharging(ctx context.Context, orderNo string, 
 
 	return nil
 }
+
+// CancelOrderByPort 取消指定设备端口上的pending订单
+// 仅当订单状态为pending(0)时才会取消，实现幂等性
+func (r *Repository) CancelOrderByPort(ctx context.Context, deviceID int64, portNo int) error {
+	const q = `UPDATE orders 
+	           SET status = 3, updated_at = NOW()
+	           WHERE device_id = $1 AND port_no = $2 AND status = 0`
+
+	_, err := r.Pool.Exec(ctx, q, deviceID, portNo)
+	return err
+}

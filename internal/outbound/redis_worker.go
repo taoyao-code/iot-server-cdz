@@ -112,9 +112,10 @@ func (w *RedisWorker) processOne(ctx context.Context) {
 		return
 	}
 
-	// DEBUG: 记录即将发送的命令
-	w.logger.Info("DEBUG: worker准备发送命令",
+	// DEBUG: 记录即将发送的命令（完整十六进制）
+	w.logger.Info("📤 下行命令详情",
 		zap.String("msg_id", msg.ID),
+		zap.String("phy_id", msg.PhyID),
 		zap.Int("command_len", len(msg.Command)),
 		zap.String("command_hex", fmt.Sprintf("%x", msg.Command)))
 

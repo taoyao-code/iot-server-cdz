@@ -76,6 +76,10 @@ func (f *fakeRepoParam) UpdateOrderToCharging(ctx context.Context, orderNo strin
 	return nil
 }
 
+func (f *fakeRepoParam) CancelOrderByPort(ctx context.Context, deviceID int64, portNo int) error {
+	return nil
+}
+
 func TestHandleParam_ReadbackSuccess(t *testing.T) {
 	fr := &fakeRepoParam{}
 	h := &Handlers{Repo: fr}

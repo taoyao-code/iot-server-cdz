@@ -127,7 +127,21 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		// 注意：这里不阻止充电指令下发，因为设备可能稍后上线
 	}
 
-	// 3. 检查端口是否已被占用
+	// 3. 清理超时的pending订单（超过5分钟自动取消）
+	cleanupSQL := `
+		UPDATE orders 
+		SET status = 3, updated_at = NOW()
+		WHERE device_id = $1 AND status = 0 
+		  AND created_at < NOW() - INTERVAL '5 minutes'
+	`
+	cleanupResult, _ := h.repo.Pool.Exec(ctx, cleanupSQL, devID)
+	if cleanupResult.RowsAffected() > 0 {
+		h.logger.Info("cleaned up stale pending orders",
+			zap.String("device_phy_id", devicePhyID),
+			zap.Int64("count", cleanupResult.RowsAffected()))
+	}
+
+	// 4. 检查端口是否已被占用
 	var existingOrderNo string
 	checkPortSQL := `
 		SELECT order_no FROM orders 
@@ -154,10 +168,10 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		return
 	}
 
-	// 4. 生成订单号
+	// 5. 生成订单号
 	orderNo := fmt.Sprintf("THD%d%03d", time.Now().Unix(), req.PortNo)
 
-	// 5. 创建订单记录（简化版本，实际应使用CardService）
+	// 6. 创建订单记录（简化版本，实际应使用CardService）
 	// 这里直接使用SQL插入订单
 	insertOrderSQL := `
 		INSERT INTO orders (device_id, order_no, amount_cent, status, port_no, created_at)

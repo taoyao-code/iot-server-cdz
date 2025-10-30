@@ -19,6 +19,10 @@ func NewAdapter() *Adapter { return &Adapter{decoder: NewStreamDecoder(), table:
 // SetLogger 设置logger
 func (a *Adapter) SetLogger(logger *zap.Logger) {
 	a.logger = logger
+	// 同时设置table的logger以便Route时记录详情
+	if a.table != nil {
+		a.table.SetLogger(logger)
+	}
 }
 
 // Register 注册指令处理器

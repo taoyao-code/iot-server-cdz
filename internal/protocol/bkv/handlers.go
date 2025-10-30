@@ -41,6 +41,7 @@ type repoAPI interface {
 	// P0修复: 订单状态管理方法
 	GetPendingOrderByPort(ctx context.Context, deviceID int64, portNo int) (*pgstorage.Order, error)
 	UpdateOrderToCharging(ctx context.Context, orderNo string, startTime time.Time) error
+	CancelOrderByPort(ctx context.Context, deviceID int64, portNo int) error
 }
 
 // CardServiceAPI 刷卡充电服务接口
@@ -430,8 +431,58 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 			}
 		}
 	} else {
-		// 如果是上行（设备回复），可能是充电结束上报
-		if len(f.Data) >= 15 {
+		// 上行：设备回复
+		// 按协议2.2.8示例：内层长度0005，格式为[07][01][插座号][插孔号][业务号2字节]
+		if len(f.Data) >= 2 && len(f.Data) < 15 {
+			innerLen := (int(f.Data[0]) << 8) | int(f.Data[1])
+
+			// 协议2.2.8：控制回复内层长度=5，格式[07][结果][插座号][插孔号][业务号1字节]
+			// 实际数据: inner只有5字节(索引0-4)
+			// 但实际设备发送格式: [07][插座号][插孔号][结果][业务号2字节]
+			if innerLen == 5 && len(f.Data) >= 7 {
+				inner := f.Data[2:7]
+				subCmd := inner[0]             // 0x07
+				socketNo := inner[1]           // 插座号
+				portNo := inner[2]             // 插孔号 0=A孔,1=B孔
+				result := inner[3]             // 01=成功, 00=失败
+				businessNo := uint16(inner[4]) // 业务号（1字节）
+
+				// 记录ACK详情
+				ackLog := fmt.Sprintf("0x0015控制回复: 子命令=0x%02X 插座=%d 插孔=%d 结果=%d(1=成功,0=失败) 业务号=0x%02X",
+					subCmd, socketNo, portNo, result, businessNo)
+				_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), []byte(ackLog), result == 0x01)
+
+				// 如果结果=01(成功)，更新订单状态为charging
+				if result == 0x01 {
+					order, err := h.Repo.GetPendingOrderByPort(ctx, devID, int(portNo))
+					if err == nil && order != nil {
+						startTime := time.Now()
+						if err := h.Repo.UpdateOrderToCharging(ctx, order.OrderNo, startTime); err == nil {
+							updateLog := fmt.Sprintf("✅订单状态已更新: %s -> charging (端口%d)", order.OrderNo, portNo)
+							_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(updateLog), true)
+
+							if h.EventQueue != nil {
+								h.pushChargingStartedEvent(ctx, devicePhyID, order.OrderNo, int(portNo), nil)
+							}
+						}
+					}
+				} else {
+					// 设备拒绝了充电请求 - 需要取消对应的订单
+					failLog := fmt.Sprintf("❌设备拒绝充电: 插座=%d 插孔=%d 原因=未知", socketNo, portNo)
+					_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(failLog), false)
+
+					// 取消对应端口的pending订单
+					if err := h.Repo.CancelOrderByPort(ctx, devID, int(portNo)); err != nil {
+						_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()),
+							[]byte(fmt.Sprintf("❌取消订单失败: port=%d err=%v", portNo, err)), false)
+					} else {
+						_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()),
+							[]byte(fmt.Sprintf("✅已自动取消pending订单: port=%d", portNo)), true)
+					}
+				}
+			}
+		} else if len(f.Data) >= 15 {
+			// 长数据：充电结束上报
 			endReport, err := ParseBKVChargingEnd(f.Data)
 			if err == nil {
 				// 处理充电结束
