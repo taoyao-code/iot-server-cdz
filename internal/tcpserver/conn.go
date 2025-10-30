@@ -187,6 +187,10 @@ func (cc *ConnContext) Done() <-chan struct{} { return cc.doneC }
 
 // RestoreNormalTimeout 恢复正常的读超时 (协议识别完成后调用)
 func (cc *ConnContext) RestoreNormalTimeout() {
+	// 允许在测试中使用未初始化的 ConnContext
+	if cc == nil || cc.s == nil || cc.c == nil {
+		return
+	}
 	if cc.s.cfg.ReadTimeout > 0 {
 		_ = cc.c.SetReadDeadline(time.Now().Add(cc.s.cfg.ReadTimeout))
 	}

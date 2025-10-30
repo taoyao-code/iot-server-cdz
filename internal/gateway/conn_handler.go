@@ -36,6 +36,9 @@ func NewConnHandler(
 		var bkvAdapter *bkv.Adapter
 		if protocols.EnableBKV {
 			bkvAdapter = bkv.NewAdapter()
+			if cc.Server() != nil && cc.Server().GetLogger() != nil {
+				bkvAdapter.SetLogger(cc.Server().GetLogger())
+			}
 			adapters = append(adapters, bkvAdapter)
 		}
 

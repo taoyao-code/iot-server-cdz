@@ -107,12 +107,17 @@ func TestCircuitBreaker(t *testing.T) {
 	})
 
 	t.Run("状态变化回调", func(t *testing.T) {
-		var lastFrom, lastTo State
+		ch := make(chan struct {
+			from State
+			to   State
+		}, 2)
 		breaker := NewCircuitBreaker(2, 100*time.Millisecond)
 
 		breaker.SetStateChangeCallback(func(from, to State) {
-			lastFrom = from
-			lastTo = to
+			ch <- struct {
+				from State
+				to   State
+			}{from: from, to: to}
 		})
 
 		// 触发熔断
@@ -120,11 +125,14 @@ func TestCircuitBreaker(t *testing.T) {
 		_ = breaker.Call(func() error { return testErr })
 		_ = breaker.Call(func() error { return testErr })
 
-		// 给回调时间执行
-		time.Sleep(10 * time.Millisecond)
-
-		if lastFrom != StateClosed || lastTo != StateOpen {
-			t.Errorf("状态转换回调错误，from: %v, to: %v", lastFrom, lastTo)
+		// 等待回调（带超时）
+		select {
+		case evt := <-ch:
+			if evt.from != StateClosed || evt.to != StateOpen {
+				t.Errorf("状态转换回调错误，from: %v, to: %v", evt.from, evt.to)
+			}
+		case <-time.After(50 * time.Millisecond):
+			t.Fatalf("状态变化回调未触发")
 		}
 	})
 }

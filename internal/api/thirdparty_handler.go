@@ -52,13 +52,22 @@ type StandardResponse struct {
 
 // StartChargeRequest 启动充电请求
 type StartChargeRequest struct {
-	PortNo      int `json:"port_no" binding:"required,min=1"`           // 端口号
-	ChargeMode  int `json:"charge_mode" binding:"required,min=1,max=4"` // 充电模式：1=按时长,2=按电量,3=按功率,4=充满自停
-	Amount      int `json:"amount" binding:"required,min=1"`            // 金额（分）
-	Duration    int `json:"duration"`                                   // 时长（分钟）
-	Power       int `json:"power"`                                      // 功率（瓦）
-	PricePerKwh int `json:"price_per_kwh"`                              // 电价（分/度）
-	ServiceFee  int `json:"service_fee"`                                // 服务费率（千分比）
+	PortNo          int `json:"port_no" binding:"required,min=1"`           // 端口号
+	ChargeMode      int `json:"charge_mode" binding:"required,min=1,max=4"` // 充电模式：1=按时长,2=按电量,3=按功率,4=充满自停
+	Amount          int `json:"amount" binding:"required,min=1"`            // 金额（分）
+	DurationMinutes int `json:"duration_minutes"`                           // 时长（分钟）- 推荐使用
+	Duration        int `json:"duration"`                                   // 时长（分钟）- 兼容旧版
+	Power           int `json:"power"`                                      // 功率（瓦）
+	PricePerKwh     int `json:"price_per_kwh"`                              // 电价（分/度）
+	ServiceFee      int `json:"service_fee"`                                // 服务费率（千分比）
+}
+
+// GetDuration 获取时长（优先使用 duration_minutes）
+func (r *StartChargeRequest) GetDuration() int {
+	if r.DurationMinutes > 0 {
+		return r.DurationMinutes
+	}
+	return r.Duration
 }
 
 // StartCharge 启动充电
@@ -172,8 +181,10 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		msgID := uint32(time.Now().Unix() % 65536)
 		mapped := uint8(mapPort(req.PortNo))
 		biz := deriveBusinessNo(orderNo)
+		// 🔧 修复：使用 GetDuration() 获取时长参数
+		durationMin := uint16(req.GetDuration())
 		// 构造内层payload（命令0x07 + 参数）
-		innerPayload := h.encodeStartControlPayload(uint8(1), mapped, uint8(req.ChargeMode), uint16(req.Duration), biz)
+		innerPayload := h.encodeStartControlPayload(uint8(1), mapped, uint8(req.ChargeMode), durationMin, biz)
 
 		// 【关键修复】根据组网设备协议2.2.8，需要在payload前加2字节长度字段
 		// 格式：[内层payload长度(2字节)] + [内层payload]

@@ -46,8 +46,9 @@ func Build(cmd uint16, msgID uint32, gatewayID string, data []byte) []byte {
 	// 数据
 	buf = append(buf, data...)
 
-	// 校验和 (简单累加校验，从命令码开始)
-	checksum := calculateChecksum(buf[4:]) // 从数据部分开始校验
+	// 校验和 (简单累加校验)
+	// 🔧 修正：根据协议文档验证，上行帧和下行帧都从len字段(位置2)开始计算校验和
+	checksum := calculateChecksum(buf[2:])
 	buf = append(buf, checksum)
 
 	// 包尾
@@ -95,8 +96,8 @@ func BuildUplink(cmd uint16, msgID uint32, gatewayID string, data []byte) []byte
 	// 数据
 	buf = append(buf, data...)
 
-	// 校验和
-	checksum := calculateChecksum(buf[4:])
+	// 校验和 (从len字段开始 - 位置2)
+	checksum := calculateChecksum(buf[2:])
 	buf = append(buf, checksum)
 
 	// 包尾

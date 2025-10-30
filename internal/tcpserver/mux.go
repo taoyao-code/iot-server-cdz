@@ -5,6 +5,7 @@ import (
 	ap "github.com/taoyao-code/iot-server/internal/protocol/ap3000"
 	bk "github.com/taoyao-code/iot-server/internal/protocol/bkv"
 	"go.uber.org/zap"
+	"time"
 )
 
 // Mux 多协议复用器：首帧初判 -> 绑定协议 -> 直通处理
@@ -23,8 +24,8 @@ func (m *Mux) BindToConn(cc *ConnContext) {
 	var decided bool
 	var handler func([]byte)
 
-	// ✅ 优化2: 记录协议识别开始时间 (用于统计耗时)
-	identificationStartTime := cc.Server().GetCurrentTime()
+	// ✅ 优化2: 记录协议识别开始时间 (用于统计耗时) - 兼容测试场景
+	identificationStartTime := time.Now()
 
 	cc.SetOnRead(func(p []byte) {
 		if !decided {
@@ -51,8 +52,8 @@ func (m *Mux) BindToConn(cc *ConnContext) {
 						cc.SetProtocol("")
 					}
 					// ✅ 记录协议识别耗时
-					identDuration := cc.Server().GetCurrentTime().Sub(identificationStartTime)
-					if m.server != nil && m.server.logger != nil {
+					identDuration := time.Since(identificationStartTime)
+					if m.server != nil && m.server.logger != nil && cc != nil && cc.c != nil {
 						m.server.logger.Info("Protocol identified",
 							zap.String("remote_addr", cc.RemoteAddr().String()),
 							zap.String("protocol", proto),
@@ -69,7 +70,7 @@ func (m *Mux) BindToConn(cc *ConnContext) {
 			}
 			if !decided {
 				// 未识别协议
-				if m.server != nil && m.server.logger != nil {
+				if m.server != nil && m.server.logger != nil && cc != nil && cc.c != nil {
 					m.server.logger.Warn("Unknown protocol, trying all adapters",
 						zap.String("remote_addr", cc.RemoteAddr().String()),
 						zap.Int("data_len", len(p)),
