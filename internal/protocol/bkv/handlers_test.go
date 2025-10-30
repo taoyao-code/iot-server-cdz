@@ -37,6 +37,10 @@ func (f *fakeRepo) EnsureDevice(ctx context.Context, phyID string) (int64, error
 	return devID, nil
 }
 
+func (f *fakeRepo) TouchDeviceLastSeen(ctx context.Context, phyID string, at time.Time) error {
+	return nil
+}
+
 func (f *fakeRepo) InsertCmdLog(ctx context.Context, deviceID int64, msgID int, cmd int, direction int16, payload []byte, success bool) error {
 	f.logs++
 	return nil

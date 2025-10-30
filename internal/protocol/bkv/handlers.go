@@ -13,6 +13,7 @@ import (
 // P0修复: 扩展接口支持参数持久化
 type repoAPI interface {
 	EnsureDevice(ctx context.Context, phyID string) (int64, error)
+	TouchDeviceLastSeen(ctx context.Context, phyID string, at time.Time) error
 	InsertCmdLog(ctx context.Context, deviceID int64, msgID int, cmd int, direction int16, payload []byte, success bool) error
 	UpsertPortState(ctx context.Context, deviceID int64, portNo int, status int, powerW *int) error
 	UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, status int, powerW01 *int) error
@@ -86,6 +87,9 @@ func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
 	if err != nil {
 		return err
 	}
+
+	// 刷新数据库中的最近心跳时间（与 Redis 会话一致）
+	_ = h.Repo.TouchDeviceLastSeen(ctx, devicePhyID, time.Now())
 
 	// v2.1.3: 新设备注册时推送设备注册事件
 	// 注意：这里简化处理，实际应该在首次注册时才推送

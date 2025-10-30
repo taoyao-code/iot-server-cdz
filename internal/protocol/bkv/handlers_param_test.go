@@ -20,6 +20,10 @@ func (f *fakeRepoParam) EnsureDevice(ctx context.Context, phyID string) (int64, 
 	return 1, nil
 }
 
+func (f *fakeRepoParam) TouchDeviceLastSeen(ctx context.Context, phyID string, at time.Time) error {
+	return nil
+}
+
 func (f *fakeRepoParam) InsertCmdLog(ctx context.Context, deviceID int64, msgID int, cmd int, direction int16, payload []byte, success bool) error {
 	f.logs++
 	f.lastCmd = cmd

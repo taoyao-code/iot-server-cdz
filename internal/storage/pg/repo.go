@@ -13,15 +13,25 @@ type Repository struct {
 	Pool *pgxpool.Pool
 }
 
-// EnsureDevice 返回设备ID，若不存在则插入并更新最近时间
+// EnsureDevice 返回设备ID，若不存在则插入（不会刷新已存在设备的 last_seen_at）
 func (r *Repository) EnsureDevice(ctx context.Context, phyID string) (int64, error) {
 	const q = `INSERT INTO devices (phy_id, last_seen_at)
                VALUES ($1, NOW())
-               ON CONFLICT (phy_id) DO UPDATE SET updated_at = NOW(), last_seen_at = NOW()
+               ON CONFLICT (phy_id) DO UPDATE SET updated_at = NOW()
                RETURNING id`
 	var id int64
 	err := r.Pool.QueryRow(ctx, q, phyID).Scan(&id)
 	return id, err
+}
+
+// TouchDeviceLastSeen 刷新设备最近心跳时间（存在则更新，不存在则插入）
+func (r *Repository) TouchDeviceLastSeen(ctx context.Context, phyID string, at time.Time) error {
+	const q = `INSERT INTO devices (phy_id, last_seen_at)
+               VALUES ($1, $2)
+               ON CONFLICT (phy_id)
+               DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at, updated_at = NOW()`
+	_, err := r.Pool.Exec(ctx, q, phyID, at)
+	return err
 }
 
 // InsertCmdLog 插入指令日志（最小字段）

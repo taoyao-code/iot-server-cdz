@@ -172,6 +172,12 @@ func NewConnHandler(
 
 			// 基础命令
 			bkvAdapter.Register(0x0000, wrapBKVHandler(func(ctx context.Context, f *bkv.Frame) error {
+				// 记录心跳到Redis会话，修正 online 判断
+				sess.OnHeartbeat(f.GatewayID, time.Now())
+				if appm != nil {
+					appm.HeartbeatTotal.Inc()
+					appm.OnlineGauge.Set(float64(sess.OnlineCountWeighted(time.Now(), policy)))
+				}
 				return getBKVHandlers().HandleHeartbeat(ctx, f)
 			})) // 心跳
 
@@ -264,6 +270,12 @@ func NewConnHandler(
 
 			// BKV子协议扩展
 			bkvAdapter.Register(0x1017, wrapBKVHandler(func(ctx context.Context, f *bkv.Frame) error {
+				// 插座状态上报也视作心跳来源，保持在线状态新鲜
+				sess.OnHeartbeat(f.GatewayID, time.Now())
+				if appm != nil {
+					appm.HeartbeatTotal.Inc()
+					appm.OnlineGauge.Set(float64(sess.OnlineCountWeighted(time.Now(), policy)))
+				}
 				return getBKVHandlers().HandleHeartbeat(ctx, f) // 插座状态上报复用心跳处理
 			})) // 插座状态上报
 		}

@@ -430,6 +430,10 @@ func (m *MockRepo) EnsureDevice(ctx context.Context, phyID string) (int64, error
 	return 1, nil
 }
 
+func (m *MockRepo) TouchDeviceLastSeen(ctx context.Context, phyID string, at time.Time) error {
+	return nil
+}
+
 func (m *MockRepo) InsertCmdLog(ctx context.Context, deviceID int64, msgID int, cmd int, direction int16, payload []byte, success bool) error {
 	return nil
 }

@@ -366,6 +366,39 @@ api-docs: swagger-init swagger-gen
 	@echo "   YAML: api/swagger/swagger.yaml"
 	@echo "   HTML: 启动服务后访问 http://localhost:7055/swagger/index.html"
 
+# 测试相关
+.PHONY: test-local-compile test-charge-lifecycle test-production-auto
+
+test-local-compile:
+	@echo "🧪 执行本地编译验证..."
+	@./test/local/compile_check.sh
+
+test-charge-lifecycle:
+	@echo "🔋 执行完整充电生命周期测试..."
+	@./test/scripts/test_charge_lifecycle.sh --mode duration --value 60 --auto
+
+test-production-auto:
+	@echo "🏭 执行生产环境自动化测试..."
+	@./test/production/scripts/auto_test_production.sh --quick
+
+# 监控相关
+.PHONY: monitor-simple
+
+monitor-simple:
+	@echo "📊 启动实时监控..."
+	@./scripts/monitor_simple.sh
+
+# 自动部署
+.PHONY: auto-deploy deploy-quick
+
+auto-deploy: test-local-compile
+	@echo "🚀 执行自动部署..."
+	@./scripts/auto_deploy_test.sh
+
+deploy-quick:
+	@echo "⚡ 快速部署（跳过测试）..."
+	@./scripts/auto_deploy_test.sh --skip-test
+
 # 帮助
 help:
 	@echo "IOT Server Makefile命令："
@@ -390,6 +423,14 @@ help:
 	@echo "  make lint            - 代码检查"
 	@echo "  make install-hooks   - 安装 Git pre-commit hooks"
 	@echo ""
+	@echo "🧪 测试相关（新增）："
+	@echo "  make test-local-compile    - 本地编译验证"
+	@echo "  make test-charge-lifecycle - 完整充电生命周期测试"
+	@echo "  make test-production-auto  - 生产环境自动化测试"
+	@echo ""
+	@echo "📊 监控相关（新增）："
+	@echo "  make monitor-simple        - 实时监控工具"
+	@echo ""
 	@echo "Docker开发环境："
 	@echo "  make compose-up      - 启动开发环境"
 	@echo "  make compose-down    - 停止开发环境"
@@ -403,6 +444,8 @@ help:
 	@echo "  make prod-logs       - 查看生产环境日志"
 	@echo ""
 	@echo "部署相关："
+	@echo "  make auto-deploy           - 自动部署+测试（推荐）⭐"
+	@echo "  make deploy-quick          - 快速部署（跳过测试）"
 	@echo "  make deploy                - 快速部署（测试模式，不备份）"
 	@echo "  BACKUP=true make deploy    - 安全部署（生产模式，自动备份）"
 	@echo ""
@@ -445,7 +488,10 @@ help:
 	@echo ""
 	@echo "当前版本: $(VERSION)"
 	@echo ""
-	@echo "💡 提示: 现已支持 Swagger 自动生成API文档"
-	@echo "   运行 'make api-docs' 生成完整文档"
+	@echo "💡 推荐工作流程:"
+	@echo "   1. 修改代码"
+	@echo "   2. make test-local-compile  (验证编译)"
+	@echo "   3. make auto-deploy         (自动部署+测试) ⭐"
+	@echo "   4. make monitor-simple      (监控运行状态)"
 
 
