@@ -77,11 +77,12 @@ func (h *ThirdPartyHandler) ConfigureNetwork(c *gin.Context) {
 		msgID := uint32(time.Now().Unix() % 0xFFFFFFFF)
 
 		// 构造内层payload
-		// 格式：[信道(1)] + [插座号(1)+MAC(6)]*N
-		innerPayload := make([]byte, 1+len(req.Nodes)*7)
-		innerPayload[0] = byte(req.Channel) // 信道
+		// 格式：08(命令) + 信道(1) + [插座号(1)+MAC(6)]*N
+		innerPayload := make([]byte, 2+len(req.Nodes)*7)
+		innerPayload[0] = 0x08              // 08命令
+		innerPayload[1] = byte(req.Channel) // 信道
 
-		pos := 1
+		pos := 2
 		for _, node := range req.Nodes {
 			innerPayload[pos] = byte(node.SocketNo) // 插座编号
 			pos++
