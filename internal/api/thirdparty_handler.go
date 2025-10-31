@@ -197,10 +197,12 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		biz := deriveBusinessNo(orderNo)
 		// 🔧 修复：使用 GetDuration() 获取时长参数
 		durationMin := uint16(req.GetDuration())
-		// 构造内层payload（命令0x07 + 参数）
-		innerPayload := h.encodeStartControlPayload(uint8(1), mapped, uint8(req.ChargeMode), durationMin, biz)
 
-		// 【关键修复】根据组网设备协议2.2.8，长度字段=参数字节数（不含0x07命令字节）
+		// 🔥 尝试插座号0（单机版/默认插座，设备拒绝1和2）
+		socketNo := uint8(0)
+
+		// 构造内层payload（命令0x07 + 参数）
+		innerPayload := h.encodeStartControlPayload(socketNo, mapped, uint8(req.ChargeMode), durationMin, biz) // 【关键修复】根据组网设备协议2.2.8，长度字段=参数字节数（不含0x07命令字节）
 		// 协议示例: 0008 07 02 00 01 01 00f0 0000
 		//          ^^^^ 长度=8 (后面8字节参数，不含07)
 		// 格式：[参数长度(2字节)] + [07命令] + [参数]
@@ -235,9 +237,8 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 
 		// 主动查询插座状态（0x001D），避免仅依赖周期性0x94
 		q1ID := msgID + 1
-		qInnerPayload := bkv.EncodeQuerySocketCommand(&bkv.QuerySocketCommand{SocketNo: 1})
-
-		// 【关键修复】查询命令长度同样是参数长度（qInnerPayload只有插座号1字节，长度=0或省略长度字段）
+		// 使用插座2（与StartCharge一致）
+		qInnerPayload := bkv.EncodeQuerySocketCommand(&bkv.QuerySocketCommand{SocketNo: 0}) // 【关键修复】查询命令长度同样是参数长度（qInnerPayload只有插座号1字节，长度=0或省略长度字段）
 		// 实际测试发现组网设备可能需要长度字段，这里保持一致
 		qParamLen := len(qInnerPayload) // 查询命令没有子命令字节，长度=参数本身
 		qPayload := make([]byte, 2+len(qInnerPayload))
@@ -352,9 +353,9 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	// 3. 下发停止充电指令（BKV 0x0015控制设备）
 	if h.outboundQ != nil {
 		msgID := uint32(time.Now().Unix() % 65536)
-		// 构造停止充电控制负载：socketNo=1, port 映射, switch=0, 其余为0
+		// 构造停止充电控制负载：socketNo=0, port 映射, switch=0
 		biz := deriveBusinessNo(orderNo)
-		innerStopData := h.encodeStopControlPayload(uint8(1), uint8(mapPort(req.PortNo)), biz)
+		innerStopData := h.encodeStopControlPayload(uint8(0), uint8(mapPort(req.PortNo)), biz)
 
 		// 【关键修复】长度=参数字节数（不含0x07）
 		stopParamLen := len(innerStopData) - 1
