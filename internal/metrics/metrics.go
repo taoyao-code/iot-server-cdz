@@ -40,6 +40,11 @@ type AppMetrics struct {
 	OutboundQueueSize        *prometheus.GaugeVec   // labels: status=0|1|2|3
 	// 新增：会话离线事件
 	SessionOfflineTotal *prometheus.CounterVec // labels: reason=heartbeat|ack|tcp
+	// 新增：充电上报监控（2025-10-31）
+	ChargeReportTotal        *prometheus.CounterVec // labels: device_id, port_no, status=charging|idle|abnormal
+	ChargeReportPowerGauge   *prometheus.GaugeVec   // labels: device_id, port_no (瞬时功率W)
+	ChargeReportCurrentGauge *prometheus.GaugeVec   // labels: device_id, port_no (瞬时电流A)
+	ChargeReportEnergyTotal  *prometheus.CounterVec // labels: device_id, port_no (累计电量Wh)
 }
 
 // NewAppMetrics 注册并返回业务指标
@@ -97,6 +102,22 @@ func NewAppMetrics(reg *prometheus.Registry) *AppMetrics {
 			Name: "session_offline_total",
 			Help: "Count of offline decisions by reason.",
 		}, []string{"reason"}),
+		ChargeReportTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "charge_report_total",
+			Help: "Total charge status reports from devices.",
+		}, []string{"device_id", "port_no", "status"}),
+		ChargeReportPowerGauge: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "charge_report_power_watts",
+			Help: "Current charging power in watts.",
+		}, []string{"device_id", "port_no"}),
+		ChargeReportCurrentGauge: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "charge_report_current_amperes",
+			Help: "Current charging current in amperes.",
+		}, []string{"device_id", "port_no"}),
+		ChargeReportEnergyTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "charge_report_energy_wh_total",
+			Help: "Total energy consumed in watt-hours.",
+		}, []string{"device_id", "port_no"}),
 	}
 	reg.MustRegister(
 		m.TCPAccepted, m.TCPBytesReceived,
@@ -104,6 +125,27 @@ func NewAppMetrics(reg *prometheus.Registry) *AppMetrics {
 		m.OnlineGauge, m.HeartbeatTotal,
 		m.AP3000Ack82Total, m.OutboundResendTotal, m.OutboundTimeoutTotal, m.OutboundDeadCleanupTotal,
 		m.OutboundQueueSize, m.SessionOfflineTotal,
+		m.ChargeReportTotal, m.ChargeReportPowerGauge, m.ChargeReportCurrentGauge, m.ChargeReportEnergyTotal,
 	)
 	return m
+}
+
+// GetChargeReportTotal 实现 bkv.MetricsAPI 接口（2025-10-31新增）
+func (m *AppMetrics) GetChargeReportTotal() *prometheus.CounterVec {
+	return m.ChargeReportTotal
+}
+
+// GetChargeReportPowerGauge 实现 bkv.MetricsAPI 接口
+func (m *AppMetrics) GetChargeReportPowerGauge() *prometheus.GaugeVec {
+	return m.ChargeReportPowerGauge
+}
+
+// GetChargeReportCurrentGauge 实现 bkv.MetricsAPI 接口
+func (m *AppMetrics) GetChargeReportCurrentGauge() *prometheus.GaugeVec {
+	return m.ChargeReportCurrentGauge
+}
+
+// GetChargeReportEnergyTotal 实现 bkv.MetricsAPI 接口
+func (m *AppMetrics) GetChargeReportEnergyTotal() *prometheus.CounterVec {
+	return m.ChargeReportEnergyTotal
 }

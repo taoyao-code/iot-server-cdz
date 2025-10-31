@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
 )
@@ -64,6 +65,14 @@ type OutboundSender interface {
 	SendDownlink(gatewayID string, cmd uint16, msgID uint32, data []byte) error
 }
 
+// MetricsAPI 监控指标接口（2025-10-31新增）
+type MetricsAPI interface {
+	GetChargeReportTotal() *prometheus.CounterVec
+	GetChargeReportPowerGauge() *prometheus.GaugeVec
+	GetChargeReportCurrentGauge() *prometheus.GaugeVec
+	GetChargeReportEnergyTotal() *prometheus.CounterVec
+}
+
 // Handlers BKV 协议处理器集合
 type Handlers struct {
 	Repo        repoAPI
@@ -72,6 +81,7 @@ type Handlers struct {
 	Outbound    OutboundSender         // Week5: 下行消息发送器
 	EventQueue  *thirdparty.EventQueue // v2.1: 事件队列（第三方推送）
 	Deduper     *thirdparty.Deduper    // v2.1: 去重器
+	Metrics     MetricsAPI             // v2.1: 监控指标（Prometheus）
 }
 
 // HandleHeartbeat 处理心跳帧 (cmd=0x0000 或 BKV cmd=0x1017)
@@ -442,6 +452,40 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 			// 参考协议文档line 273-283示例
 			if innerLen == 5 && len(f.Data) >= 7 {
 				inner := f.Data[2:7]
+
+				// 🔥 ACK数据字段映射（协议2.2.8标准格式）
+				//
+				// 【协议格式】设备对接指引-组网设备2024(1).txt 章节2.2.8：
+				// ACK应答：[长度2B][0x07][结果1B][插座号1B][插孔号1B][业务号2B]
+				//
+				// 【字段说明】
+				// inner[0] = 0x07          - 命令标识（控制命令）
+				// inner[1] = result        - 执行结果（01=成功，00=失败）
+				// inner[2] = socketNo      - 插座号（单机版=0，组网版=1-250）
+				// inner[3] = portNo        - 插孔号（0=A孔，1=B孔）
+				// inner[4] = businessNo    - 业务号低字节（关联订单）
+				//
+				// 【协议示例】
+				// 成功: 0005 07 01 00 00 01
+				//            ^^ ^^ ^^ ^^ ^^
+				//            |  |  |  |  └─ 业务号=0x01
+				//            |  |  |  └──── 插孔0(A孔)
+				//            |  |  └─────── 插座0(单机版)
+				//            |  └────────── 成功
+				//            └───────────── 控制命令
+				//
+				// 失败: 0005 07 00 02 00 00
+				//            ^^ ^^ ^^ ^^ ^^
+				//            |  |  |  |  └─ 业务号
+				//            |  |  |  └──── 插孔0
+				//            |  |  └─────── 插座2(设备不支持)
+				//            |  └────────── 失败
+				//            └───────────── 控制命令
+				//
+				// 【历史Bug】2025-10-30之前错误实现为：
+				//   inner[2] = portNo   ❌ 顺序错误
+				//   inner[3] = socketNo ❌ 顺序错误
+				// 导致端口映射混乱，已于2025-10-31修复
 				subCmd := inner[0]             // 0x07
 				result := inner[1]             // 01=成功, 00=失败
 				socketNo := inner[2]           // 插座号
@@ -601,11 +645,11 @@ func (h *Handlers) HandleChargingEnd(ctx context.Context, f *Frame) error {
 			orderID := int(f.Data[10])<<8 | int(f.Data[11])
 			orderHex := fmt.Sprintf("%04X", orderID)
 
-			// 解析用电量（16位，单位：0.01kWh）
-			kwh01 := int(f.Data[16])<<8 | int(f.Data[17])
-
-			// 解析充电时间（16位，单位：分钟）
-			durationMin := int(f.Data[18])<<8 | int(f.Data[19])
+			// 解析充电数据
+			power := int(f.Data[12])<<8 | int(f.Data[13])       // 瞬时功率（0.1W）
+			current := int(f.Data[14])<<8 | int(f.Data[15])     // 瞬时电流（0.001A）
+			kwh01 := int(f.Data[16])<<8 | int(f.Data[17])       // 用电量（0.01kWh）
+			durationMin := int(f.Data[18])<<8 | int(f.Data[19]) // 充电时间（分钟）
 			durationSec := durationMin * 60
 
 			// 从插座状态中提取结束原因（简化版本）
@@ -617,6 +661,34 @@ func (h *Handlers) HandleChargingEnd(ctx context.Context, f *Frame) error {
 				if mappedReason, ok := h.Reason.Translate(reason); ok {
 					reason = mappedReason
 				}
+			}
+
+			// 📊 采集充电上报指标（2025-10-31新增）
+			if h.Metrics != nil {
+				deviceIDStr := fmt.Sprintf("%d", devID)
+				portNoStr := fmt.Sprintf("%d", portNo+1) // API端口=协议插孔+1
+
+				// 状态统计
+				statusLabel := "idle" // 充电结束=空闲
+				if status&0x10 != 0 {
+					statusLabel = "charging" // bit4=1表示充电中
+				}
+				if status&0x04 == 0 || status&0x02 == 0 {
+					statusLabel = "abnormal" // 温度或电流异常
+				}
+				h.Metrics.GetChargeReportTotal().WithLabelValues(deviceIDStr, portNoStr, statusLabel).Inc()
+
+				// 实时功率（W）
+				powerW := float64(power) / 10.0
+				h.Metrics.GetChargeReportPowerGauge().WithLabelValues(deviceIDStr, portNoStr).Set(powerW)
+
+				// 实时电流（A）
+				currentA := float64(current) / 1000.0
+				h.Metrics.GetChargeReportCurrentGauge().WithLabelValues(deviceIDStr, portNoStr).Set(currentA)
+
+				// 累计电量（Wh）
+				energyWh := float64(kwh01) * 10.0 // 0.01kWh = 10Wh
+				h.Metrics.GetChargeReportEnergyTotal().WithLabelValues(deviceIDStr, portNoStr).Add(energyWh)
 			}
 
 			// 结算订单

@@ -96,7 +96,9 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 
 	// P1修复: 使用NewHandlersWithServices完整初始化BKV处理器
 	// CardService暂时为nil，待Week4实现刷卡充电服务后启用
+	// v2.1: 注入Metrics支持充电上报监控（2025-10-31）
 	bkvHandlers := bkv.NewHandlersWithServices(repo, bkvReason, nil, outboundAdapter, eventQueue, deduper)
+	bkvHandlers.Metrics = appm // 注入指标采集器
 
 	log.Info("protocol handlers initialized",
 		zap.Bool("ap3000", cfg.Protocols.EnableAP3000),

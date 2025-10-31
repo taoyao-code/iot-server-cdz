@@ -286,6 +286,29 @@ install-hooks:
 		echo "   如需重新安装，请先删除 .git/hooks/pre-commit"; \
 	fi
 
+# E2E 测试
+.PHONY: test-e2e test-e2e-verbose test-e2e-charge test-e2e-device test-e2e-order
+
+test-e2e:
+	@echo "运行 E2E 测试..."
+	@cd test/e2e && go test -v -timeout 10m ./...
+
+test-e2e-verbose:
+	@echo "运行 E2E 测试（详细输出）..."
+	@cd test/e2e && E2E_VERBOSE=true go test -v -timeout 10m ./...
+
+test-e2e-charge:
+	@echo "运行充电流程 E2E 测试..."
+	@cd test/e2e && go test -v -timeout 5m -run ChargeSuite
+
+test-e2e-device:
+	@echo "运行设备管理 E2E 测试..."
+	@cd test/e2e && go test -v -timeout 5m -run DeviceSuite
+
+test-e2e-order:
+	@echo "运行订单管理 E2E 测试..."
+	@cd test/e2e && go test -v -timeout 5m -run OrderSuite
+
 # 清理
 clean:
 	@echo "清理构建文件..."
