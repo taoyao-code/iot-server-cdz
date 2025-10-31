@@ -200,12 +200,15 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		// 构造内层payload（命令0x07 + 参数）
 		innerPayload := h.encodeStartControlPayload(uint8(1), mapped, uint8(req.ChargeMode), durationMin, biz)
 
-		// 【关键修复】根据组网设备协议2.2.8，需要在payload前加2字节长度字段
-		// 格式：[内层payload长度(2字节)] + [内层payload]
+		// 【关键修复】根据组网设备协议2.2.8，长度字段=参数字节数（不含0x07命令字节）
+		// 协议示例: 0008 07 02 00 01 01 00f0 0000
+		//          ^^^^ 长度=8 (后面8字节参数，不含07)
+		// 格式：[参数长度(2字节)] + [07命令] + [参数]
+		paramLen := len(innerPayload) - 1 // 去掉0x07命令字节
 		payload := make([]byte, 2+len(innerPayload))
-		payload[0] = byte(len(innerPayload) >> 8) // 长度高字节
-		payload[1] = byte(len(innerPayload))      // 长度低字节
-		copy(payload[2:], innerPayload)           // 内层payload
+		payload[0] = byte(paramLen >> 8) // 参数长度高字节
+		payload[1] = byte(paramLen)      // 参数长度低字节
+		copy(payload[2:], innerPayload)  // 完整内层payload(含0x07)
 
 		h.logger.Info("DEBUG: payload生成", zap.Int("inner_len", len(innerPayload)), zap.Int("total_len", len(payload)), zap.String("payload_hex", fmt.Sprintf("%x", payload)))
 		// 构造外层BKV帧（命令0x0015）
@@ -234,10 +237,12 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		q1ID := msgID + 1
 		qInnerPayload := bkv.EncodeQuerySocketCommand(&bkv.QuerySocketCommand{SocketNo: 1})
 
-		// 【关键修复】组网设备协议需要加长度字段
+		// 【关键修复】查询命令长度同样是参数长度（qInnerPayload只有插座号1字节，长度=0或省略长度字段）
+		// 实际测试发现组网设备可能需要长度字段，这里保持一致
+		qParamLen := len(qInnerPayload) // 查询命令没有子命令字节，长度=参数本身
 		qPayload := make([]byte, 2+len(qInnerPayload))
-		qPayload[0] = byte(len(qInnerPayload) >> 8)
-		qPayload[1] = byte(len(qInnerPayload))
+		qPayload[0] = byte(qParamLen >> 8)
+		qPayload[1] = byte(qParamLen)
 		copy(qPayload[2:], qInnerPayload)
 
 		qFrame := bkv.Build(0x001D, q1ID, devicePhyID, qPayload)
@@ -351,10 +356,11 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		biz := deriveBusinessNo(orderNo)
 		innerStopData := h.encodeStopControlPayload(uint8(1), uint8(mapPort(req.PortNo)), biz)
 
-		// 【关键修复】组网设备协议需要加长度字段
+		// 【关键修复】长度=参数字节数（不含0x07）
+		stopParamLen := len(innerStopData) - 1
 		stopData := make([]byte, 2+len(innerStopData))
-		stopData[0] = byte(len(innerStopData) >> 8)
-		stopData[1] = byte(len(innerStopData))
+		stopData[0] = byte(stopParamLen >> 8)
+		stopData[1] = byte(stopParamLen)
 		copy(stopData[2:], innerStopData)
 
 		err = h.outboundQ.Enqueue(ctx, &redisstorage.OutboundMessage{
