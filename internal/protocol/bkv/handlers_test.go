@@ -98,6 +98,15 @@ func (f *fakeRepo) UpdateOrderToCharging(ctx context.Context, orderNo string, st
 	return nil
 }
 
+func (f *fakeRepo) GetChargingOrderByPort(ctx context.Context, deviceID int64, portNo int) (*pgstorage.Order, error) {
+	return nil, nil
+}
+
+func (f *fakeRepo) CompleteOrderByPort(ctx context.Context, deviceID int64, portNo int, endTime time.Time, reason int) error {
+	f.logs++
+	return nil
+}
+
 func (f *fakeRepo) CancelOrderByPort(ctx context.Context, deviceID int64, portNo int) error {
 	return nil
 }

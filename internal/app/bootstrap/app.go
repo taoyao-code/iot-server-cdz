@@ -158,10 +158,18 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 		zap.Int("throttle_ms", cfg.Gateway.ThrottleMs),
 		zap.Int("retry_max", cfg.Gateway.RetryMax))
 
-	// ========== 阶段7.5: 启动事件队列Workers（如果启用）==========
+	// ========== 阶段7.5: 启动事件队列Workers(如果启用)==========
 	app.StartEventQueueWorkers(ctx, eventQueue, cfg.Thirdparty.Push.WorkerCount, log)
 
-	// ========== 阶段8: 最后启动TCP服务（此时所有依赖已就绪）==========
+	// ========== 阶段7.6: 启动订单监控器(检测卡死订单)==========
+	orderMonitor := app.NewOrderMonitor(repo, log)
+	go orderMonitor.Start(ctx)
+	log.Info("order monitor started",
+		zap.Duration("check_interval", 1*time.Minute),
+		zap.Duration("pending_threshold", 5*time.Minute),
+		zap.Duration("charging_threshold", 2*time.Hour))
+
+	// ========== 阶段8: 最后启动TCP服务(此时所有依赖已就绪)==========
 	tcpSrv := app.NewTCPServer(cfg.TCP, log) // Week2: 传递logger以支持限流日志
 	tcpSrv.SetMetricsCallbacks(
 		func() { appm.TCPAccepted.Inc() },

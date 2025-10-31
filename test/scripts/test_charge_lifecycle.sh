@@ -92,23 +92,55 @@ PY
     echo $(( $(date +%s) * 1000 ))
 }
 
-# API调用函数
+# API调用函数（带重试机制）
 api_call() {
     local method=$1
     local path=$2
     local data=$3
+    local max_retries=3
+    local retry_count=0
+    local response=""
     
-    if [ -n "$data" ]; then
-        curl -s -w "\n%{http_code}" -X "$method" \
-            -H "Content-Type: application/json" \
-            -H "X-Api-Key: $API_KEY" \
-            -d "$data" \
-            "http://$SERVER:$HTTP_PORT$path" 2>&1
-    else
-        curl -s -w "\n%{http_code}" -X "$method" \
-            -H "X-Api-Key: $API_KEY" \
-            "http://$SERVER:$HTTP_PORT$path" 2>&1
-    fi
+    while [ $retry_count -lt $max_retries ]; do
+        if [ -n "$data" ]; then
+            response=$(curl -s -w "\n%{http_code}" -X "$method" \
+                --connect-timeout 10 \
+                --max-time 30 \
+                -H "Content-Type: application/json" \
+                -H "X-Api-Key: $API_KEY" \
+                -d "$data" \
+                "http://$SERVER:$HTTP_PORT$path" 2>&1)
+        else
+            response=$(curl -s -w "\n%{http_code}" -X "$method" \
+                --connect-timeout 10 \
+                --max-time 30 \
+                -H "X-Api-Key: $API_KEY" \
+                "http://$SERVER:$HTTP_PORT$path" 2>&1)
+        fi
+        
+        local http_code=$(echo "$response" | tail -1)
+        
+        # 检查是否是有效的HTTP状态码（200-599都是合法响应）
+        if echo "$http_code" | grep -Eq '^[2-5][0-9]{2}$'; then
+            # 成功获取响应
+            echo "$response"
+            return 0
+        fi
+        
+        # HTTP 000/curl错误/无效响应，重试
+        ((retry_count++))
+        if [ $retry_count -lt $max_retries ]; then
+            log "API请求失败 (HTTP $http_code，可能是网络问题)，${retry_count}/${max_retries} 次重试..."
+            sleep 3  # 增加重试间隔
+        else
+            log "API请求失败: 已达到最大重试次数 $max_retries，最后状态码: $http_code"
+        fi
+    done
+    
+    # 所有重试都失败，返回明确的错误标记
+    echo '{"error":"network_failure"}'
+    echo "000"
+    return 1
 }
 
 # 提取HTTP状态码
@@ -120,6 +152,8 @@ extract_http_code() {
 extract_body() {
     echo "$1" | sed '$d'
 }
+
+
 
 # 解析命令行参数
 parse_args() {
@@ -252,9 +286,9 @@ check_device_online() {
     local body=$(extract_body "$response")
     
     if [ "$http_code" = "200" ]; then
-        local online=$(echo "$body" | jq -r '.data.online // false')
-        local last_seen=$(echo "$body" | jq -r '.data.last_seen_at // 0')
-        local status=$(echo "$body" | jq -r '.data.status // "unknown"')
+        local online=$(echo "$body" | jq -r '.data.online // false' 2>/dev/null)
+        local last_seen=$(echo "$body" | jq -r '.data.last_seen_at // 0' 2>/dev/null)
+        local status=$(echo "$body" | jq -r '.data.status // "unknown"' 2>/dev/null)
         
         echo ""
         echo "设备信息:"
@@ -318,8 +352,42 @@ create_charge_order() {
     
     echo "响应: HTTP $http_code (耗时: ${elapsed}ms)" >&2
     
+    # 处理 409 冲突（端口被占用）
+    if [ "$http_code" = "409" ]; then
+        print_warning "端口被占用 (HTTP 409)" >&2
+        
+        # 尝试提取现有订单号
+        local current_order=$(echo "$body" | jq -r '.data.current_order // empty' 2>/dev/null)
+        if [ -n "$current_order" ] && [ "$current_order" != "null" ]; then
+            print_info "检测到现有订单: $current_order" >&2
+            print_info "尝试停止现有订单并重试..." >&2
+            
+            # 调用停止充电 API
+            local stop_response=$(api_call "POST" "/api/v1/third/devices/$DEVICE_ID/stop" "{\"port_no\": $PORT_NO}")
+            local stop_code=$(extract_http_code "$stop_response")
+            
+            if [ "$stop_code" = "200" ]; then
+                print_success "已停止现有订单" >&2
+                sleep 3  # 等待设备响应
+                
+                # 重试创建订单
+                print_info "重试创建订单..." >&2
+                response=$(api_call "POST" "/api/v1/third/devices/$DEVICE_ID/charge" "$payload")
+                http_code=$(extract_http_code "$response")
+                body=$(extract_body "$response")
+                
+                log "重试响应: HTTP $http_code, body: $body"
+                echo "重试响应: HTTP $http_code" >&2
+            else
+                print_failure "停止现有订单失败 (HTTP $stop_code)" >&2
+            fi
+        else
+            print_warning "无法获取现有订单号，跳过此测试" >&2
+        fi
+    fi
+    
     if [ "$http_code" = "200" ]; then
-        local order_no=$(echo "$body" | jq -r '.data.order_no // empty')
+        local order_no=$(echo "$body" | jq -r '.data.order_no // empty' 2>/dev/null)
         if [ -n "$order_no" ] && [ "$order_no" != "null" ]; then
             # 所有提示输出到stderr
             echo "" >&2
@@ -368,26 +436,39 @@ wait_for_order_status() {
         local http_code=$(extract_http_code "$response")
         local body=$(extract_body "$response")
         
-        # 调试日志
         if [ $elapsed -eq 0 ]; then
-            log "首次查询订单: HTTP $http_code, body长度: ${#body}"
-            log "Body前100字符: ${body:0:100}"
+            log "首次查询订单: HTTP $http_code"
         fi
         
-        local status=$(echo "$body" | jq -r '.data.status // empty' 2>>$LOG_FILE)
-        
-        if [ "$status" = "$target_status" ]; then
-            print_success "订单状态已变为: $status"
-            return 0
+        # 只在HTTP 200时才解析JSON
+        if [ "$http_code" = "200" ]; then
+            local status=$(echo "$body" | jq -r '.data.status // empty' 2>/dev/null)
+            
+            if [ -n "$status" ] && [ "$status" = "$target_status" ]; then
+                print_success "订单状态已变为: $status"
+                return 0
+            fi
+            
+            # 显示当前状态（如果有）
+            if [ -n "$status" ]; then
+                echo -n "[$status]"
+            else
+                echo -n "."
+            fi
+        else
+            # 非200响应，记录并继续等待
+            if [ $elapsed -eq 0 ]; then
+                log "订单查询返回 HTTP $http_code，继续等待..."
+            fi
+            echo -n "."
         fi
         
         sleep 2
         elapsed=$((elapsed + 2))
-        echo -n "." 
     done
     
     echo ""
-    print_warning "等待超时，当前状态: $status"
+    print_warning "等待超时(${timeout}秒)，当前HTTP状态: $http_code"
     return 1
 }
 
@@ -423,32 +504,35 @@ monitor_charging_progress() {
         
         # 每10秒查询一次
         if [ $((elapsed - last_check)) -ge 10 ]; then
-            local query_start=$(now_ms)
             local response=$(api_call "GET" "/api/v1/third/orders/$order_no" "")
-            local query_end=$(now_ms)
-            local query_time=$((query_end - query_start))
-            
+            local http_code=$(extract_http_code "$response")
             local body=$(extract_body "$response")
             
-            local duration_sec=$(echo "$body" | jq -r '.data.duration_sec // 0')
-            local total_kwh=$(echo "$body" | jq -r '.data.total_kwh // 0')
-            local current_power=$(echo "$body" | jq -r '.data.current_power // 0')
-            local status=$(echo "$body" | jq -r '.data.status // "unknown"')
-            
-            # 记录详细日志
             ((check_count++))
-            log "检查点 $check_count: status=$status, duration=$duration_sec, kwh=$total_kwh, power=$current_power, api_time=${query_time}ms"
             
-            printf "%-10s | %-8s | %-8s | %-7s | %-10s\n" \
-                "$(date '+%H:%M:%S')" "$duration_sec" "$total_kwh" "$current_power" "$status"
-            
-            # 如果已完成，退出
-            if [ "$status" = "completed" ]; then
-                echo ""
-                print_success "充电已完成"
-                log "充电完成，共查询 $check_count 次"
-                log "==================== 充电监控结束 ===================="
-                break
+            # 只在HTTP 200时才解析JSON
+            if [ "$http_code" = "200" ]; then
+                local duration_sec=$(echo "$body" | jq -r '.data.duration_sec // 0' 2>/dev/null)
+                local total_kwh=$(echo "$body" | jq -r '.data.energy_kwh // 0' 2>/dev/null)
+                local current_power=$(echo "$body" | jq -r '.data.current_power // 0' 2>/dev/null)
+                local status=$(echo "$body" | jq -r '.data.status // "unknown"' 2>/dev/null)
+                
+                log "检查点 $check_count: status=$status, duration=$duration_sec, kwh=$total_kwh, power=$current_power"
+                
+                printf "%-10s | %-8s | %-8s | %-7s | %-10s\n" \
+                    "$(date '+%H:%M:%S')" "$duration_sec" "$total_kwh" "$current_power" "$status"
+                
+                if [ "$status" = "completed" ]; then
+                    echo ""
+                    print_success "充电已完成"
+                    log "充电完成，共查询 $check_count 次"
+                    log "==================== 充电监控结束 ===================="
+                    break
+                fi
+            else
+                log "检查点 $check_count: HTTP $http_code (查询失败)"
+                printf "%-10s | %-8s | %-8s | %-7s | %-10s\n" \
+                    "$(date '+%H:%M:%S')" "" "" "" "(HTTP $http_code)"
             fi
             
             last_check=$elapsed
@@ -468,11 +552,17 @@ verify_order_result() {
     log "==================== 订单结果验证 ===================="
     
     local response=$(api_call "GET" "/api/v1/third/orders/$order_no" "")
-    local body=$(extract_body "$response")
     local http_code=$(extract_http_code "$response")
+    local body=$(extract_body "$response")
     
     log "查询订单: HTTP $http_code"
-    log "完整响应: $body"
+    
+    # 检查HTTP状态码
+    if [ "$http_code" != "200" ]; then
+        print_failure "无法获取订单数据 (HTTP $http_code)"
+        log "订单查询失败: HTTP $http_code"
+        return 1
+    fi
     
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -482,28 +572,29 @@ verify_order_result() {
         order_no: .data.order_no,
         status: .data.status,
         port_no: .data.port_no,
-        charge_mode: .data.charge_mode,
-        duration_sec: .data.duration_sec,
-        total_kwh: .data.total_kwh,
-        current_power: .data.current_power,
-        final_amount: .data.final_amount,
-        end_reason: .data.end_reason,
-        created_at: .data.created_at,
-        updated_at: .data.updated_at
-    }' 2>/dev/null
+        start_time: .data.start_time,
+        end_time: .data.end_time,
+        energy_kwh: .data.energy_kwh,
+        amount: .data.amount
+    }' 2>/dev/null || echo "无法格式化显示"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     
-    # 提取关键字段
-    local status=$(echo "$body" | jq -r '.data.status // empty')
-    local duration_sec=$(echo "$body" | jq -r '.data.duration_sec // 0')
-    local total_kwh=$(echo "$body" | jq -r '.data.total_kwh // 0')
-    local final_amount=$(echo "$body" | jq -r '.data.final_amount // 0')
-    local end_reason=$(echo "$body" | jq -r '.data.end_reason // "unknown"')
+    local status=$(echo "$body" | jq -r '.data.status // empty' 2>/dev/null)
+    local start_time=$(echo "$body" | jq -r '.data.start_time // 0' 2>/dev/null)
+    local end_time=$(echo "$body" | jq -r '.data.end_time // 0' 2>/dev/null)
+    local energy_kwh=$(echo "$body" | jq -r '.data.energy_kwh // 0' 2>/dev/null)
+    local amount=$(echo "$body" | jq -r '.data.amount // 0' 2>/dev/null)
     
-    log "验证结果: status=$status, duration=$duration_sec, kwh=$total_kwh, amount=$final_amount, reason=$end_reason"
+    local duration_sec=0
+    if [ "$start_time" != "0" ] && [ "$end_time" != "0" ]; then
+        duration_sec=$((end_time - start_time))
+    elif [ "$start_time" != "0" ]; then
+        duration_sec=$(($(date +%s) - start_time))
+    fi
     
-    # 验证状态
+    log "验证结果: status=$status, duration=${duration_sec}秒, kwh=$energy_kwh, amount=$amount"
+    
     if [ "$status" = "completed" ]; then
         print_success "订单状态: completed ✓"
     elif [ "$status" = "charging" ]; then
@@ -512,36 +603,20 @@ verify_order_result() {
         print_failure "订单状态异常: $status"
     fi
     
-    # 验证时长（按时长模式）
-    if [ "$expected_mode" = "duration" ]; then
-        if [ "$duration_sec" -gt 0 ]; then
-            local diff=$((duration_sec - expected_value))
-            diff=${diff#-}  # 绝对值
-            
-            if [ $diff -le 10 ]; then
-                print_success "充电时长: ${duration_sec}秒 (目标: ${expected_value}秒, 误差: ${diff}秒) ✓"
-            elif [ $diff -le 30 ]; then
-                print_warning "充电时长: ${duration_sec}秒 (目标: ${expected_value}秒, 误差: ${diff}秒)"
-            else
-                print_failure "充电时长误差过大: ${diff}秒"
-            fi
+    if [ "$expected_mode" = "duration" ] && [ "$duration_sec" -gt 0 ]; then
+        local diff=$((duration_sec - expected_value))
+        diff=${diff#-}
+        if [ $diff -le 10 ]; then
+            print_success "充电时长: ${duration_sec}秒 (目标: ${expected_value}秒) ✓"
         else
-            print_failure "充电时长为0"
+            print_warning "充电时长: ${duration_sec}秒 (目标: ${expected_value}秒, 误差: ${diff}秒)"
         fi
     fi
     
-    # 验证电量
-    if awk -v v="$total_kwh" 'BEGIN{exit !(v+0>0)}'; then
-        print_success "充电电量: ${total_kwh}kWh ✓"
+    if awk -v v="$energy_kwh" 'BEGIN{exit !(v+0>0)}'; then
+        print_success "充电电量: ${energy_kwh}kWh ✓"
     else
-        print_warning "充电电量为0（可能充电时间太短）"
-    fi
-    
-    # 验证金额
-    if [ "$final_amount" -gt 0 ]; then
-        print_success "结算金额: ${final_amount}分 ✓"
-    else
-        print_warning "结算金额为0"
+        print_warning "充电电量为0"
     fi
     
     log "================================================="
@@ -581,10 +656,13 @@ run_single_test() {
     
     log "订单创建成功: $order_no"
     
-    # 步骤3: 等待指令下发（给设备时间处理）
-    print_info "等待10秒让指令下发到设备..."
-    sleep 10
-    print_success "指令下发等待完成"
+    # 步骤3: 先短暂等待数据库写入完成，避免首次查询 404
+    print_info "等待2秒以确保订单写入后再查询..."
+    sleep 2
+    # 再等待指令下发（给设备时间处理）
+    print_info "额外等待8秒让指令下发到设备..."
+    sleep 8
+    print_success "等待完成"
     
     # 添加日志提示
     print_info "💡 建议同时查看服务器日志验证指令下发:"

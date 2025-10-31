@@ -135,6 +135,29 @@ func (h *Handlers) pushChargingStartedEvent(ctx context.Context, devicePhyID, or
 	h.pushEvent(ctx, event, logger)
 }
 
+// pushChargingCompletedEvent 推送充电完成事件(用于手动停止)
+func (h *Handlers) pushChargingCompletedEvent(ctx context.Context, devicePhyID, orderNo string, portNo int, endReason int, logger *zap.Logger) {
+	// 暂时不知道准确的duration和totalKwh，使用占位值
+	// 实际值应该在后续从数据库查询订单详情
+	eventData := &thirdparty.ChargingEndedData{
+		OrderNo:      orderNo,
+		PortNo:       portNo,
+		Duration:     0, // TODO: 从订单计算实际时长
+		TotalKwh:     0, // TODO: 从订单获取实际用量
+		EndReason:    fmt.Sprintf("%d", endReason),
+		EndReasonMsg: "用户主动停止",
+		EndedAt:      time.Now().Unix(),
+	}
+
+	event := thirdparty.NewEvent(
+		thirdparty.EventChargingEnded,
+		devicePhyID,
+		eventData.ToMap(),
+	)
+
+	h.pushEvent(ctx, event, logger)
+}
+
 // pushChargingEndedEvent 推送充电结束事件
 func (h *Handlers) pushChargingEndedEvent(ctx context.Context, devicePhyID, orderNo string, portNo int, duration int, totalKwh float64, endReason, endReasonMsg string, logger *zap.Logger) {
 	eventData := &thirdparty.ChargingEndedData{

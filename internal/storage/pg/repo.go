@@ -930,7 +930,7 @@ func (r *Repository) GetPendingOrderByPort(ctx context.Context, deviceID int64, 
 	const q = `SELECT id, device_id, port_no, order_no, status, start_time, end_time, 
 	                  amount_cent, kwh_0p01
 	           FROM orders
-	           WHERE device_id = $1 AND port_no = $2 AND status IN (0, 1)
+	           WHERE device_id = $1 AND port_no = $2 AND status = 0
 	           ORDER BY created_at DESC
 	           LIMIT 1`
 
@@ -941,6 +941,9 @@ func (r *Repository) GetPendingOrderByPort(ctx context.Context, deviceID int64, 
 		&ord.StartTime, &ord.EndTime, &ord.AmountCent, &ord.Kwh01,
 	)
 	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return nil, nil
+		}
 		return nil, err
 	}
 
@@ -970,7 +973,7 @@ func (r *Repository) UpdateOrderToCharging(ctx context.Context, orderNo string, 
 }
 
 // CancelOrderByPort 取消指定设备端口上的pending订单
-// 仅当订单状态为pending(0)时才会取消，实现幂等性
+// 仅当订单状态为pending(0)时才会取消,实现幂等性
 func (r *Repository) CancelOrderByPort(ctx context.Context, deviceID int64, portNo int) error {
 	const q = `UPDATE orders 
 	           SET status = 3, updated_at = NOW()
@@ -978,4 +981,50 @@ func (r *Repository) CancelOrderByPort(ctx context.Context, deviceID int64, port
 
 	_, err := r.Pool.Exec(ctx, q, deviceID, portNo)
 	return err
+}
+
+// CompleteOrderByPort 完成指定设备端口上的charging订单
+// 仅当订单状态为charging(1)时才会完成，实现幂等性
+func (r *Repository) CompleteOrderByPort(ctx context.Context, deviceID int64, portNo int, endTime time.Time, reason int) error {
+	const q = `UPDATE orders 
+	           SET status = 2, end_time = $3, end_reason = $4, updated_at = NOW()
+	           WHERE device_id = $1 AND port_no = $2 AND status = 1
+	           RETURNING order_no`
+
+	var orderNo string
+	err := r.Pool.QueryRow(ctx, q, deviceID, portNo, endTime, reason).Scan(&orderNo)
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return nil // 幂等：订单已经完成或不存在
+		}
+		return fmt.Errorf("complete order by port: %w", err)
+	}
+
+	return nil
+}
+
+// GetChargingOrderByPort 获取指定设备端口上的charging订单
+func (r *Repository) GetChargingOrderByPort(ctx context.Context, deviceID int64, portNo int) (*Order, error) {
+	const q = `SELECT o.id, o.order_no, o.device_id, o.port_no, o.status, 
+	                  o.start_time, o.end_time, o.kwh_01, o.amount_cent,
+	                  d.phy_id
+	           FROM orders o
+	           JOIN devices d ON o.device_id = d.id
+	           WHERE o.device_id = $1 AND o.port_no = $2 AND o.status = 1
+	           ORDER BY o.created_at DESC
+	           LIMIT 1`
+
+	var o Order
+	err := r.Pool.QueryRow(ctx, q, deviceID, portNo).Scan(
+		&o.ID, &o.OrderNo, &o.DeviceID, &o.PortNo, &o.Status,
+		&o.StartTime, &o.EndTime, &o.Kwh01, &o.AmountCent, &o.PhyID,
+	)
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get charging order by port: %w", err)
+	}
+
+	return &o, nil
 }
