@@ -1028,3 +1028,77 @@ func (r *Repository) GetChargingOrderByPort(ctx context.Context, deviceID int64,
 
 	return &o, nil
 }
+
+// P0-2修复: interrupted状态相关方法
+
+// RecoverOrder 恢复interrupted订单为charging
+func (r *Repository) RecoverOrder(ctx context.Context, orderNo string) error {
+	const q = `
+		UPDATE orders 
+		SET status = 2, updated_at = NOW()
+		WHERE order_no = $1 AND status = 10
+	`
+	result, err := r.Pool.Exec(ctx, q, orderNo)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("order not in interrupted state: %s", orderNo)
+	}
+	return nil
+}
+
+// FailOrder 标记订单失败(通用方法)
+func (r *Repository) FailOrder(ctx context.Context, orderNo, reason string) error {
+	const q = `
+		UPDATE orders 
+		SET status = 6, failure_reason = $2, updated_at = NOW()
+		WHERE order_no = $1
+	`
+	_, err := r.Pool.Exec(ctx, q, orderNo, reason)
+	return err
+}
+
+// GetInterruptedOrders 获取指定设备的interrupted订单
+func (r *Repository) GetInterruptedOrders(ctx context.Context, deviceID int64) ([]Order, error) {
+	const q = `
+		SELECT id, device_id, order_no, port_no, status, start_time, end_time, 
+		       kwh_0p01, amount_cent
+		FROM orders
+		WHERE device_id = $1 AND status = 10
+		ORDER BY updated_at DESC
+	`
+	rows, err := r.Pool.Query(ctx, q, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orders []Order
+	for rows.Next() {
+		var o Order
+		if err := rows.Scan(
+			&o.ID, &o.DeviceID, &o.OrderNo, &o.PortNo, &o.Status,
+			&o.StartTime, &o.EndTime, &o.Kwh01, &o.AmountCent,
+		); err != nil {
+			return nil, err
+		}
+		orders = append(orders, o)
+	}
+
+	return orders, nil
+}
+
+// MarkChargingOrdersAsInterrupted 将设备的所有charging订单标记为interrupted
+func (r *Repository) MarkChargingOrdersAsInterrupted(ctx context.Context, deviceID int64) (int64, error) {
+	const q = `
+		UPDATE orders 
+		SET status = 10, updated_at = NOW()
+		WHERE device_id = $1 AND status = 2
+	`
+	result, err := r.Pool.Exec(ctx, q, deviceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}

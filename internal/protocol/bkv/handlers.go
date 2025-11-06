@@ -45,6 +45,11 @@ type repoAPI interface {
 	CancelOrderByPort(ctx context.Context, deviceID int64, portNo int) error
 	GetChargingOrderByPort(ctx context.Context, deviceID int64, portNo int) (*pgstorage.Order, error)
 	CompleteOrderByPort(ctx context.Context, deviceID int64, portNo int, endTime time.Time, reason int) error
+
+	// P0-2修复: interrupted订单恢复方法
+	GetInterruptedOrders(ctx context.Context, deviceID int64) ([]pgstorage.Order, error)
+	RecoverOrder(ctx context.Context, orderNo string) error
+	FailOrder(ctx context.Context, orderNo, reason string) error
 }
 
 // CardServiceAPI 刷卡充电服务接口
@@ -132,6 +137,13 @@ func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
 	if h.Outbound != nil {
 		ackPayload := encodeHeartbeatAck(devicePhyID)
 		_ = h.Outbound.SendDownlink(devicePhyID, 0x0000, 0, ackPayload)
+	}
+
+	// P0-2修复: 检查是否有interrupted订单需要恢复
+	if err := h.checkInterruptedOrdersRecovery(ctx, devicePhyID, devID); err != nil {
+		// 恢复失败不影响心跳处理,仅记录错误
+		_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0xFFFF, 0,
+			[]byte(fmt.Sprintf("interrupted recovery failed: %v", err)), false)
 	}
 
 	return err
@@ -1650,4 +1662,63 @@ func (h *Handlers) pushChargingProgressEvent(
 
 	// 使用pushEvent统一推送（包含去重逻辑）
 	h.pushEvent(ctx, event, nil)
+}
+
+// P0-2修复: 检查interrupted订单恢复
+// 当设备心跳恢复时,检查是否有interrupted状态的订单需要恢复为charging
+func (h *Handlers) checkInterruptedOrdersRecovery(ctx context.Context, devicePhyID string, deviceID int64) error {
+	// 查询该设备的interrupted订单
+	orders, err := h.Repo.GetInterruptedOrders(ctx, deviceID)
+	if err != nil {
+		return fmt.Errorf("get interrupted orders failed: %w", err)
+	}
+
+	if len(orders) == 0 {
+		return nil
+	}
+
+	// 遍历处理每个interrupted订单
+	for _, order := range orders {
+		// 检查订单更新时间,超过60秒未恢复则标记为failed
+		if time.Since(*order.StartTime) > 60*time.Second {
+			if err := h.Repo.FailOrder(ctx, order.OrderNo, "device_offline_timeout"); err != nil {
+				continue
+			}
+
+			// 推送订单失败事件
+			if h.EventQueue != nil {
+				eventData := map[string]interface{}{
+					"order_no":       order.OrderNo,
+					"port_no":        order.PortNo,
+					"failure_reason": "device_offline_timeout",
+					"interrupted_at": order.StartTime.Unix(),
+				}
+				event := thirdparty.NewEvent(thirdparty.EventOrderFailed, devicePhyID, eventData)
+				h.pushEvent(ctx, event, nil)
+			}
+			continue
+		}
+
+		// TODO: 查询端口实时状态(0x1012命令)
+		// 简化实现: 假设设备恢复后端口仍在充电,直接恢复订单
+		// 完整实现需要等待P1-4端口状态查询功能完成
+
+		if err := h.Repo.RecoverOrder(ctx, order.OrderNo); err != nil {
+			continue
+		}
+
+		// 推送订单恢复事件
+		if h.EventQueue != nil {
+			eventData := map[string]interface{}{
+				"order_no":       order.OrderNo,
+				"port_no":        order.PortNo,
+				"interrupted_at": order.StartTime.Unix(),
+				"recovered_at":   time.Now().Unix(),
+			}
+			event := thirdparty.NewEvent("order.recovered", devicePhyID, eventData)
+			h.pushEvent(ctx, event, nil)
+		}
+	}
+
+	return nil
 }

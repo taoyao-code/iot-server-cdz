@@ -120,11 +120,22 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		return
 	}
 
-	// 2. 检查设备在线状态（可选）
+	// 2. P0-1修复: 强制检查设备在线状态
 	isOnline := h.sess.IsOnline(devicePhyID, time.Now())
 	if !isOnline {
-		h.logger.Warn("device offline", zap.String("device_phy_id", devicePhyID))
-		// 注意：这里不阻止充电指令下发，因为设备可能稍后上线
+		h.logger.Warn("device offline, rejecting order creation",
+			zap.String("device_phy_id", devicePhyID))
+		c.JSON(http.StatusServiceUnavailable, StandardResponse{
+			Code:    503,
+			Message: "device is offline, cannot create order",
+			Data: map[string]interface{}{
+				"device_id": devicePhyID,
+				"status":    "offline",
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
 	}
 
 	// 3. 清理超时的pending订单（超过5分钟自动取消）
@@ -141,16 +152,34 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 			zap.Int64("count", cleanupResult.RowsAffected()))
 	}
 
-	// 4. 检查端口是否已被占用
+	// 4. P1-3修复: 使用事务+行锁检查端口并创建订单
+	tx, err := h.repo.Pool.Begin(ctx)
+	if err != nil {
+		h.logger.Error("failed to begin transaction", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, StandardResponse{
+			Code:      500,
+			Message:   "database error",
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// 4.1. 锁定该端口的所有活跃订单(包含中间态)
 	var existingOrderNo string
 	checkPortSQL := `
 		SELECT order_no FROM orders 
-		WHERE device_id = $1 AND port_no = $2 AND status IN (0, 1)
-		ORDER BY created_at DESC LIMIT 1
+		WHERE device_id = $1 AND port_no = $2 
+		  AND status IN (0, 1, 2, 8, 9, 10)  -- pending, confirmed, charging, cancelling, stopping, interrupted
+		ORDER BY created_at DESC 
+		LIMIT 1
+		FOR UPDATE
 	`
-	err = h.repo.Pool.QueryRow(ctx, checkPortSQL, devID, req.PortNo).Scan(&existingOrderNo)
+	err = tx.QueryRow(ctx, checkPortSQL, devID, req.PortNo).Scan(&existingOrderNo)
 	if err == nil {
 		// 端口已被占用
+		tx.Rollback(ctx)
 		h.logger.Warn("port already in use",
 			zap.String("device_phy_id", devicePhyID),
 			zap.Int("port_no", req.PortNo),
@@ -171,14 +200,14 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 	// 5. 生成订单号
 	orderNo := fmt.Sprintf("THD%d%03d", time.Now().Unix(), req.PortNo)
 
-	// 6. 创建订单记录（简化版本，实际应使用CardService）
-	// 这里直接使用SQL插入订单
+	// 6. 在同一事务中创建订单记录
 	insertOrderSQL := `
 		INSERT INTO orders (device_id, order_no, amount_cent, status, port_no, created_at)
 		VALUES ($1, $2, $3, 0, $4, NOW())
 	`
-	_, err = h.repo.Pool.Exec(ctx, insertOrderSQL, devID, orderNo, req.Amount, req.PortNo)
+	_, err = tx.Exec(ctx, insertOrderSQL, devID, orderNo, req.Amount, req.PortNo)
 	if err != nil {
+		tx.Rollback(ctx)
 		h.logger.Error("failed to create order", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, StandardResponse{
 			Code:      500,
@@ -189,7 +218,19 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		return
 	}
 
-	// 6. 构造并下发充电指令（BKV 0x0015下行）
+	// 7. 提交事务
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit transaction", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, StandardResponse{
+			Code:      500,
+			Message:   "database error",
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
+	// 8. 构造并下发充电指令（BKV 0x0015下行）
 	// 按协议 2.2.8：外层BKV命令0x0015，内层控制命令0x07
 	if h.outboundQ != nil {
 		msgID := uint32(time.Now().Unix() % 65536)
@@ -283,7 +324,7 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		// 不再对另一端口重发开始指令，严格按请求端口执行
 	}
 
-	// 7. 返回成功响应
+	// 9. 返回成功响应
 	c.JSON(http.StatusOK, StandardResponse{
 		Code:    0,
 		Message: "charge command sent successfully",
@@ -418,6 +459,127 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 			"device_id": devicePhyID,
 			"order_no":  orderNo,
 			"port_no":   req.PortNo,
+		},
+		RequestID: requestID,
+		Timestamp: time.Now().Unix(),
+	})
+}
+
+// CancelOrderRequest P0修复: 取消订单请求
+type CancelOrderRequest struct {
+	OrderNo string `json:"order_no" binding:"required"`
+	Reason  string `json:"reason"`
+}
+
+// CancelOrder P0修复: 取消订单
+// @Summary 取消订单
+// @Description 取消pending或confirmed状态的订单,charging状态订单必须先停止充电
+// @Tags 订单管理
+// @Accept json
+// @Produce json
+// @Param order_id path string true "订单号"
+// @Param request body CancelOrderRequest true "取消订单参数"
+// @Success 200 {object} StandardResponse
+// @Failure 400 {object} StandardResponse "订单状态不允许取消"
+// @Failure 404 {object} StandardResponse "订单不存在"
+// @Router /api/v1/third/orders/{order_id}/cancel [post]
+func (h *ThirdPartyHandler) CancelOrder(c *gin.Context) {
+	ctx := c.Request.Context()
+	requestID := c.GetString("request_id")
+	orderNo := c.Param("order_id")
+
+	h.logger.Info("cancel order requested",
+		zap.String("order_no", orderNo))
+
+	// 1. 查询订单当前状态
+	var orderStatus int
+	var deviceID int64
+	var portNo int
+	queryOrderSQL := `
+		SELECT status, device_id, port_no 
+		FROM orders 
+		WHERE order_no = $1
+	`
+	err := h.repo.Pool.QueryRow(ctx, queryOrderSQL, orderNo).Scan(&orderStatus, &deviceID, &portNo)
+	if err != nil {
+		h.logger.Warn("order not found", zap.String("order_no", orderNo), zap.Error(err))
+		c.JSON(http.StatusNotFound, StandardResponse{
+			Code:      404,
+			Message:   "order not found",
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
+	// 2. P0修复: charging状态订单不允许直接取消
+	if orderStatus == 2 { // charging
+		h.logger.Warn("cannot cancel charging order",
+			zap.String("order_no", orderNo),
+			zap.Int("status", orderStatus))
+		c.JSON(http.StatusBadRequest, StandardResponse{
+			Code:    40001, // ORDER_IS_CHARGING
+			Message: "charging状态订单无法直接取消,请先调用停止充电接口",
+			Data: map[string]interface{}{
+				"order_no":    orderNo,
+				"status":      orderStatus,
+				"status_name": "charging",
+				"error_code":  "ORDER_IS_CHARGING",
+				"suggest":     "请先停止充电,订单变为stopped后即为终态",
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
+	// 3. 检查订单是否可取消(pending=0, confirmed=1)
+	if orderStatus != 0 && orderStatus != 1 {
+		h.logger.Warn("order status not cancellable",
+			zap.String("order_no", orderNo),
+			zap.Int("status", orderStatus))
+		c.JSON(http.StatusBadRequest, StandardResponse{
+			Code:    400,
+			Message: fmt.Sprintf("订单状态%d不允许取消", orderStatus),
+			Data: map[string]interface{}{
+				"order_no": orderNo,
+				"status":   orderStatus,
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
+	// 4. 更新订单状态为cancelling(8)
+	updateSQL := `UPDATE orders SET status = 8, updated_at = NOW() WHERE order_no = $1`
+	_, err = h.repo.Pool.Exec(ctx, updateSQL, orderNo)
+	if err != nil {
+		h.logger.Error("failed to update order status", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, StandardResponse{
+			Code:      500,
+			Message:   "failed to cancel order",
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
+	// 5. 下发取消指令到设备(如果需要)
+	// TODO: 根据业务需求决定是否需要通知设备
+
+	// 6. 返回成功响应
+	h.logger.Info("order cancelled successfully",
+		zap.String("order_no", orderNo),
+		zap.Int("original_status", orderStatus))
+
+	c.JSON(http.StatusOK, StandardResponse{
+		Code:    0,
+		Message: "cancel command sent, order will be cancelled in 30 seconds",
+		Data: map[string]interface{}{
+			"order_no": orderNo,
+			"status":   "cancelling",
+			"note":     "订单将在30秒后自动变为cancelled,或收到设备ACK后立即取消",
 		},
 		RequestID: requestID,
 		Timestamp: time.Now().Unix(),

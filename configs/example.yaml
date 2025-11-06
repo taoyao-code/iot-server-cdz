@@ -89,7 +89,7 @@ thirdparty:
   ip_whitelist: [] # IP白名单（留空则不限制）
 
 session:
-  heartbeat_timeout_sec: 360
+  heartbeat_timeout_sec: 60 # P1-1修复: 心跳周期30s × 2 = 60s (避免网络波动误判)
   weighted:
     enabled: true
     tcp_down_window_sec: 120

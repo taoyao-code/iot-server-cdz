@@ -68,6 +68,11 @@ func (m *OrderMonitor) check(ctx context.Context) {
 
 	// 检查charging订单异常长时间充电
 	m.checkLongChargingOrders(ctx)
+
+	// P0修复: 自动流转中间态订单
+	m.cleanupCancellingOrders(ctx)
+	m.cleanupStoppingOrders(ctx)
+	m.cleanupInterruptedOrders(ctx)
 }
 
 // checkStalePendingOrders 检查pending订单超时
@@ -184,6 +189,69 @@ func (m *OrderMonitor) checkLongChargingOrders(ctx context.Context) {
 		// 1. 查询设备在线状态,如果离线则自动结算订单
 		// 2. 主动发送查询指令获取最新充电数据
 		// 3. 推送告警到运维系统
+	}
+}
+
+// cleanupCancellingOrders P0修复: 自动清理超时的cancelling订单
+// cancelling订单超过30秒未收到设备ACK,自动变为cancelled
+func (m *OrderMonitor) cleanupCancellingOrders(ctx context.Context) {
+	q := `UPDATE orders 
+	      SET status = 5, updated_at = NOW()
+	      WHERE status = 8 
+	        AND updated_at < NOW() - INTERVAL '30 seconds'`
+
+	result, err := m.repo.Pool.Exec(ctx, q)
+	if err != nil {
+		m.logger.Error("cleanup cancelling orders failed", zap.Error(err))
+		return
+	}
+
+	if result.RowsAffected() > 0 {
+		m.logger.Info("✅ auto cancelled timeout orders",
+			zap.Int64("count", result.RowsAffected()),
+			zap.String("reason", "cancelling超时30秒"))
+	}
+}
+
+// cleanupStoppingOrders P0修复: 自动清理超时的stopping订单
+// stopping订单超过30秒未收到设备ACK,自动变为stopped
+func (m *OrderMonitor) cleanupStoppingOrders(ctx context.Context) {
+	q := `UPDATE orders 
+	      SET status = 7, updated_at = NOW()
+	      WHERE status = 9 
+	        AND updated_at < NOW() - INTERVAL '30 seconds'`
+
+	result, err := m.repo.Pool.Exec(ctx, q)
+	if err != nil {
+		m.logger.Error("cleanup stopping orders failed", zap.Error(err))
+		return
+	}
+
+	if result.RowsAffected() > 0 {
+		m.logger.Info("✅ auto stopped timeout orders",
+			zap.Int64("count", result.RowsAffected()),
+			zap.String("reason", "stopping超时30秒"))
+	}
+}
+
+// cleanupInterruptedOrders P0修复: 自动清理超时的interrupted订单
+// interrupted订单超过60秒设备未恢复,自动变为failed
+func (m *OrderMonitor) cleanupInterruptedOrders(ctx context.Context) {
+	q := `UPDATE orders 
+	      SET status = 6, failure_reason = 'device offline timeout', updated_at = NOW()
+	      WHERE status = 10 
+	        AND updated_at < NOW() - INTERVAL '60 seconds'`
+
+	result, err := m.repo.Pool.Exec(ctx, q)
+	if err != nil {
+		m.logger.Error("cleanup interrupted orders failed", zap.Error(err))
+		return
+	}
+
+	if result.RowsAffected() > 0 {
+		m.logger.Warn("⚠️ auto failed interrupted orders",
+			zap.Int64("count", result.RowsAffected()),
+			zap.String("reason", "设备离线超过60秒未恢复"))
 	}
 }
 

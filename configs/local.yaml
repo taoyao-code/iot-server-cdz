@@ -86,7 +86,7 @@ thirdparty:
   ip_whitelist: [] # 本地开发不限制 IP（生产环境建议配置）
 
 session:
-  heartbeat_timeout_sec: 360
+  heartbeat_timeout_sec: 60 # P1-1修复: 心跳周期30s × 2 = 60s (避免网络波动误判)
   weighted:
     enabled: true
     tcp_down_window_sec: 120

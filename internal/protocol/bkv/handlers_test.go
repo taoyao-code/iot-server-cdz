@@ -467,6 +467,19 @@ func (f *fakeRepo) GetDeviceOTATasks(ctx context.Context, deviceID int64, limit 
 	return nil, nil
 }
 
+// P0-2修复: 断线恢复方法（测试桩）
+func (f *fakeRepo) RecoverOrder(ctx context.Context, orderNo string) error {
+	return nil
+}
+
+func (f *fakeRepo) FailOrder(ctx context.Context, orderNo string, reason string) error {
+	return nil
+}
+
+func (f *fakeRepo) GetInterruptedOrders(ctx context.Context, deviceID int64) ([]pgstorage.Order, error) {
+	return nil, nil
+}
+
 // =============================================================================
 // 补充测试：缺失的关键handler
 // =============================================================================

@@ -24,6 +24,9 @@ const (
 	// EventOrderCompleted 订单完成事件
 	EventOrderCompleted EventType = "order.completed"
 
+	// EventOrderFailed 订单失败事件 (P0-2修复: 新增)
+	EventOrderFailed EventType = "order.failed"
+
 	// EventChargingStarted 充电开始事件
 	EventChargingStarted EventType = "charging.started"
 

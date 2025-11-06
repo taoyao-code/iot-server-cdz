@@ -122,6 +122,19 @@ func (f *fakeRepoParam) GetDeviceOTATasks(ctx context.Context, deviceID int64, l
 	return nil, nil
 }
 
+// P0-2修复: 断线恢复方法（测试桩）
+func (f *fakeRepoParam) RecoverOrder(ctx context.Context, orderNo string) error {
+	return nil
+}
+
+func (f *fakeRepoParam) FailOrder(ctx context.Context, orderNo string, reason string) error {
+	return nil
+}
+
+func (f *fakeRepoParam) GetInterruptedOrders(ctx context.Context, deviceID int64) ([]pgstorage.Order, error) {
+	return nil, nil
+}
+
 func TestHandleParam_ReadbackSuccess(t *testing.T) {
 	fr := &fakeRepoParam{}
 	h := &Handlers{Repo: fr}

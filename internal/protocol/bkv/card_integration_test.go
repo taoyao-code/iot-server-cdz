@@ -525,6 +525,19 @@ func (m *MockRepo) GetDeviceOTATasks(ctx context.Context, deviceID int64, limit 
 	return nil, nil
 }
 
+// P0-2修复: 断线恢复方法（测试桩）
+func (m *MockRepo) RecoverOrder(ctx context.Context, orderNo string) error {
+	return nil
+}
+
+func (m *MockRepo) FailOrder(ctx context.Context, orderNo string, reason string) error {
+	return nil
+}
+
+func (m *MockRepo) GetInterruptedOrders(ctx context.Context, deviceID int64) ([]pgstorage.Order, error) {
+	return nil, nil
+}
+
 // ============ 编码辅助函数 ============
 
 func EncodeCardSwipeRequest(req *CardSwipeRequest) ([]byte, error) {

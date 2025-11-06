@@ -287,27 +287,11 @@ install-hooks:
 	fi
 
 # E2E 测试
-.PHONY: test-e2e test-e2e-verbose test-e2e-charge test-e2e-device test-e2e-order
+.PHONY: test-e2e
 
 test-e2e:
 	@echo "运行 E2E 测试..."
 	@cd test/e2e && go test -v -timeout 10m ./...
-
-test-e2e-verbose:
-	@echo "运行 E2E 测试（详细输出）..."
-	@cd test/e2e && E2E_VERBOSE=true go test -v -timeout 10m ./...
-
-test-e2e-charge:
-	@echo "运行充电流程 E2E 测试..."
-	@cd test/e2e && go test -v -timeout 5m -run ChargeSuite
-
-test-e2e-device:
-	@echo "运行设备管理 E2E 测试..."
-	@cd test/e2e && go test -v -timeout 5m -run DeviceSuite
-
-test-e2e-order:
-	@echo "运行订单管理 E2E 测试..."
-	@cd test/e2e && go test -v -timeout 5m -run OrderSuite
 
 # 清理
 clean:
@@ -316,52 +300,8 @@ clean:
 	rm -f coverage.out coverage.html
 	rm -rf tmp
 
-clean-all: clean
-	@echo "深度清理..."
-	docker-compose -f docker-compose.prod.yml down -v
-	docker compose down -v
-
-# CI/CD 相关
-.PHONY: ci-check ci-test ci-build ci-setup
-
-ci-check:
-	@echo "执行 CI 检查..."
-	@echo "1. 代码格式检查..."
-	@if [ "$$(gofmt -s -l . | wc -l)" -gt 0 ]; then \
-		echo "❌ 以下文件需要格式化:"; \
-		gofmt -s -l .; \
-		exit 1; \
-	fi
-	@echo "✅ 代码格式检查通过"
-	@echo "2. 静态分析..."
-	@go vet $(PKG)
-	@echo "✅ 静态分析通过"
-
-ci-test:
-	@echo "运行 CI 测试..."
-	@go test -v -race -coverprofile=coverage.out $(PKG)
-	@go tool cover -func=coverage.out
-
-ci-build:
-	@echo "CI 构建..."
-	@make build
-	@echo "✅ 构建成功"
-
-ci-setup:
-	@echo "设置 CI/CD 环境..."
-	@if [ ! -f .github/workflows/ci.yml ]; then \
-		echo "❌ GitHub Actions 配置文件不存在"; \
-		exit 1; \
-	fi
-	@echo "✅ GitHub Actions 已配置"
-	@echo ""
-	@echo "下一步："
-	@echo "1. 配置 GitHub Secrets（参考 .github/secrets-template.txt）"
-	@echo "2. 配置 GitHub Environments（staging, production）"
-	@echo "3. 查看完整指南: docs/CI-CD-GUIDE.md"
-
-# API文档生成
-.PHONY: swagger-init swagger-gen swagger-validate api-docs
+# 自动部署
+.PHONY: auto-deploy deploy-full remote-migrate
 
 swagger-init:
 	@echo "安装 swag 工具..."
@@ -373,54 +313,38 @@ swagger-gen:
 	@which swag > /dev/null || (echo "❌ swag 工具未安装，运行: make swagger-init" && exit 1)
 	swag init -g cmd/server/main.go -o api/swagger --parseDependency --parseInternal
 	@echo "✅ API文档已生成: api/swagger/swagger.json"
-	@echo "   查看文档: api/swagger/swagger.yaml"
-
-swagger-validate:
-	@echo "验证OpenAPI文档..."
-	@which swagger > /dev/null || (echo "⚠️  swagger 工具未安装，跳过验证" && exit 0)
-	swagger validate api/openapi/openapi.yaml
-	@echo "✅ OpenAPI文档验证通过"
 
 api-docs: swagger-init swagger-gen
 	@echo "✅ API文档生成完成"
-	@echo ""
-	@echo "📖 查看API文档:"
-	@echo "   JSON: api/swagger/swagger.json"
-	@echo "   YAML: api/swagger/swagger.yaml"
-	@echo "   HTML: 启动服务后访问 http://localhost:7055/swagger/index.html"
-
-# 测试相关
-.PHONY: test-local-compile test-charge-lifecycle test-production-auto
-
-test-local-compile:
-	@echo "🧪 执行本地编译验证..."
-	@./test/local/compile_check.sh
-
-test-charge-lifecycle:
-	@echo "🔋 执行完整充电生命周期测试..."
-	@./test/scripts/test_charge_lifecycle.sh --mode duration --value 60 --auto
-
-test-production-auto:
-	@echo "🏭 执行生产环境自动化测试..."
-	@./test/production/scripts/auto_test_production.sh --quick
-
-# 监控相关
-.PHONY: monitor-simple
-
-monitor-simple:
-	@echo "📊 启动实时监控..."
-	@./scripts/monitor_simple.sh
 
 # 自动部署
-.PHONY: auto-deploy deploy-quick
+.PHONY: auto-deploy deploy-full remote-migrate
 
-auto-deploy: test-local-compile
-	@echo "🚀 执行自动部署..."
-	@./scripts/auto_deploy_test.sh
+# 完整自动化部署流程
+auto-deploy:
+	@echo "🚀 开始自动化部署..."
+	@echo ""
+	@echo "📋 执行步骤:"
+	@echo "  1. 构建Linux版本"
+	@echo "  2. 执行远程数据库迁移"
+	@echo "  3. 部署到测试服务器"
+	@echo ""
+	@$(MAKE) build-linux
+	@$(MAKE) remote-migrate
+	@$(MAKE) quick-deploy
+	@echo ""
+	@echo "✅ 自动化部署完成!"
+	@echo "💡 运行 'make monitor' 查看服务状态"
 
-deploy-quick:
-	@echo "⚡ 快速部署（跳过测试）..."
-	@./scripts/auto_deploy_test.sh --skip-test
+# 仅执行远程数据库迁移
+remote-migrate:
+	@echo "� 执行远程数据库迁移..."
+	@./scripts/remote-migrate.sh
+
+# 完整部署（带备份）
+deploy-full:
+	@echo "🚀 执行完整部署（带备份）..."
+	@BACKUP=true make deploy
 
 # 帮助
 help:
@@ -446,13 +370,15 @@ help:
 	@echo "  make lint            - 代码检查"
 	@echo "  make install-hooks   - 安装 Git pre-commit hooks"
 	@echo ""
-	@echo "🧪 测试相关（新增）："
-	@echo "  make test-local-compile    - 本地编译验证"
-	@echo "  make test-charge-lifecycle - 完整充电生命周期测试"
-	@echo "  make test-production-auto  - 生产环境自动化测试"
+	@echo "🧪 测试相关:"
+	@echo "  make test            - 运行测试套件"
+	@echo "  make test-verbose    - 详细测试输出"
+	@echo "  make test-coverage   - 生成覆盖率报告"
 	@echo ""
-	@echo "📊 监控相关（新增）："
-	@echo "  make monitor-simple        - 实时监控工具"
+	@echo "📊 监控相关:"
+	@echo "  make monitor         - 完整诊断"
+	@echo "  make monitor-logs    - 实时日志"
+	@echo "  make monitor-errors  - 错误日志"
 	@echo ""
 	@echo "Docker开发环境："
 	@echo "  make compose-up      - 启动开发环境"
@@ -467,54 +393,39 @@ help:
 	@echo "  make prod-logs       - 查看生产环境日志"
 	@echo ""
 	@echo "部署相关："
-	@echo "  make auto-deploy           - 自动部署+测试（推荐）⭐"
-	@echo "  make deploy-quick          - 快速部署（跳过测试）"
-	@echo "  make deploy                - 快速部署（测试模式，不备份）"
-	@echo "  BACKUP=true make deploy    - 安全部署（生产模式，自动备份）"
+	@echo "  make auto-deploy     - 自动化部署(构建+迁移+部署) ⭐"
+	@echo "  make remote-migrate  - 远程数据库迁移"
+	@echo "  make quick-deploy    - 快速部署(仅替换二进制)"
+	@echo "  make deploy          - 标准部署(测试环境)"
+	@echo "  make deploy-full     - 完整部署(带备份)"
 	@echo ""
 	@echo "监控调试："
-	@echo "  make monitor               - 运行完整诊断（推荐）"
-	@echo "  make monitor-logs          - 查看实时日志"
-	@echo "  make monitor-errors        - 查看错误日志"
-	@echo "  make monitor-metrics       - 查看业务指标"
-	@echo "  make monitor-help          - 查看所有监控命令"
+	@echo "  make monitor         - 完整诊断(推荐)"
+	@echo "  make monitor-logs    - 实时日志"
+	@echo "  make monitor-errors  - 错误日志"
+	@echo "  make monitor-metrics - 业务指标"
 	@echo ""
-	@echo "TCP 模块测试："
-	@echo "  make tcp-check             - 检查 TCP 端口"
-	@echo "  make tcp-connect           - 测试 TCP 连接"
-	@echo "  make tcp-metrics           - 查看 TCP 指标"
-	@echo "  make tcp-test-all          - 运行所有 TCP 测试"
+	@echo "TCP 模块:"
+	@echo "  make tcp-check       - 检查TCP端口"
+	@echo "  make tcp-metrics     - TCP指标"
 	@echo ""
-	@echo "协议实时监控："
-	@echo "  make protocol-live         - 综合监控（推荐，需 tmux）"
-	@echo "  make protocol-logs         - 实时协议日志"
-	@echo "  make protocol-stats        - 实时统计数据"
-	@echo "  make protocol-devices      - 查看在线设备"
+	@echo "协议监控:"
+	@echo "  make protocol-logs   - 实时协议日志"
+	@echo "  make protocol-stats  - 实时统计"
 	@echo ""
 	@echo "维护相关："
 	@echo "  make backup          - 备份数据"
-	@echo "  make restore         - 恢复数据"
-	@echo "  make clean           - 清理构建文件"
-	@echo "  make clean-all       - 深度清理（包括Docker）"
+	@echo "  make clean           - 清理构建"
 	@echo ""
-	@echo "CI/CD相关："
-	@echo "  make ci-check        - 执行 CI 代码检查"
-	@echo "  make ci-test         - 运行 CI 测试套件"
-	@echo "  make ci-build        - CI 构建验证"
-	@echo "  make ci-setup        - 检查 CI/CD 配置"
-	@echo ""
-	@echo "API文档："
-	@echo "  make api-docs        - 生成完整API文档（推荐）"
-	@echo "  make swagger-init    - 安装swagger工具"
-	@echo "  make swagger-gen     - 生成swagger文档"
-	@echo "  make swagger-validate - 验证OpenAPI文档"
+	@echo "API文档:"
+	@echo "  make api-docs        - 生成API文档"
 	@echo ""
 	@echo "当前版本: $(VERSION)"
 	@echo ""
 	@echo "💡 推荐工作流程:"
 	@echo "   1. 修改代码"
-	@echo "   2. make test-local-compile  (验证编译)"
-	@echo "   3. make auto-deploy         (自动部署+测试) ⭐"
-	@echo "   4. make monitor-simple      (监控运行状态)"
+	@echo "   2. make test             (本地测试)"
+	@echo "   3. make auto-deploy      (自动化部署) ⭐"
+	@echo "   4. make monitor          (监控运行状态)"
 
 
