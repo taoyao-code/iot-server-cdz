@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -115,7 +116,18 @@ func (s *CardService) HandleOrderConfirmation(ctx context.Context, conf *bkv.Ord
 	// 更新订单状态
 	if conf.Status == 0 {
 		// 设备接受订单，更新为充电中
-		return s.repo.UpdateTransactionCharging(ctx, conf.OrderNo)
+		err := s.repo.UpdateTransactionCharging(ctx, conf.OrderNo)
+		if err != nil {
+			return err
+		}
+
+		// P1-7修复: 插入order.confirmed事件
+		if err := s.insertOrderConfirmedEvent(ctx, conf.OrderNo); err != nil {
+			// 事件插入失败不影响订单流程，记录日志即可
+			// EventPusher会重试
+			return fmt.Errorf("插入事件失败（订单已更新）: %w", err)
+		}
+		return nil
 	}
 
 	// 设备拒绝订单，标记失败
@@ -123,7 +135,15 @@ func (s *CardService) HandleOrderConfirmation(ctx context.Context, conf *bkv.Ord
 	if reason == "" {
 		reason = "设备拒绝"
 	}
-	return s.repo.FailTransaction(ctx, conf.OrderNo, reason)
+	if err = s.repo.FailTransaction(ctx, conf.OrderNo, reason); err != nil {
+		return err
+	}
+
+	// P1-7修复: 插入order.failed事件
+	if err := s.insertOrderFailedEvent(ctx, conf.OrderNo, reason); err != nil {
+		return fmt.Errorf("插入事件失败（订单已更新）: %w", err)
+	}
+	return nil
 }
 
 // HandleChargeEnd 处理充电结束
@@ -149,6 +169,11 @@ func (s *CardService) HandleChargeEnd(ctx context.Context, report *bkv.ChargeEnd
 		fmt.Sprintf("充电消费 订单:%s", report.OrderNo))
 	if err != nil {
 		return fmt.Errorf("扣款失败: %w", err)
+	}
+
+	// P1-7修复: 插入order.completed事件
+	if err := s.insertOrderCompletedEvent(ctx, report.OrderNo, energyKwh, actualAmount); err != nil {
+		return fmt.Errorf("插入事件失败（订单已更新）: %w", err)
 	}
 
 	return nil
@@ -222,4 +247,54 @@ func (s *CardService) RechargeCard(ctx context.Context, cardNo string, amount fl
 	// 充值
 	return s.repo.UpdateCardBalance(ctx, cardNo, amount, "recharge",
 		fmt.Sprintf("充值 %.2f元 时间:%s", amount, time.Now().Format("2006-01-02 15:04:05")))
+}
+
+// ===== P1-7修复: 事件插入辅助方法 =====
+
+func (s *CardService) insertOrderConfirmedEvent(ctx context.Context, orderNo string) error {
+seqNo, err := s.repo.GetNextSequenceNo(ctx, orderNo)
+if err != nil {
+return err
+}
+
+eventData := map[string]interface{}{
+"order_no":    orderNo,
+"confirmed_at": time.Now().Format(time.RFC3339),
+}
+data, _ := json.Marshal(eventData)
+
+return s.repo.InsertEvent(ctx, orderNo, "order.confirmed", data, seqNo)
+}
+
+func (s *CardService) insertOrderFailedEvent(ctx context.Context, orderNo, reason string) error {
+seqNo, err := s.repo.GetNextSequenceNo(ctx, orderNo)
+if err != nil {
+return err
+}
+
+eventData := map[string]interface{}{
+"order_no":  orderNo,
+"reason":    reason,
+"failed_at": time.Now().Format(time.RFC3339),
+}
+data, _ := json.Marshal(eventData)
+
+return s.repo.InsertEvent(ctx, orderNo, "order.failed", data, seqNo)
+}
+
+func (s *CardService) insertOrderCompletedEvent(ctx context.Context, orderNo string, energyKwh, totalAmount float64) error {
+seqNo, err := s.repo.GetNextSequenceNo(ctx, orderNo)
+if err != nil {
+return err
+}
+
+eventData := map[string]interface{}{
+"order_no":      orderNo,
+"energy_kwh":    energyKwh,
+"total_amount":  totalAmount,
+"completed_at":  time.Now().Format(time.RFC3339),
+}
+data, _ := json.Marshal(eventData)
+
+return s.repo.InsertEvent(ctx, orderNo, "order.completed", data, seqNo)
 }

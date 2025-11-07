@@ -430,5 +430,30 @@ WHERE status = 2;
 -- 将当前charging状态且设备离线超过60秒的订单标记为interrupted
 -- 注意: 需要配合设备last_seen字段判断,这里仅创建索引,实际逻辑在代码中
 
+
+-- P1-7修复: 事件推送Outbox模式
+-- events: 事件推送表
+CREATE TABLE IF NOT EXISTS events (
+    id BIGSERIAL PRIMARY KEY,
+    order_no VARCHAR(32) NOT NULL,
+    event_type VARCHAR(32) NOT NULL,  -- device.heartbeat, order.created, order.confirmed, charging.started, charging.ended, order.completed, etc.
+    event_data JSONB NOT NULL,
+    sequence_no INT NOT NULL,         -- 事件序列号（按订单递增）
+    status INT NOT NULL DEFAULT 0,    -- 0:待推送, 1:已推送, 2:失败
+    retry_count INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    pushed_at TIMESTAMPTZ,
+    error_message TEXT,
+    CONSTRAINT events_order_seq UNIQUE(order_no, sequence_no)
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_status_created ON events(status, created_at) WHERE status IN (0, 2);
+CREATE INDEX IF NOT EXISTS idx_events_order_no ON events(order_no);
+CREATE INDEX IF NOT EXISTS idx_events_retry ON events(status, retry_count, created_at) WHERE status = 2 AND retry_count < 5;
+
+COMMENT ON TABLE events IS 'P1-7: 事件推送Outbox模式，确保事件可靠推送';
+COMMENT ON COLUMN events.status IS '0=待推送, 1=已推送, 2=失败';
+COMMENT ON COLUMN events.sequence_no IS '同一订单的事件序列号，确保顺序';
+
 -- 记录所有迁移版本
-INSERT INTO schema_migrations(version) VALUES (1), (2), (3), (5), (6), (7), (8), (9), (11);
+INSERT INTO schema_migrations(version) VALUES (1), (2), (3), (5), (6), (7), (8), (9), (11), (12);
