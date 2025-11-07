@@ -36,9 +36,10 @@ func RegisterThirdPartyRoutes(
 	api.GET("/devices/:device_id", handler.GetDevice)           // 查询设备状态
 
 	// 订单查询API
-	api.GET("/orders/:order_id", handler.GetOrder)            // 查询订单详情
-	api.GET("/orders", handler.ListOrders)                    // 订单列表（分页）
-	api.POST("/orders/:order_id/cancel", handler.CancelOrder) // P0修复: 取消订单
+	api.GET("/orders/:order_id", handler.GetOrder)              // 查询订单详情
+	api.GET("/orders", handler.ListOrders)                      // 订单列表（分页）
+	api.POST("/orders/:order_id/cancel", handler.CancelOrder)   // P0修复: 取消订单
+	api.GET("/orders/:order_id/events", handler.GetOrderEvents) // P1-7完善: 查询订单事件
 
 	// 参数和OTA API
 	api.POST("/devices/:device_id/params", handler.SetParams) // 设置参数
@@ -47,5 +48,5 @@ func RegisterThirdPartyRoutes(
 	// 组网管理API
 	api.POST("/devices/:device_id/network/configure", handler.ConfigureNetwork) // 配置组网
 
-	logger.Info("third party routes registered", zap.Int("endpoints", 9)) // P0修复: 8→9
+	logger.Info("third party routes registered", zap.Int("endpoints", 10)) // P1-7: 9→10
 }

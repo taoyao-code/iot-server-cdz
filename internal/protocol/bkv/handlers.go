@@ -76,6 +76,7 @@ type MetricsAPI interface {
 	GetChargeReportPowerGauge() *prometheus.GaugeVec
 	GetChargeReportCurrentGauge() *prometheus.GaugeVec
 	GetChargeReportEnergyTotal() *prometheus.CounterVec
+	GetPortStatusQueryResponseTotal() *prometheus.CounterVec // P1-4新增
 }
 
 // Handlers BKV 协议处理器集合
@@ -1569,7 +1570,23 @@ func (h *Handlers) HandleSocketStateResponse(ctx context.Context, f *Frame) erro
 		float64(resp.Voltage)/10, resp.Current, resp.Power))
 	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
 
-	// TODO: 更新插座状态到数据库
+	// 更新插座状态到数据库
+	dbStatus := int(resp.Status) // 0=空闲, 1=充电中, 2=故障
+	power := int(resp.Power)     // W
+	if err := h.Repo.UpsertPortState(ctx, devID, int(resp.SocketNo), dbStatus, &power); err != nil {
+		// 记录错误但不中断处理流程
+		errLog := []byte(fmt.Sprintf("❌failed to update port state: socket=%d err=%v", resp.SocketNo, err))
+		_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0xFFFF, 0, errLog, false)
+	}
+
+	// 更新指标
+	if h.Metrics != nil {
+		h.Metrics.GetPortStatusQueryResponseTotal().WithLabelValues(
+			f.GatewayID,
+			GetSocketStatusDescription(resp.Status),
+		).Inc()
+	}
+
 	return nil
 }
 

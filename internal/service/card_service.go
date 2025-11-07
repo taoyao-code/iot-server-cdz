@@ -115,17 +115,16 @@ func (s *CardService) HandleOrderConfirmation(ctx context.Context, conf *bkv.Ord
 
 	// 更新订单状态
 	if conf.Status == 0 {
-		// 设备接受订单，更新为充电中
-		err := s.repo.UpdateTransactionCharging(ctx, conf.OrderNo)
-		if err != nil {
-			return err
+		// P1-7完善: 使用事务版本，订单更新和事件插入在同一事务
+		eventData := map[string]interface{}{
+			"order_no":     conf.OrderNo,
+			"confirmed_at": time.Now().Format(time.RFC3339),
 		}
+		data, _ := json.Marshal(eventData)
 
-		// P1-7修复: 插入order.confirmed事件
-		if err := s.insertOrderConfirmedEvent(ctx, conf.OrderNo); err != nil {
-			// 事件插入失败不影响订单流程，记录日志即可
-			// EventPusher会重试
-			return fmt.Errorf("插入事件失败（订单已更新）: %w", err)
+		err := s.repo.UpdateTransactionChargingWithEvent(ctx, conf.OrderNo, data)
+		if err != nil {
+			return fmt.Errorf("P1-7: update order with event failed: %w", err)
 		}
 		return nil
 	}
@@ -135,13 +134,17 @@ func (s *CardService) HandleOrderConfirmation(ctx context.Context, conf *bkv.Ord
 	if reason == "" {
 		reason = "设备拒绝"
 	}
-	if err = s.repo.FailTransaction(ctx, conf.OrderNo, reason); err != nil {
-		return err
-	}
 
-	// P1-7修复: 插入order.failed事件
-	if err := s.insertOrderFailedEvent(ctx, conf.OrderNo, reason); err != nil {
-		return fmt.Errorf("插入事件失败（订单已更新）: %w", err)
+	// P1-7完善: 使用事务版本
+	eventData := map[string]interface{}{
+		"order_no":  conf.OrderNo,
+		"reason":    reason,
+		"failed_at": time.Now().Format(time.RFC3339),
+	}
+	data, _ := json.Marshal(eventData)
+
+	if err := s.repo.FailTransactionWithEvent(ctx, conf.OrderNo, reason, data); err != nil {
+		return fmt.Errorf("P1-7: fail order with event failed: %w", err)
 	}
 	return nil
 }

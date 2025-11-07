@@ -951,15 +951,31 @@ func (r *Repository) GetPendingOrderByPort(ctx context.Context, deviceID int64, 
 }
 
 // UpdateOrderToCharging 将订单状态从pending更新为charging
-// 仅当订单状态为pending(0)时才会更新，实现幂等性
+// P1-5修复: 仅当订单状态为pending(0)时才会更新，拒绝cancelling(8)状态
 func (r *Repository) UpdateOrderToCharging(ctx context.Context, orderNo string, startTime time.Time) error {
+	// P1-5: 先检查订单状态，如果是cancelling则拒绝启动
+	var currentStatus int
+	checkSQL := `SELECT status FROM orders WHERE order_no = $1`
+	err := r.Pool.QueryRow(ctx, checkSQL, orderNo).Scan(&currentStatus)
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return fmt.Errorf("P1-5: order not found: %s", orderNo)
+		}
+		return fmt.Errorf("check order status: %w", err)
+	}
+
+	if currentStatus == 8 { // cancelling
+		return fmt.Errorf("P1-5: order is cancelling, reject charging start: order_no=%s", orderNo)
+	}
+
+	// 原有逻辑：仅pending(0)可以转为charging
 	const q = `UPDATE orders 
 	           SET status = 1, start_time = $2, updated_at = NOW()
 	           WHERE order_no = $1 AND status = 0
 	           RETURNING id`
 
 	var id int64
-	err := r.Pool.QueryRow(ctx, q, orderNo, startTime).Scan(&id)
+	err = r.Pool.QueryRow(ctx, q, orderNo, startTime).Scan(&id)
 	// 如果没有行被更新（订单不存在或状态不是pending），不返回错误
 	// 这样可以实现幂等性：多次调用不会出错
 	if err != nil {
@@ -1193,4 +1209,111 @@ WHERE order_no = $1
 	var nextSeq int
 	err := r.Pool.QueryRow(ctx, q, orderNo).Scan(&nextSeq)
 	return nextSeq, err
+}
+
+// UpdateTransactionChargingWithEvent P1-7完善: 在同一事务中更新订单并插入事件
+func (r *Repository) UpdateTransactionChargingWithEvent(ctx context.Context, orderNo string, eventData []byte) error {
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// 1. 更新订单状态
+	const updateQ = `UPDATE card_transactions 
+		SET status = 'charging', start_time = NOW(), updated_at = NOW()
+		WHERE order_no = $1`
+	_, err = tx.Exec(ctx, updateQ, orderNo)
+	if err != nil {
+		return fmt.Errorf("update transaction: %w", err)
+	}
+
+	// 2. 获取序列号
+	const seqQ = `SELECT COALESCE(MAX(sequence_no), 0) + 1 FROM events WHERE order_no = $1`
+	var seqNo int
+	err = tx.QueryRow(ctx, seqQ, orderNo).Scan(&seqNo)
+	if err != nil {
+		return fmt.Errorf("get sequence number: %w", err)
+	}
+
+	// 3. 插入事件
+	const insertEventQ = `
+INSERT INTO events (order_no, event_type, event_data, sequence_no, status, retry_count, created_at)
+VALUES ($1, 'order.confirmed', $2, $3, 0, 0, NOW())
+`
+	_, err = tx.Exec(ctx, insertEventQ, orderNo, eventData, seqNo)
+	if err != nil {
+		return fmt.Errorf("insert event: %w", err)
+	}
+
+	// 4. 提交事务
+	return tx.Commit(ctx)
+}
+
+// FailTransactionWithEvent P1-7完善: 在同一事务中标记订单失败并插入事件
+func (r *Repository) FailTransactionWithEvent(ctx context.Context, orderNo, reason string, eventData []byte) error {
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// 1. 更新订单状态
+	const updateQ = `UPDATE card_transactions 
+		SET status = 'failed', failure_reason = $2, updated_at = NOW()
+		WHERE order_no = $1`
+	_, err = tx.Exec(ctx, updateQ, orderNo, reason)
+	if err != nil {
+		return fmt.Errorf("update transaction: %w", err)
+	}
+
+	// 2. 获取序列号
+	const seqQ = `SELECT COALESCE(MAX(sequence_no), 0) + 1 FROM events WHERE order_no = $1`
+	var seqNo int
+	err = tx.QueryRow(ctx, seqQ, orderNo).Scan(&seqNo)
+	if err != nil {
+		return fmt.Errorf("get sequence number: %w", err)
+	}
+
+	// 3. 插入事件
+	const insertEventQ = `
+INSERT INTO events (order_no, event_type, event_data, sequence_no, status, retry_count, created_at)
+VALUES ($1, 'order.failed', $2, $3, 0, 0, NOW())
+`
+	_, err = tx.Exec(ctx, insertEventQ, orderNo, eventData, seqNo)
+	if err != nil {
+		return fmt.Errorf("insert event: %w", err)
+	}
+
+	// 4. 提交事务
+	return tx.Commit(ctx)
+}
+
+// GetOrderEvents P1-7完善: 查询订单的所有事件（按序列号排序）
+func (r *Repository) GetOrderEvents(ctx context.Context, orderNo string) ([]Event, error) {
+	const q = `
+SELECT id, order_no, event_type, event_data, sequence_no, status, retry_count, 
+       created_at, pushed_at, error_message
+FROM events
+WHERE order_no = $1
+ORDER BY sequence_no ASC
+`
+	rows, err := r.Pool.Query(ctx, q, orderNo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []Event
+	for rows.Next() {
+		var e Event
+		err := rows.Scan(&e.ID, &e.OrderNo, &e.EventType, &e.EventData, &e.SequenceNo,
+			&e.Status, &e.RetryCount, &e.CreatedAt, &e.PushedAt, &e.ErrorMessage)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, e)
+	}
+
+	return events, rows.Err()
 }

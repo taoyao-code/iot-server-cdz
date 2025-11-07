@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -1364,4 +1365,97 @@ func (h *ThirdPartyHandler) syncPortStatusPeriodic(ctx context.Context) error {
 
 	h.logger.Debug("P1-4: periodic port status sync (not fully implemented)")
 	return nil
+}
+
+// GetOrderEvents P1-7完善: 查询订单的所有事件（兜底接口）
+// @Summary 查询订单事件
+// @Description 查询订单的所有事件列表，按序列号排序。用于事件推送失败时的兜底查询。
+// @Tags 第三方API - 订单管理
+// @Produce json
+// @Security ApiKeyAuth
+// @Param order_id path string true "订单号"
+// @Success 200 {object} StandardResponse "成功"
+// @Failure 404 {object} StandardResponse "订单不存在"
+// @Failure 500 {object} StandardResponse "服务器错误"
+// @Router /api/v1/third/orders/{order_id}/events [get]
+func (h *ThirdPartyHandler) GetOrderEvents(c *gin.Context) {
+	ctx := c.Request.Context()
+	orderNo := c.Param("order_id")
+	requestID := c.GetString("request_id")
+
+	h.logger.Info("get order events requested",
+		zap.String("order_no", orderNo),
+		zap.String("request_id", requestID))
+
+	// 查询订单事件
+	events, err := h.repo.GetOrderEvents(ctx, orderNo)
+	if err != nil {
+		h.logger.Error("failed to get order events",
+			zap.String("order_no", orderNo),
+			zap.Error(err))
+		c.JSON(http.StatusInternalServerError, StandardResponse{
+			Code:      500,
+			Message:   "failed to get order events",
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
+	// 如果没有事件，返回空数组而非404
+	if len(events) == 0 {
+		c.JSON(http.StatusOK, StandardResponse{
+			Code:    0,
+			Message: "success",
+			Data: map[string]interface{}{
+				"order_no":     orderNo,
+				"events":       []interface{}{},
+				"total_events": 0,
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
+	// 构造响应
+	eventList := make([]map[string]interface{}, 0, len(events))
+	for _, e := range events {
+		eventMap := map[string]interface{}{
+			"event_id":    e.ID,
+			"event_type":  e.EventType,
+			"sequence_no": e.SequenceNo,
+			"status":      e.Status, // 0=待推送, 1=已推送, 2=失败
+			"retry_count": e.RetryCount,
+			"created_at":  e.CreatedAt.Unix(),
+		}
+
+		// 可选字段
+		if e.PushedAt != nil {
+			eventMap["pushed_at"] = e.PushedAt.Unix()
+		}
+		if e.ErrorMessage != nil {
+			eventMap["error_message"] = *e.ErrorMessage
+		}
+
+		// 解析事件数据
+		var eventData map[string]interface{}
+		if err := json.Unmarshal(e.EventData, &eventData); err == nil {
+			eventMap["data"] = eventData
+		}
+
+		eventList = append(eventList, eventMap)
+	}
+
+	c.JSON(http.StatusOK, StandardResponse{
+		Code:    0,
+		Message: "success",
+		Data: map[string]interface{}{
+			"order_no":     orderNo,
+			"events":       eventList,
+			"total_events": len(events),
+		},
+		RequestID: requestID,
+		Timestamp: time.Now().Unix(),
+	})
 }

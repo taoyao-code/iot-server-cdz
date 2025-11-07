@@ -45,6 +45,11 @@ type AppMetrics struct {
 	ChargeReportPowerGauge   *prometheus.GaugeVec   // labels: device_id, port_no (瞬时功率W)
 	ChargeReportCurrentGauge *prometheus.GaugeVec   // labels: device_id, port_no (瞬时电流A)
 	ChargeReportEnergyTotal  *prometheus.CounterVec // labels: device_id, port_no (累计电量Wh)
+
+	// P1-4: 端口状态同步监控
+	PortStatusMismatchTotal      *prometheus.CounterVec // labels: reason=port_missing|status_mismatch|device_offline
+	PortStatusAutoFixedTotal     prometheus.Counter     // 自动修复成功次数
+	PortStatusQueryResponseTotal *prometheus.CounterVec // labels: device_id, status=空闲|充电中|故障
 }
 
 // NewAppMetrics 注册并返回业务指标
@@ -118,6 +123,18 @@ func NewAppMetrics(reg *prometheus.Registry) *AppMetrics {
 			Name: "charge_report_energy_wh_total",
 			Help: "Total energy consumed in watt-hours.",
 		}, []string{"device_id", "port_no"}),
+		PortStatusMismatchTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "port_status_mismatch_total",
+			Help: "P1-4: Port status inconsistencies detected by reason.",
+		}, []string{"reason"}),
+		PortStatusAutoFixedTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "port_status_auto_fixed_total",
+			Help: "P1-4: Port status inconsistencies auto-fixed count.",
+		}),
+		PortStatusQueryResponseTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "port_status_query_response_total",
+			Help: "P1-4: Port status query responses (0x1D) by device and status.",
+		}, []string{"device_id", "status"}),
 	}
 	reg.MustRegister(
 		m.TCPAccepted, m.TCPBytesReceived,
@@ -126,6 +143,7 @@ func NewAppMetrics(reg *prometheus.Registry) *AppMetrics {
 		m.AP3000Ack82Total, m.OutboundResendTotal, m.OutboundTimeoutTotal, m.OutboundDeadCleanupTotal,
 		m.OutboundQueueSize, m.SessionOfflineTotal,
 		m.ChargeReportTotal, m.ChargeReportPowerGauge, m.ChargeReportCurrentGauge, m.ChargeReportEnergyTotal,
+		m.PortStatusMismatchTotal, m.PortStatusAutoFixedTotal, m.PortStatusQueryResponseTotal,
 	)
 	return m
 }
@@ -148,4 +166,9 @@ func (m *AppMetrics) GetChargeReportCurrentGauge() *prometheus.GaugeVec {
 // GetChargeReportEnergyTotal 实现 bkv.MetricsAPI 接口
 func (m *AppMetrics) GetChargeReportEnergyTotal() *prometheus.CounterVec {
 	return m.ChargeReportEnergyTotal
+}
+
+// GetPortStatusQueryResponseTotal 实现 bkv.MetricsAPI 接口（P1-4端口状态查询响应）
+func (m *AppMetrics) GetPortStatusQueryResponseTotal() *prometheus.CounterVec {
+	return m.PortStatusQueryResponseTotal
 }
