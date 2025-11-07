@@ -411,7 +411,7 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		WHERE device_id = $1 AND port_no = $2 AND status IN ($3, $4, $5)
 		ORDER BY created_at DESC LIMIT 1
 	`
-	err = h.repo.Pool.QueryRow(ctx, queryOrderSQL, devID, req.PortNo, 
+	err = h.repo.Pool.QueryRow(ctx, queryOrderSQL, devID, req.PortNo,
 		OrderStatusPending, OrderStatusConfirmed, OrderStatusCharging).Scan(&orderNo, &orderStatus)
 	if err != nil {
 		h.logger.Warn("no active order found", zap.Error(err))
@@ -446,8 +446,8 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		h.logger.Warn("order status changed, cannot stop",
 			zap.String("order_no", orderNo))
 		c.JSON(http.StatusConflict, StandardResponse{
-			Code:    409,
-			Message: "order status has changed, cannot stop",
+			Code:      409,
+			Message:   "order status has changed, cannot stop",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})

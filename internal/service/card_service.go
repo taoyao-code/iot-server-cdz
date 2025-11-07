@@ -102,13 +102,13 @@ func (s *CardService) HandleOrderConfirmation(ctx context.Context, conf *bkv.Ord
 
 	// 1. 检查订单状态必须为pending
 	if tx.Status != "pending" {
-		return fmt.Errorf("P1-2: invalid order status for ACK, expected=pending, actual=%s, order_no=%s", 
+		return fmt.Errorf("P1-2: invalid order status for ACK, expected=pending, actual=%s, order_no=%s",
 			tx.Status, conf.OrderNo)
 	}
 
 	// 2. 检查ACK时效性（创建时间超过OrderACKTimeout拒绝处理）
 	if time.Since(tx.CreatedAt) > OrderACKTimeout {
-		return fmt.Errorf("P1-2: ACK timeout, order created at %s, timeout=%v, order_no=%s", 
+		return fmt.Errorf("P1-2: ACK timeout, order created at %s, timeout=%v, order_no=%s",
 			tx.CreatedAt.Format(time.RFC3339), OrderACKTimeout, conf.OrderNo)
 	}
 

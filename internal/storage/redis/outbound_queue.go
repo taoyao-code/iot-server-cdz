@@ -16,8 +16,8 @@ const (
 	outboundDeadKey       = "outbound:dead"          // 死信队列（List）
 
 	// P1-6修复: 队列降级阈值
-	QueueLengthWarning  = 200  // 队列警告阈值
-	QueueLengthCritical = 500  // 队列严重阈值
+	QueueLengthWarning   = 200  // 队列警告阈值
+	QueueLengthCritical  = 500  // 队列严重阈值
 	QueueLengthEmergency = 1000 // 队列紧急阈值
 
 	// P1-6修复: 优先级降级阈值
@@ -57,17 +57,17 @@ func (q *OutboundQueue) Enqueue(ctx context.Context, msg *OutboundMessage) error
 	if err == nil {
 		// 队列长度>200: 拒绝低优先级(priority>5)指令
 		if queueLen > QueueLengthWarning && msg.Priority > PriorityLow {
-			return fmt.Errorf("P1-6: queue overloaded (len=%d), rejecting low priority command (priority=%d)", 
+			return fmt.Errorf("P1-6: queue overloaded (len=%d), rejecting low priority command (priority=%d)",
 				queueLen, msg.Priority)
 		}
 		// 队列长度>500: 拒绝中优先级(priority>2)查询类指令
 		if queueLen > QueueLengthCritical && msg.Priority > PriorityNormal {
-			return fmt.Errorf("P1-6: queue critical (len=%d), rejecting non-urgent command (priority=%d)", 
+			return fmt.Errorf("P1-6: queue critical (len=%d), rejecting non-urgent command (priority=%d)",
 				queueLen, msg.Priority)
 		}
 		// 队列长度>1000: 只接受紧急指令(priority<=1)
 		if queueLen > QueueLengthEmergency && msg.Priority > PriorityHigh {
-			return fmt.Errorf("P1-6: queue emergency (len=%d), only accepting urgent commands (priority<=1)", 
+			return fmt.Errorf("P1-6: queue emergency (len=%d), only accepting urgent commands (priority<=1)",
 				queueLen)
 		}
 	}
