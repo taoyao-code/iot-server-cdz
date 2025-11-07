@@ -89,6 +89,25 @@ func (s *CardService) HandleCardSwipe(ctx context.Context, req *bkv.CardSwipeReq
 
 // HandleOrderConfirmation 处理订单确认
 func (s *CardService) HandleOrderConfirmation(ctx context.Context, conf *bkv.OrderConfirmation) error {
+	// P1-2修复: 检查订单状态和时效性
+	tx, err := s.repo.GetTransaction(ctx, conf.OrderNo)
+	if err != nil {
+		return fmt.Errorf("订单不存在: %w", err)
+	}
+
+	// 1. 检查订单状态必须为pending
+	if tx.Status != "pending" {
+		return fmt.Errorf("P1-2: invalid order status for ACK, expected=pending, actual=%s, order_no=%s", 
+			tx.Status, conf.OrderNo)
+	}
+
+	// 2. 检查ACK时效性（创建时间超过10秒拒绝处理）
+	ackTimeout := 10 * time.Second
+	if time.Since(tx.CreatedAt) > ackTimeout {
+		return fmt.Errorf("P1-2: ACK timeout, order created at %s, timeout=%v, order_no=%s", 
+			tx.CreatedAt.Format(time.RFC3339), ackTimeout, conf.OrderNo)
+	}
+
 	// 更新订单状态
 	if conf.Status == 0 {
 		// 设备接受订单，更新为充电中
