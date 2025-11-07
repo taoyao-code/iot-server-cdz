@@ -181,8 +181,8 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 			Code:    40901, // PORT_STATE_MISMATCH
 			Message: "port state mismatch, port may be in use",
 			Data: map[string]interface{}{
-				"port_no":   req.PortNo,
-				"status":    portStatus,
+				"port_no":    req.PortNo,
+				"status":     portStatus,
 				"error_code": "PORT_STATE_MISMATCH",
 			},
 			RequestID: requestID,
@@ -1324,43 +1324,43 @@ func getOrderStatusString(status int) string {
 // verifyPortStatus P1-4: 验证端口状态与订单状态一致
 // 返回: (isConsistent bool, portStatus int, err error)
 func (h *ThirdPartyHandler) verifyPortStatus(ctx context.Context, deviceID int64, portNo int) (bool, int, error) {
-// 查询数据库中的端口状态
-var dbPortStatus int
-queryPortSQL := `
+	// 查询数据库中的端口状态
+	var dbPortStatus int
+	queryPortSQL := `
 SELECT status FROM ports 
 WHERE device_id = $1 AND port_no = $2
 `
-err := h.repo.Pool.QueryRow(ctx, queryPortSQL, deviceID, portNo).Scan(&dbPortStatus)
-if err != nil {
-// 端口不存在或查询失败
-return false, -1, err
-}
+	err := h.repo.Pool.QueryRow(ctx, queryPortSQL, deviceID, portNo).Scan(&dbPortStatus)
+	if err != nil {
+		// 端口不存在或查询失败
+		return false, -1, err
+	}
 
-// TODO P1-4: 这里应该下发0x1012命令同步查询设备实时端口状态
-// 由于0x1012需要同步等待响应(5秒超时)，需要实现命令-响应配对机制
-// 当前仅验证数据库状态，实际部署时需要补充实时查询
+	// TODO P1-4: 这里应该下发0x1012命令同步查询设备实时端口状态
+	// 由于0x1012需要同步等待响应(5秒超时)，需要实现命令-响应配对机制
+	// 当前仅验证数据库状态，实际部署时需要补充实时查询
 
-// 验证端口状态：charging(2)表示端口被占用，free(0)或occupied(1)表示可用
-if dbPortStatus == 2 {
-h.logger.Warn("P1-4: port status indicates charging",
-zap.Int64("device_id", deviceID),
-zap.Int("port_no", portNo),
-zap.Int("status", dbPortStatus))
-return false, dbPortStatus, nil
-}
+	// 验证端口状态：charging(2)表示端口被占用，free(0)或occupied(1)表示可用
+	if dbPortStatus == 2 {
+		h.logger.Warn("P1-4: port status indicates charging",
+			zap.Int64("device_id", deviceID),
+			zap.Int("port_no", portNo),
+			zap.Int("status", dbPortStatus))
+		return false, dbPortStatus, nil
+	}
 
-return true, dbPortStatus, nil
+	return true, dbPortStatus, nil
 }
 
 // syncPortStatusPeriodic P1-4: 定期同步所有在线设备的端口状态
 // 应该在后台goroutine中每5分钟调用一次
 func (h *ThirdPartyHandler) syncPortStatusPeriodic(ctx context.Context) error {
-// TODO P1-4: 实现定期同步逻辑
-// 1. 查询所有在线设备
-// 2. 对每个设备下发0x1012查询所有端口状态
-// 3. 比对数据库状态，记录不一致情况
-// 4. 触发告警或自动修正
+	// TODO P1-4: 实现定期同步逻辑
+	// 1. 查询所有在线设备
+	// 2. 对每个设备下发0x1012查询所有端口状态
+	// 3. 比对数据库状态，记录不一致情况
+	// 4. 触发告警或自动修正
 
-h.logger.Debug("P1-4: periodic port status sync (not fully implemented)")
-return nil
+	h.logger.Debug("P1-4: periodic port status sync (not fully implemented)")
+	return nil
 }

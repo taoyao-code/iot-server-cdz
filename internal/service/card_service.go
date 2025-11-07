@@ -252,49 +252,49 @@ func (s *CardService) RechargeCard(ctx context.Context, cardNo string, amount fl
 // ===== P1-7修复: 事件插入辅助方法 =====
 
 func (s *CardService) insertOrderConfirmedEvent(ctx context.Context, orderNo string) error {
-seqNo, err := s.repo.GetNextSequenceNo(ctx, orderNo)
-if err != nil {
-return err
-}
+	seqNo, err := s.repo.GetNextSequenceNo(ctx, orderNo)
+	if err != nil {
+		return err
+	}
 
-eventData := map[string]interface{}{
-"order_no":    orderNo,
-"confirmed_at": time.Now().Format(time.RFC3339),
-}
-data, _ := json.Marshal(eventData)
+	eventData := map[string]interface{}{
+		"order_no":     orderNo,
+		"confirmed_at": time.Now().Format(time.RFC3339),
+	}
+	data, _ := json.Marshal(eventData)
 
-return s.repo.InsertEvent(ctx, orderNo, "order.confirmed", data, seqNo)
+	return s.repo.InsertEvent(ctx, orderNo, "order.confirmed", data, seqNo)
 }
 
 func (s *CardService) insertOrderFailedEvent(ctx context.Context, orderNo, reason string) error {
-seqNo, err := s.repo.GetNextSequenceNo(ctx, orderNo)
-if err != nil {
-return err
-}
+	seqNo, err := s.repo.GetNextSequenceNo(ctx, orderNo)
+	if err != nil {
+		return err
+	}
 
-eventData := map[string]interface{}{
-"order_no":  orderNo,
-"reason":    reason,
-"failed_at": time.Now().Format(time.RFC3339),
-}
-data, _ := json.Marshal(eventData)
+	eventData := map[string]interface{}{
+		"order_no":  orderNo,
+		"reason":    reason,
+		"failed_at": time.Now().Format(time.RFC3339),
+	}
+	data, _ := json.Marshal(eventData)
 
-return s.repo.InsertEvent(ctx, orderNo, "order.failed", data, seqNo)
+	return s.repo.InsertEvent(ctx, orderNo, "order.failed", data, seqNo)
 }
 
 func (s *CardService) insertOrderCompletedEvent(ctx context.Context, orderNo string, energyKwh, totalAmount float64) error {
-seqNo, err := s.repo.GetNextSequenceNo(ctx, orderNo)
-if err != nil {
-return err
-}
+	seqNo, err := s.repo.GetNextSequenceNo(ctx, orderNo)
+	if err != nil {
+		return err
+	}
 
-eventData := map[string]interface{}{
-"order_no":      orderNo,
-"energy_kwh":    energyKwh,
-"total_amount":  totalAmount,
-"completed_at":  time.Now().Format(time.RFC3339),
-}
-data, _ := json.Marshal(eventData)
+	eventData := map[string]interface{}{
+		"order_no":     orderNo,
+		"energy_kwh":   energyKwh,
+		"total_amount": totalAmount,
+		"completed_at": time.Now().Format(time.RFC3339),
+	}
+	data, _ := json.Marshal(eventData)
 
-return s.repo.InsertEvent(ctx, orderNo, "order.completed", data, seqNo)
+	return s.repo.InsertEvent(ctx, orderNo, "order.completed", data, seqNo)
 }

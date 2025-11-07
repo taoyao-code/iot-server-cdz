@@ -33,7 +33,7 @@ func NewEventPusher(repo *pgstorage.Repository, eventQueue *thirdparty.EventQueu
 		eventQueue:    eventQueue,
 		logger:        logger,
 		checkInterval: 10 * time.Second, // 每10秒检查一次
-		batchSize:     50,                // 每次最多处理50个事件
+		batchSize:     50,               // 每次最多处理50个事件
 	}
 }
 
@@ -137,11 +137,16 @@ func (p *EventPusher) pushEvent(ctx context.Context, event *pgstorage.Event) err
 		return err
 	}
 
-	// 从事件数据中获取device_phy_id，如果没有则使用空字符串
+	// 从事件数据中获取device_phy_id
 	devicePhyID, _ := eventData["device_phy_id"].(string)
 	if devicePhyID == "" {
-		// 尝试从订单号反查设备ID
-		devicePhyID = event.OrderNo // 占位，实际应该查询数据库
+		// 如果事件数据中没有device_phy_id，记录警告
+		p.logger.Warn("P1-7: event data missing device_phy_id, using order_no as fallback",
+			zap.Int64("event_id", event.ID),
+			zap.String("order_no", event.OrderNo),
+			zap.String("event_type", event.EventType))
+		// 使用order_no作为标识，虽然不是device_phy_id但可用于事件关联
+		devicePhyID = "unknown"
 	}
 
 	// 创建StandardEvent

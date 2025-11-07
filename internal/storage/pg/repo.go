@@ -1107,32 +1107,32 @@ func (r *Repository) MarkChargingOrdersAsInterrupted(ctx context.Context, device
 
 // Event P1-7: 事件推送记录
 type Event struct {
-ID           int64     `json:"id"`
-OrderNo      string    `json:"order_no"`
-EventType    string    `json:"event_type"`
-EventData    []byte    `json:"event_data"`    // JSONB
-SequenceNo   int       `json:"sequence_no"`
-Status       int       `json:"status"`        // 0=待推送, 1=已推送, 2=失败
-RetryCount   int       `json:"retry_count"`
-CreatedAt    time.Time `json:"created_at"`
-PushedAt     *time.Time `json:"pushed_at,omitempty"`
-ErrorMessage *string   `json:"error_message,omitempty"`
+	ID           int64      `json:"id"`
+	OrderNo      string     `json:"order_no"`
+	EventType    string     `json:"event_type"`
+	EventData    []byte     `json:"event_data"` // JSONB
+	SequenceNo   int        `json:"sequence_no"`
+	Status       int        `json:"status"` // 0=待推送, 1=已推送, 2=失败
+	RetryCount   int        `json:"retry_count"`
+	CreatedAt    time.Time  `json:"created_at"`
+	PushedAt     *time.Time `json:"pushed_at,omitempty"`
+	ErrorMessage *string    `json:"error_message,omitempty"`
 }
 
 // InsertEvent P1-7: 在事务中插入事件（Outbox模式）
 // 注意：应该在订单更新的同一事务中调用
 func (r *Repository) InsertEvent(ctx context.Context, orderNo, eventType string, eventData []byte, sequenceNo int) error {
-const q = `
+	const q = `
 INSERT INTO events (order_no, event_type, event_data, sequence_no, status, retry_count, created_at)
 VALUES ($1, $2, $3, $4, 0, 0, NOW())
 `
-_, err := r.Pool.Exec(ctx, q, orderNo, eventType, eventData, sequenceNo)
-return err
+	_, err := r.Pool.Exec(ctx, q, orderNo, eventType, eventData, sequenceNo)
+	return err
 }
 
 // GetPendingEvents P1-7: 获取待推送或失败待重试的事件
 func (r *Repository) GetPendingEvents(ctx context.Context, limit int) ([]Event, error) {
-const q = `
+	const q = `
 SELECT id, order_no, event_type, event_data, sequence_no, status, retry_count, 
        created_at, pushed_at, error_message
 FROM events
@@ -1140,57 +1140,57 @@ WHERE (status = 0 OR (status = 2 AND retry_count < 5))
 ORDER BY order_no, sequence_no
 LIMIT $1
 `
-rows, err := r.Pool.Query(ctx, q, limit)
-if err != nil {
-return nil, err
-}
-defer rows.Close()
+	rows, err := r.Pool.Query(ctx, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 
-var events []Event
-for rows.Next() {
-var e Event
-if err := rows.Scan(
-&e.ID, &e.OrderNo, &e.EventType, &e.EventData, &e.SequenceNo,
-&e.Status, &e.RetryCount, &e.CreatedAt, &e.PushedAt, &e.ErrorMessage,
-); err != nil {
-return nil, err
-}
-events = append(events, e)
-}
+	var events []Event
+	for rows.Next() {
+		var e Event
+		if err := rows.Scan(
+			&e.ID, &e.OrderNo, &e.EventType, &e.EventData, &e.SequenceNo,
+			&e.Status, &e.RetryCount, &e.CreatedAt, &e.PushedAt, &e.ErrorMessage,
+		); err != nil {
+			return nil, err
+		}
+		events = append(events, e)
+	}
 
-return events, nil
+	return events, nil
 }
 
 // MarkEventPushed P1-7: 标记事件已推送
 func (r *Repository) MarkEventPushed(ctx context.Context, eventID int64) error {
-const q = `
+	const q = `
 UPDATE events
-SET status = 1, pushed_at = NOW(), updated_at = NOW()
+SET status = 1, pushed_at = NOW()
 WHERE id = $1
 `
-_, err := r.Pool.Exec(ctx, q, eventID)
-return err
+	_, err := r.Pool.Exec(ctx, q, eventID)
+	return err
 }
 
 // MarkEventFailed P1-7: 标记事件推送失败
 func (r *Repository) MarkEventFailed(ctx context.Context, eventID int64, errorMsg string) error {
-const q = `
+	const q = `
 UPDATE events
-SET status = 2, retry_count = retry_count + 1, error_message = $2, updated_at = NOW()
+SET status = 2, retry_count = retry_count + 1, error_message = $2
 WHERE id = $1
 `
-_, err := r.Pool.Exec(ctx, q, eventID, errorMsg)
-return err
+	_, err := r.Pool.Exec(ctx, q, eventID, errorMsg)
+	return err
 }
 
 // GetNextSequenceNo P1-7: 获取订单的下一个事件序列号
 func (r *Repository) GetNextSequenceNo(ctx context.Context, orderNo string) (int, error) {
-const q = `
+	const q = `
 SELECT COALESCE(MAX(sequence_no), 0) + 1
 FROM events
 WHERE order_no = $1
 `
-var nextSeq int
-err := r.Pool.QueryRow(ctx, q, orderNo).Scan(&nextSeq)
-return nextSeq, err
+	var nextSeq int
+	err := r.Pool.QueryRow(ctx, q, orderNo).Scan(&nextSeq)
+	return nextSeq, err
 }
