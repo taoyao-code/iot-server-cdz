@@ -15,6 +15,16 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// 订单状态常量
+	OrderStatusPending     = 0  // 待确认
+	OrderStatusConfirmed   = 1  // 已确认
+	OrderStatusCharging    = 2  // 充电中
+	OrderStatusCancelling  = 8  // 取消中 (P1-5中间态)
+	OrderStatusStopping    = 9  // 停止中 (P1-5中间态)
+	OrderStatusInterrupted = 10 // 中断 (P0-2断线恢复)
+)
+
 // ThirdPartyHandler 第三方API处理器
 type ThirdPartyHandler struct {
 	repo       *pgstorage.Repository
@@ -398,10 +408,11 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	var orderStatus int
 	queryOrderSQL := `
 		SELECT order_no, status FROM orders 
-		WHERE device_id = $1 AND port_no = $2 AND status IN (0, 1, 2)
+		WHERE device_id = $1 AND port_no = $2 AND status IN ($3, $4, $5)
 		ORDER BY created_at DESC LIMIT 1
 	`
-	err = h.repo.Pool.QueryRow(ctx, queryOrderSQL, devID, req.PortNo).Scan(&orderNo, &orderStatus)
+	err = h.repo.Pool.QueryRow(ctx, queryOrderSQL, devID, req.PortNo, 
+		OrderStatusPending, OrderStatusConfirmed, OrderStatusCharging).Scan(&orderNo, &orderStatus)
 	if err != nil {
 		h.logger.Warn("no active order found", zap.Error(err))
 		c.JSON(http.StatusNotFound, StandardResponse{
@@ -416,10 +427,11 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	// P1-5修复: 使用CAS更新为stopping中间态
 	updateOrderSQL := `
 		UPDATE orders 
-		SET status = 9, updated_at = NOW() 
-		WHERE order_no = $1 AND status IN (0, 1, 2)
+		SET status = $1, updated_at = NOW() 
+		WHERE order_no = $2 AND status IN ($3, $4, $5)
 	`
-	result, err := h.repo.Pool.Exec(ctx, updateOrderSQL, orderNo)
+	result, err := h.repo.Pool.Exec(ctx, updateOrderSQL, OrderStatusStopping, orderNo,
+		OrderStatusPending, OrderStatusConfirmed, OrderStatusCharging)
 	if err != nil {
 		h.logger.Error("failed to update order to stopping", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, StandardResponse{
@@ -538,7 +550,7 @@ func (h *ThirdPartyHandler) CancelOrder(c *gin.Context) {
 	}
 
 	// 2. P0修复: charging状态订单不允许直接取消
-	if orderStatus == 2 { // charging
+	if orderStatus == OrderStatusCharging {
 		h.logger.Warn("cannot cancel charging order",
 			zap.String("order_no", orderNo),
 			zap.Int("status", orderStatus))
@@ -559,7 +571,7 @@ func (h *ThirdPartyHandler) CancelOrder(c *gin.Context) {
 	}
 
 	// 3. 检查订单是否可取消(pending=0, confirmed=1)
-	if orderStatus != 0 && orderStatus != 1 {
+	if orderStatus != OrderStatusPending && orderStatus != OrderStatusConfirmed {
 		h.logger.Warn("order status not cancellable",
 			zap.String("order_no", orderNo),
 			zap.Int("status", orderStatus))
@@ -577,8 +589,8 @@ func (h *ThirdPartyHandler) CancelOrder(c *gin.Context) {
 	}
 
 	// 4. 更新订单状态为cancelling(8)
-	updateSQL := `UPDATE orders SET status = 8, updated_at = NOW() WHERE order_no = $1`
-	_, err = h.repo.Pool.Exec(ctx, updateSQL, orderNo)
+	updateSQL := `UPDATE orders SET status = $1, updated_at = NOW() WHERE order_no = $2`
+	_, err = h.repo.Pool.Exec(ctx, updateSQL, OrderStatusCancelling, orderNo)
 	if err != nil {
 		h.logger.Error("failed to update order status", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, StandardResponse{

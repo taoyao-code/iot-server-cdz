@@ -9,6 +9,11 @@ import (
 	"github.com/taoyao-code/iot-server/internal/storage/pg"
 )
 
+const (
+	// P1-2修复: ACK超时配置
+	OrderACKTimeout = 10 * time.Second // 订单确认ACK超时时间
+)
+
 // CardService 刷卡充电业务服务
 type CardService struct {
 	repo    *pg.Repository
@@ -101,11 +106,10 @@ func (s *CardService) HandleOrderConfirmation(ctx context.Context, conf *bkv.Ord
 			tx.Status, conf.OrderNo)
 	}
 
-	// 2. 检查ACK时效性（创建时间超过10秒拒绝处理）
-	ackTimeout := 10 * time.Second
-	if time.Since(tx.CreatedAt) > ackTimeout {
+	// 2. 检查ACK时效性（创建时间超过OrderACKTimeout拒绝处理）
+	if time.Since(tx.CreatedAt) > OrderACKTimeout {
 		return fmt.Errorf("P1-2: ACK timeout, order created at %s, timeout=%v, order_no=%s", 
-			tx.CreatedAt.Format(time.RFC3339), ackTimeout, conf.OrderNo)
+			tx.CreatedAt.Format(time.RFC3339), OrderACKTimeout, conf.OrderNo)
 	}
 
 	// 更新订单状态
