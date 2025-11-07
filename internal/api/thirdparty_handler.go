@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -13,6 +14,16 @@ import (
 	redisstorage "github.com/taoyao-code/iot-server/internal/storage/redis"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
 	"go.uber.org/zap"
+)
+
+const (
+	// 订单状态常量
+	OrderStatusPending     = 0  // 待确认
+	OrderStatusConfirmed   = 1  // 已确认
+	OrderStatusCharging    = 2  // 充电中
+	OrderStatusCancelling  = 8  // 取消中 (P1-5中间态)
+	OrderStatusStopping    = 9  // 停止中 (P1-5中间态)
+	OrderStatusInterrupted = 10 // 中断 (P0-2断线恢复)
 )
 
 // ThirdPartyHandler 第三方API处理器
@@ -150,6 +161,34 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		h.logger.Info("cleaned up stale pending orders",
 			zap.String("device_phy_id", devicePhyID),
 			zap.Int64("count", cleanupResult.RowsAffected()))
+	}
+
+	// 3.5. P1-4修复: 验证端口状态一致性
+	isConsistent, portStatus, err := h.verifyPortStatus(ctx, devID, req.PortNo)
+	if err != nil {
+		h.logger.Warn("P1-4: failed to verify port status, continuing anyway",
+			zap.String("device_phy_id", devicePhyID),
+			zap.Int("port_no", req.PortNo),
+			zap.Error(err))
+		// 端口状态查询失败不阻塞创单，记录告警即可
+	} else if !isConsistent {
+		h.logger.Warn("P1-4: port status mismatch detected",
+			zap.String("device_phy_id", devicePhyID),
+			zap.Int("port_no", req.PortNo),
+			zap.Int("db_status", portStatus),
+			zap.String("action", "rejecting order creation"))
+		c.JSON(http.StatusConflict, StandardResponse{
+			Code:    40901, // PORT_STATE_MISMATCH
+			Message: "port state mismatch, port may be in use",
+			Data: map[string]interface{}{
+				"port_no":    req.PortNo,
+				"status":     portStatus,
+				"error_code": "PORT_STATE_MISMATCH",
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
 	}
 
 	// 4. P1-3修复: 使用事务+行锁检查端口并创建订单
@@ -393,19 +432,51 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		return
 	}
 
-	// 2. 查询当前活动的订单
+	// 2. 查询当前活动的订单 - P1-5修复: 支持charging状态
 	var orderNo string
+	var orderStatus int
 	queryOrderSQL := `
-		SELECT order_no FROM orders 
-		WHERE device_id = $1 AND port_no = $2 AND status IN (0, 1)
+		SELECT order_no, status FROM orders 
+		WHERE device_id = $1 AND port_no = $2 AND status IN ($3, $4, $5)
 		ORDER BY created_at DESC LIMIT 1
 	`
-	err = h.repo.Pool.QueryRow(ctx, queryOrderSQL, devID, req.PortNo).Scan(&orderNo)
+	err = h.repo.Pool.QueryRow(ctx, queryOrderSQL, devID, req.PortNo,
+		OrderStatusPending, OrderStatusConfirmed, OrderStatusCharging).Scan(&orderNo, &orderStatus)
 	if err != nil {
 		h.logger.Warn("no active order found", zap.Error(err))
 		c.JSON(http.StatusNotFound, StandardResponse{
 			Code:      404,
 			Message:   "no active charging session found",
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
+	// P1-5修复: 使用CAS更新为stopping中间态
+	updateOrderSQL := `
+		UPDATE orders 
+		SET status = $1, updated_at = NOW() 
+		WHERE order_no = $2 AND status IN ($3, $4, $5)
+	`
+	result, err := h.repo.Pool.Exec(ctx, updateOrderSQL, OrderStatusStopping, orderNo,
+		OrderStatusPending, OrderStatusConfirmed, OrderStatusCharging)
+	if err != nil {
+		h.logger.Error("failed to update order to stopping", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, StandardResponse{
+			Code:      500,
+			Message:   "failed to stop order",
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+	if result.RowsAffected() == 0 {
+		h.logger.Warn("order status changed, cannot stop",
+			zap.String("order_no", orderNo))
+		c.JSON(http.StatusConflict, StandardResponse{
+			Code:      409,
+			Message:   "order status has changed, cannot stop",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -431,7 +502,7 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 			DeviceID:  devID,
 			PhyID:     devicePhyID,
 			Command:   bkv.Build(0x0015, msgID, devicePhyID, stopData),
-			Priority:  8, // 停止命令优先级高
+			Priority:  1, // P1-5修复: 紧急指令，最高优先级
 			MaxRetry:  3,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
@@ -444,21 +515,16 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		}
 	}
 
-	// 4. 更新订单状态为取消（3）
-	updateOrderSQL := `UPDATE orders SET status = 3, updated_at = NOW() WHERE order_no = $1`
-	_, err = h.repo.Pool.Exec(ctx, updateOrderSQL, orderNo)
-	if err != nil {
-		h.logger.Error("failed to update order status", zap.Error(err))
-	}
-
-	// 5. 返回成功响应
+	// 4. 返回成功响应
 	c.JSON(http.StatusOK, StandardResponse{
 		Code:    0,
-		Message: "stop command sent successfully",
+		Message: "stop command sent, order will be stopped in 30 seconds",
 		Data: map[string]interface{}{
 			"device_id": devicePhyID,
 			"order_no":  orderNo,
 			"port_no":   req.PortNo,
+			"status":    "stopping",
+			"note":      "订单将在30秒后自动变为stopped,或收到设备ACK后立即停止",
 		},
 		RequestID: requestID,
 		Timestamp: time.Now().Unix(),
@@ -513,7 +579,7 @@ func (h *ThirdPartyHandler) CancelOrder(c *gin.Context) {
 	}
 
 	// 2. P0修复: charging状态订单不允许直接取消
-	if orderStatus == 2 { // charging
+	if orderStatus == OrderStatusCharging {
 		h.logger.Warn("cannot cancel charging order",
 			zap.String("order_no", orderNo),
 			zap.Int("status", orderStatus))
@@ -534,7 +600,7 @@ func (h *ThirdPartyHandler) CancelOrder(c *gin.Context) {
 	}
 
 	// 3. 检查订单是否可取消(pending=0, confirmed=1)
-	if orderStatus != 0 && orderStatus != 1 {
+	if orderStatus != OrderStatusPending && orderStatus != OrderStatusConfirmed {
 		h.logger.Warn("order status not cancellable",
 			zap.String("order_no", orderNo),
 			zap.Int("status", orderStatus))
@@ -552,8 +618,8 @@ func (h *ThirdPartyHandler) CancelOrder(c *gin.Context) {
 	}
 
 	// 4. 更新订单状态为cancelling(8)
-	updateSQL := `UPDATE orders SET status = 8, updated_at = NOW() WHERE order_no = $1`
-	_, err = h.repo.Pool.Exec(ctx, updateSQL, orderNo)
+	updateSQL := `UPDATE orders SET status = $1, updated_at = NOW() WHERE order_no = $2`
+	_, err = h.repo.Pool.Exec(ctx, updateSQL, OrderStatusCancelling, orderNo)
 	if err != nil {
 		h.logger.Error("failed to update order status", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, StandardResponse{
@@ -1251,4 +1317,50 @@ func getOrderStatusString(status int) string {
 	default:
 		return "unknown"
 	}
+}
+
+// ===== P1-4修复: 端口状态同步验证 =====
+
+// verifyPortStatus P1-4: 验证端口状态与订单状态一致
+// 返回: (isConsistent bool, portStatus int, err error)
+func (h *ThirdPartyHandler) verifyPortStatus(ctx context.Context, deviceID int64, portNo int) (bool, int, error) {
+	// 查询数据库中的端口状态
+	var dbPortStatus int
+	queryPortSQL := `
+SELECT status FROM ports 
+WHERE device_id = $1 AND port_no = $2
+`
+	err := h.repo.Pool.QueryRow(ctx, queryPortSQL, deviceID, portNo).Scan(&dbPortStatus)
+	if err != nil {
+		// 端口不存在或查询失败
+		return false, -1, err
+	}
+
+	// TODO P1-4: 这里应该下发0x1012命令同步查询设备实时端口状态
+	// 由于0x1012需要同步等待响应(5秒超时)，需要实现命令-响应配对机制
+	// 当前仅验证数据库状态，实际部署时需要补充实时查询
+
+	// 验证端口状态：charging(2)表示端口被占用，free(0)或occupied(1)表示可用
+	if dbPortStatus == 2 {
+		h.logger.Warn("P1-4: port status indicates charging",
+			zap.Int64("device_id", deviceID),
+			zap.Int("port_no", portNo),
+			zap.Int("status", dbPortStatus))
+		return false, dbPortStatus, nil
+	}
+
+	return true, dbPortStatus, nil
+}
+
+// syncPortStatusPeriodic P1-4: 定期同步所有在线设备的端口状态
+// 应该在后台goroutine中每5分钟调用一次
+func (h *ThirdPartyHandler) syncPortStatusPeriodic(ctx context.Context) error {
+	// TODO P1-4: 实现定期同步逻辑
+	// 1. 查询所有在线设备
+	// 2. 对每个设备下发0x1012查询所有端口状态
+	// 3. 比对数据库状态，记录不一致情况
+	// 4. 触发告警或自动修正
+
+	h.logger.Debug("P1-4: periodic port status sync (not fully implemented)")
+	return nil
 }

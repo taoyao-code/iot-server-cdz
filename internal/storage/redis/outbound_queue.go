@@ -14,6 +14,16 @@ const (
 	outboundQueueKey      = "outbound:queue"         // 待处理队列（Sorted Set，按优先级+时间排序）
 	outboundProcessingKey = "outbound:processing:%s" // 处理中（Hash，设备维度）
 	outboundDeadKey       = "outbound:dead"          // 死信队列（List）
+
+	// P1-6修复: 队列降级阈值
+	QueueLengthWarning   = 200  // 队列警告阈值
+	QueueLengthCritical  = 500  // 队列严重阈值
+	QueueLengthEmergency = 1000 // 队列紧急阈值
+
+	// P1-6修复: 优先级降级阈值
+	PriorityLow    = 5 // 低优先级阈值
+	PriorityNormal = 2 // 普通优先级阈值
+	PriorityHigh   = 1 // 高优先级阈值(紧急)
 )
 
 // OutboundMessage 下行消息结构 (Week2.2)
@@ -42,13 +52,34 @@ func NewOutboundQueue(client *Client) *OutboundQueue {
 
 // Enqueue 入队（添加新消息到队列）
 func (q *OutboundQueue) Enqueue(ctx context.Context, msg *OutboundMessage) error {
+	// P1-6修复: 队列长度检查和降级策略
+	queueLen, err := q.GetPendingCount(ctx)
+	if err == nil {
+		// 队列长度>200: 拒绝低优先级(priority>5)指令
+		if queueLen > QueueLengthWarning && msg.Priority > PriorityLow {
+			return fmt.Errorf("P1-6: queue overloaded (len=%d), rejecting low priority command (priority=%d)",
+				queueLen, msg.Priority)
+		}
+		// 队列长度>500: 拒绝中优先级(priority>2)查询类指令
+		if queueLen > QueueLengthCritical && msg.Priority > PriorityNormal {
+			return fmt.Errorf("P1-6: queue critical (len=%d), rejecting non-urgent command (priority=%d)",
+				queueLen, msg.Priority)
+		}
+		// 队列长度>1000: 只接受紧急指令(priority<=1)
+		if queueLen > QueueLengthEmergency && msg.Priority > PriorityHigh {
+			return fmt.Errorf("P1-6: queue emergency (len=%d), only accepting urgent commands (priority<=1)",
+				queueLen)
+		}
+	}
+
 	// 序列化消息
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("marshal message: %w", err)
 	}
 
-	// 计算score（优先级*1e12 + 时间戳，保证优先级高的排前面）
+	// 计算score（优先级*1e12 + 时间戳）
+	// 注意: ZPopMin取最小score，所以priority数值越小=优先级越高
 	score := float64(msg.Priority)*1e12 + float64(msg.CreatedAt.UnixNano())
 
 	// 添加到Sorted Set

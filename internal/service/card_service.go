@@ -2,11 +2,17 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 	"github.com/taoyao-code/iot-server/internal/storage/pg"
+)
+
+const (
+	// P1-2修复: ACK超时配置
+	OrderACKTimeout = 10 * time.Second // 订单确认ACK超时时间
 )
 
 // CardService 刷卡充电业务服务
@@ -89,10 +95,39 @@ func (s *CardService) HandleCardSwipe(ctx context.Context, req *bkv.CardSwipeReq
 
 // HandleOrderConfirmation 处理订单确认
 func (s *CardService) HandleOrderConfirmation(ctx context.Context, conf *bkv.OrderConfirmation) error {
+	// P1-2修复: 检查订单状态和时效性
+	tx, err := s.repo.GetTransaction(ctx, conf.OrderNo)
+	if err != nil {
+		return fmt.Errorf("订单不存在: %w", err)
+	}
+
+	// 1. 检查订单状态必须为pending
+	if tx.Status != "pending" {
+		return fmt.Errorf("P1-2: invalid order status for ACK, expected=pending, actual=%s, order_no=%s",
+			tx.Status, conf.OrderNo)
+	}
+
+	// 2. 检查ACK时效性（创建时间超过OrderACKTimeout拒绝处理）
+	if time.Since(tx.CreatedAt) > OrderACKTimeout {
+		return fmt.Errorf("P1-2: ACK timeout, order created at %s, timeout=%v, order_no=%s",
+			tx.CreatedAt.Format(time.RFC3339), OrderACKTimeout, conf.OrderNo)
+	}
+
 	// 更新订单状态
 	if conf.Status == 0 {
 		// 设备接受订单，更新为充电中
-		return s.repo.UpdateTransactionCharging(ctx, conf.OrderNo)
+		err := s.repo.UpdateTransactionCharging(ctx, conf.OrderNo)
+		if err != nil {
+			return err
+		}
+
+		// P1-7修复: 插入order.confirmed事件
+		if err := s.insertOrderConfirmedEvent(ctx, conf.OrderNo); err != nil {
+			// 事件插入失败不影响订单流程，记录日志即可
+			// EventPusher会重试
+			return fmt.Errorf("插入事件失败（订单已更新）: %w", err)
+		}
+		return nil
 	}
 
 	// 设备拒绝订单，标记失败
@@ -100,7 +135,15 @@ func (s *CardService) HandleOrderConfirmation(ctx context.Context, conf *bkv.Ord
 	if reason == "" {
 		reason = "设备拒绝"
 	}
-	return s.repo.FailTransaction(ctx, conf.OrderNo, reason)
+	if err = s.repo.FailTransaction(ctx, conf.OrderNo, reason); err != nil {
+		return err
+	}
+
+	// P1-7修复: 插入order.failed事件
+	if err := s.insertOrderFailedEvent(ctx, conf.OrderNo, reason); err != nil {
+		return fmt.Errorf("插入事件失败（订单已更新）: %w", err)
+	}
+	return nil
 }
 
 // HandleChargeEnd 处理充电结束
@@ -126,6 +169,11 @@ func (s *CardService) HandleChargeEnd(ctx context.Context, report *bkv.ChargeEnd
 		fmt.Sprintf("充电消费 订单:%s", report.OrderNo))
 	if err != nil {
 		return fmt.Errorf("扣款失败: %w", err)
+	}
+
+	// P1-7修复: 插入order.completed事件
+	if err := s.insertOrderCompletedEvent(ctx, report.OrderNo, energyKwh, actualAmount); err != nil {
+		return fmt.Errorf("插入事件失败（订单已更新）: %w", err)
 	}
 
 	return nil
@@ -199,4 +247,54 @@ func (s *CardService) RechargeCard(ctx context.Context, cardNo string, amount fl
 	// 充值
 	return s.repo.UpdateCardBalance(ctx, cardNo, amount, "recharge",
 		fmt.Sprintf("充值 %.2f元 时间:%s", amount, time.Now().Format("2006-01-02 15:04:05")))
+}
+
+// ===== P1-7修复: 事件插入辅助方法 =====
+
+func (s *CardService) insertOrderConfirmedEvent(ctx context.Context, orderNo string) error {
+	seqNo, err := s.repo.GetNextSequenceNo(ctx, orderNo)
+	if err != nil {
+		return err
+	}
+
+	eventData := map[string]interface{}{
+		"order_no":     orderNo,
+		"confirmed_at": time.Now().Format(time.RFC3339),
+	}
+	data, _ := json.Marshal(eventData)
+
+	return s.repo.InsertEvent(ctx, orderNo, "order.confirmed", data, seqNo)
+}
+
+func (s *CardService) insertOrderFailedEvent(ctx context.Context, orderNo, reason string) error {
+	seqNo, err := s.repo.GetNextSequenceNo(ctx, orderNo)
+	if err != nil {
+		return err
+	}
+
+	eventData := map[string]interface{}{
+		"order_no":  orderNo,
+		"reason":    reason,
+		"failed_at": time.Now().Format(time.RFC3339),
+	}
+	data, _ := json.Marshal(eventData)
+
+	return s.repo.InsertEvent(ctx, orderNo, "order.failed", data, seqNo)
+}
+
+func (s *CardService) insertOrderCompletedEvent(ctx context.Context, orderNo string, energyKwh, totalAmount float64) error {
+	seqNo, err := s.repo.GetNextSequenceNo(ctx, orderNo)
+	if err != nil {
+		return err
+	}
+
+	eventData := map[string]interface{}{
+		"order_no":     orderNo,
+		"energy_kwh":   energyKwh,
+		"total_amount": totalAmount,
+		"completed_at": time.Now().Format(time.RFC3339),
+	}
+	data, _ := json.Marshal(eventData)
+
+	return s.repo.InsertEvent(ctx, orderNo, "order.completed", data, seqNo)
 }
