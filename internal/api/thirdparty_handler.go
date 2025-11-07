@@ -393,19 +393,49 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		return
 	}
 
-	// 2. 查询当前活动的订单
+	// 2. 查询当前活动的订单 - P1-5修复: 支持charging状态
 	var orderNo string
+	var orderStatus int
 	queryOrderSQL := `
-		SELECT order_no FROM orders 
-		WHERE device_id = $1 AND port_no = $2 AND status IN (0, 1)
+		SELECT order_no, status FROM orders 
+		WHERE device_id = $1 AND port_no = $2 AND status IN (0, 1, 2)
 		ORDER BY created_at DESC LIMIT 1
 	`
-	err = h.repo.Pool.QueryRow(ctx, queryOrderSQL, devID, req.PortNo).Scan(&orderNo)
+	err = h.repo.Pool.QueryRow(ctx, queryOrderSQL, devID, req.PortNo).Scan(&orderNo, &orderStatus)
 	if err != nil {
 		h.logger.Warn("no active order found", zap.Error(err))
 		c.JSON(http.StatusNotFound, StandardResponse{
 			Code:      404,
 			Message:   "no active charging session found",
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
+	// P1-5修复: 使用CAS更新为stopping中间态
+	updateOrderSQL := `
+		UPDATE orders 
+		SET status = 9, updated_at = NOW() 
+		WHERE order_no = $1 AND status IN (0, 1, 2)
+	`
+	result, err := h.repo.Pool.Exec(ctx, updateOrderSQL, orderNo)
+	if err != nil {
+		h.logger.Error("failed to update order to stopping", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, StandardResponse{
+			Code:      500,
+			Message:   "failed to stop order",
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+	if result.RowsAffected() == 0 {
+		h.logger.Warn("order status changed, cannot stop",
+			zap.String("order_no", orderNo))
+		c.JSON(http.StatusConflict, StandardResponse{
+			Code:    409,
+			Message: "order status has changed, cannot stop",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -431,7 +461,7 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 			DeviceID:  devID,
 			PhyID:     devicePhyID,
 			Command:   bkv.Build(0x0015, msgID, devicePhyID, stopData),
-			Priority:  8, // 停止命令优先级高
+			Priority:  1, // P1-5修复: 紧急指令，最高优先级
 			MaxRetry:  3,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
@@ -444,21 +474,16 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		}
 	}
 
-	// 4. 更新订单状态为取消（3）
-	updateOrderSQL := `UPDATE orders SET status = 3, updated_at = NOW() WHERE order_no = $1`
-	_, err = h.repo.Pool.Exec(ctx, updateOrderSQL, orderNo)
-	if err != nil {
-		h.logger.Error("failed to update order status", zap.Error(err))
-	}
-
-	// 5. 返回成功响应
+	// 4. 返回成功响应
 	c.JSON(http.StatusOK, StandardResponse{
 		Code:    0,
-		Message: "stop command sent successfully",
+		Message: "stop command sent, order will be stopped in 30 seconds",
 		Data: map[string]interface{}{
 			"device_id": devicePhyID,
 			"order_no":  orderNo,
 			"port_no":   req.PortNo,
+			"status":    "stopping",
+			"note":      "订单将在30秒后自动变为stopped,或收到设备ACK后立即停止",
 		},
 		RequestID: requestID,
 		Timestamp: time.Now().Unix(),
