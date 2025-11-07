@@ -137,8 +137,19 @@ func (p *EventPusher) pushEvent(ctx context.Context, event *pgstorage.Event) err
 		return err
 	}
 
+	// 从事件数据中获取device_phy_id，如果没有则使用空字符串
+	devicePhyID, _ := eventData["device_phy_id"].(string)
+	if devicePhyID == "" {
+		// 尝试从订单号反查设备ID
+		devicePhyID = event.OrderNo // 占位，实际应该查询数据库
+	}
+
+	// 创建StandardEvent
+	eventType := thirdparty.EventType(event.EventType)
+	stdEvent := thirdparty.NewEvent(eventType, devicePhyID, eventData)
+
 	// 推送到Redis队列
-	if err := p.eventQueue.Push(ctx, event.EventType, eventData); err != nil {
+	if err := p.eventQueue.Enqueue(ctx, stdEvent); err != nil {
 		return err
 	}
 
