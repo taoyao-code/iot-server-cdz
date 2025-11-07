@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/taoyao-code/iot-server/internal/outbound"
 	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 	redisstorage "github.com/taoyao-code/iot-server/internal/storage/redis"
 	"go.uber.org/zap"
@@ -122,7 +123,7 @@ func (h *ThirdPartyHandler) ConfigureNetwork(c *gin.Context) {
 			DeviceID:  devID,
 			PhyID:     devicePhyID,
 			Command:   frame,
-			Priority:  10, // 最高优先级
+			Priority:  outbound.PriorityNormal, // P1-6: 组网配置=普通优先级
 			MaxRetry:  3,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),

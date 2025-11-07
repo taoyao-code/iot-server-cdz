@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/taoyao-code/iot-server/internal/outbound"
 	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 	"github.com/taoyao-code/iot-server/internal/session"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
@@ -323,7 +324,7 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 			DeviceID:  devID,
 			PhyID:     devicePhyID,
 			Command:   frame,
-			Priority:  5,
+			Priority:  outbound.PriorityHigh, // P1-6: 启动充电=高优先级
 			MaxRetry:  3,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
@@ -353,7 +354,7 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 			DeviceID:  devID,
 			PhyID:     devicePhyID,
 			Command:   qFrame,
-			Priority:  4,
+			Priority:  outbound.PriorityHigh, // P1-6: 查询端口状态=高优先级
 			MaxRetry:  2,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
@@ -502,7 +503,7 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 			DeviceID:  devID,
 			PhyID:     devicePhyID,
 			Command:   bkv.Build(0x0015, msgID, devicePhyID, stopData),
-			Priority:  1, // P1-5修复: 紧急指令，最高优先级
+			Priority:  outbound.PriorityEmergency, // P1-6: 停止充电=紧急优先级
 			MaxRetry:  3,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
@@ -1057,7 +1058,7 @@ func (h *ThirdPartyHandler) SetParams(c *gin.Context) {
 			DeviceID:  devID,
 			PhyID:     devicePhyID,
 			Command:   paramData,
-			Priority:  6,
+			Priority:  outbound.PriorityNormal, // P1-6: 参数设置=普通优先级
 			MaxRetry:  3,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
@@ -1168,7 +1169,7 @@ func (h *ThirdPartyHandler) TriggerOTA(c *gin.Context) {
 			DeviceID:  devID,
 			PhyID:     devicePhyID,
 			Command:   otaData,
-			Priority:  7, // OTA命令优先级较高
+			Priority:  outbound.PriorityLow, // P1-6: OTA升级=低优先级
 			MaxRetry:  3,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),

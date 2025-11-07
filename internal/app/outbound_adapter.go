@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/taoyao-code/iot-server/internal/outbound"
 	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	redisstorage "github.com/taoyao-code/iot-server/internal/storage/redis"
@@ -46,10 +47,8 @@ func (a *OutboundAdapter) SendDownlink(gatewayID string, cmd uint16, msgID uint3
 	}
 
 	// 插入到Redis队列（立即发送）
-	priority := 5 // 默认优先级
-	if cmd == 0x0000 {
-		priority = 10 // 心跳ACK最高优先级
-	}
+	// P1-6修复: 使用标准化优先级
+	priority := outbound.GetCommandPriority(cmd)
 
 	err = a.queue.Enqueue(ctx, &redisstorage.OutboundMessage{
 		ID:       fmt.Sprintf("bkv_%d_%d", cmd, time.Now().UnixNano()),
