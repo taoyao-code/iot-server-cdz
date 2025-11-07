@@ -42,13 +42,33 @@ func NewOutboundQueue(client *Client) *OutboundQueue {
 
 // Enqueue 入队（添加新消息到队列）
 func (q *OutboundQueue) Enqueue(ctx context.Context, msg *OutboundMessage) error {
+	// P1-6修复: 队列长度检查和降级策略
+	queueLen, err := q.GetPendingCount(ctx)
+	if err == nil {
+		// 队列长度>200: 拒绝低优先级(priority>5)指令
+		if queueLen > 200 && msg.Priority > 5 {
+			return fmt.Errorf("P1-6: queue overloaded (len=%d), rejecting low priority command (priority=%d)", 
+				queueLen, msg.Priority)
+		}
+		// 队列长度>500: 拒绝中优先级(priority>2)查询类指令
+		if queueLen > 500 && msg.Priority > 2 {
+			return fmt.Errorf("P1-6: queue critical (len=%d), rejecting non-urgent command (priority=%d)", 
+				queueLen, msg.Priority)
+		}
+		// 队列长度>1000: 只接受紧急指令(priority<=1)
+		if queueLen > 1000 && msg.Priority > 1 {
+			return fmt.Errorf("P1-6: queue emergency (len=%d), only accepting urgent commands (priority<=1)", 
+				queueLen)
+		}
+	}
+
 	// 序列化消息
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("marshal message: %w", err)
 	}
 
-	// 计算score（优先级*1e12 + 时间戳，保证优先级高的排前面）
+	// 计算score（优先级*1e12 + 时间戳，保证优先级低的排前面，低priority数字=高优先级）
 	score := float64(msg.Priority)*1e12 + float64(msg.CreatedAt.UnixNano())
 
 	// 添加到Sorted Set
