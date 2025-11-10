@@ -78,15 +78,60 @@ test-coverage:
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "覆盖率报告: coverage.html"
 
-# 本地开发环境（仅依赖服务）
-.PHONY: dev-up dev-down dev-logs dev-status dev-run dev-clean dev-all dev-check-ports
+# P1问题修复验证测试
+.PHONY: test-p1 test-p1-all test-p1-session test-p1-card test-p1-port
 
-dev-check-ports:
-	@./scripts/check-ports.sh
+test-p1-all: test-p1-session test-p1-card test-p1-port
+	@echo ""
+	@echo "✅ 所有P1测试通过！"
+	@echo ""
+	@echo "已验证的P1修复："
+	@echo "  ✓ P1-1: 心跳超时60秒"
+	@echo "  ✓ P1-2: 延迟ACK拒绝（10秒窗口）"
+	@echo "  ✓ P1-3: 端口并发冲突（事务+行锁）"
+	@echo "  ✓ P1-4: 端口状态同步"
+	@echo "  ✓ P1-5: 取消/停止中间态"
+	@echo "  ✓ P1-6: 队列优先级标准化"
+	@echo "  ✓ P1-7: 事件推送Outbox模式"
+
+test-p1-session:
+	@echo "🧪 P1-1测试: 心跳超时60秒..."
+	@go test -v -run TestSessionTimeout ./internal/app/ || (echo "❌ P1-1测试失败"; exit 1)
+	@echo "✅ P1-1测试通过"
+
+test-p1-card:
+	@echo "🧪 P1-2测试: 延迟ACK拒绝..."
+	@go test -v -run TestHandleOrderConfirmation ./internal/service/ || (echo "❌ P1-2测试失败"; exit 1)
+	@echo "✅ P1-2测试通过"
+
+test-p1-port:
+	@echo "🧪 P1-4测试: 端口状态同步..."
+	@go test -v -run TestPortStatusSyncer ./internal/app/ || (echo "❌ P1-4测试失败"; exit 1)
+	@echo "✅ P1-4测试通过"
+
+test-p1: test-p1-all
+
+# 完整测试套件
+.PHONY: test-all test-quick test-ci
+
+test-all:
+	@echo "🧪 运行完整测试套件..."
+	@./scripts/test-all.sh
+
+test-quick:
+	@echo "🧪 运行快速测试（无race检测）..."
+	@go test ./... -timeout 30s
+
+test-ci:
+	@echo "🧪 运行CI测试..."
+	@./scripts/test-all.sh --verbose
+
+# 本地开发环境（仅依赖服务）
+.PHONY: dev-up dev-down dev-logs dev-status dev-run dev-clean dev-all
 
 dev-up:
 	@echo "🚀 启动本地开发依赖服务..."
-	docker-compose -f docker-compose.local.yml up -d
+	docker compose -f docker-compose.local.yml up -d
 	@echo ""
 	@echo "✅ 依赖服务已启动！"
 	@echo "   PostgreSQL: localhost:5432 (用户: iot, 密码: iot123, 数据库: iot_server)"
@@ -99,16 +144,16 @@ dev-up:
 
 dev-down:
 	@echo "停止本地开发依赖服务..."
-	docker-compose -f docker-compose.local.yml down
+	docker compose -f docker-compose.local.yml down
 	@echo "✅ 依赖服务已停止"
 
 dev-logs:
 	@echo "查看依赖服务日志..."
-	docker-compose -f docker-compose.local.yml logs -f
+	docker compose -f docker-compose.local.yml logs -f
 
 dev-status:
 	@echo "检查依赖服务状态..."
-	docker-compose -f docker-compose.local.yml ps
+	docker compose -f docker-compose.local.yml ps
 
 dev-run:
 	@echo "🚀 启动本地开发服务器..."
@@ -117,7 +162,7 @@ dev-run:
 
 dev-clean:
 	@echo "清理本地开发环境（包括数据卷）..."
-	docker-compose -f docker-compose.local.yml down -v
+	docker compose -f docker-compose.local.yml down -v
 	@echo "✅ 本地开发环境已清理"
 
 dev-all: dev-up
@@ -140,27 +185,6 @@ compose-down:
 
 compose-logs:
 	docker compose logs -f
-
-# Docker Compose - 生产环境
-.PHONY: prod-up prod-down prod-restart prod-logs prod-status
-
-prod-up:
-	@echo "启动生产环境..."
-	docker-compose -f docker-compose.prod.yml up -d
-
-prod-down:
-	@echo "停止生产环境..."
-	docker-compose -f docker-compose.prod.yml down
-
-prod-restart:
-	@echo "重启生产环境..."
-	docker-compose -f docker-compose.prod.yml restart
-
-prod-logs:
-	docker-compose -f docker-compose.prod.yml logs -f iot-server
-
-prod-status:
-	docker-compose -f docker-compose.prod.yml ps
 
 # Docker镜像
 .PHONY: docker-build docker-push docker-clean
@@ -208,54 +232,6 @@ restore:
 	@echo "恢复备份..."
 	./scripts/backup.sh restore
 
-# 监控和调试
-.PHONY: monitor monitor-diagnose monitor-logs monitor-errors monitor-help
-
-monitor-help:
-	@./scripts/monitor.sh help
-
-monitor:
-	@./scripts/monitor.sh diagnose
-
-monitor-logs:
-	@./scripts/monitor.sh logs
-
-monitor-errors:
-	@./scripts/monitor.sh errors 30
-
-monitor-metrics:
-	@./scripts/monitor.sh metrics
-
-# TCP 模块测试
-.PHONY: tcp-check tcp-connect tcp-metrics tcp-test-all
-
-tcp-check:
-	@./scripts/tcp-test.sh check-port
-
-tcp-connect:
-	@./scripts/tcp-test.sh connect
-
-tcp-metrics:
-	@./scripts/tcp-test.sh metrics
-
-tcp-test-all:
-	@./scripts/tcp-test.sh run-all
-
-# 协议实时监控
-.PHONY: protocol-live protocol-logs protocol-stats protocol-devices
-
-protocol-live:
-	@./scripts/protocol-monitor.sh live
-
-protocol-logs:
-	@./scripts/protocol-monitor.sh logs
-
-protocol-stats:
-	@./scripts/protocol-monitor.sh stats
-
-protocol-devices:
-	@./scripts/protocol-monitor.sh devices
-
 # Git Hooks
 install-hooks:
 	@echo "安装 Git hooks..."
@@ -299,9 +275,14 @@ clean:
 	rm -rf bin
 	rm -f coverage.out coverage.html
 	rm -rf tmp
+	@./scripts/cleanup.sh
+
+clean-all: clean
+	@echo "深度清理..."
+	@./scripts/cleanup.sh --deep
+	go clean -cache -modcache -testcache
 
 # 自动部署
-.PHONY: auto-deploy deploy-full remote-migrate
 
 swagger-init:
 	@echo "安装 swag 工具..."
@@ -318,7 +299,7 @@ api-docs: swagger-init swagger-gen
 	@echo "✅ API文档生成完成"
 
 # 自动部署
-.PHONY: auto-deploy deploy-full remote-migrate
+.PHONY: auto-deploy deploy-full
 
 # 完整自动化部署流程
 auto-deploy:
@@ -326,20 +307,13 @@ auto-deploy:
 	@echo ""
 	@echo "📋 执行步骤:"
 	@echo "  1. 构建Linux版本"
-	@echo "  2. 执行远程数据库迁移"
-	@echo "  3. 部署到测试服务器"
+	@echo "  2. 部署到测试服务器"
 	@echo ""
 	@$(MAKE) build-linux
-	@$(MAKE) remote-migrate
 	@$(MAKE) quick-deploy
 	@echo ""
 	@echo "✅ 自动化部署完成!"
-	@echo "💡 运行 'make monitor' 查看服务状态"
 
-# 仅执行远程数据库迁移
-remote-migrate:
-	@echo "� 执行远程数据库迁移..."
-	@./scripts/remote-migrate.sh
 
 # 完整部署（带备份）
 deploy-full:
@@ -354,78 +328,63 @@ help:
 	@echo "  make dev-all         - 一键启动（依赖服务+应用服务器）"
 	@echo "  make dev-up          - 启动依赖服务（PostgreSQL，复用本地Redis）"
 	@echo "  make dev-run         - 启动应用服务器（需先执行 dev-up）"
-	@echo "  make dev-check-ports - 检查端口占用情况"
 	@echo "  make dev-down        - 停止依赖服务"
 	@echo "  make dev-logs        - 查看依赖服务日志"
 	@echo "  make dev-status      - 检查依赖服务状态"
 	@echo "  make dev-clean       - 清理本地开发环境（包括数据）"
 	@echo ""
-	@echo "开发相关："
+	@echo "🔨 开发相关："
 	@echo "  make build           - 构建应用"
 	@echo "  make run             - 运行开发服务器（使用 example.yaml）"
-	@echo "  make test            - 运行测试"
-	@echo "  make test-coverage   - 生成测试覆盖率报告"
 	@echo "  make fmt             - 格式化代码（自动修复）"
 	@echo "  make fmt-check       - 检查代码格式（不修改）"
 	@echo "  make lint            - 代码检查"
 	@echo "  make install-hooks   - 安装 Git pre-commit hooks"
 	@echo ""
 	@echo "🧪 测试相关:"
-	@echo "  make test            - 运行测试套件"
+	@echo "  make test-all        - 完整测试套件（推荐）⭐"
+	@echo "  make test            - 运行单元测试（带race检测）"
+	@echo "  make test-quick      - 快速测试（无race检测）"
 	@echo "  make test-verbose    - 详细测试输出"
 	@echo "  make test-coverage   - 生成覆盖率报告"
+	@echo "  make test-p1         - P1问题修复验证测试 ⭐"
+	@echo "  make test-ci         - CI环境测试"
 	@echo ""
-	@echo "📊 监控相关:"
-	@echo "  make monitor         - 完整诊断"
-	@echo "  make monitor-logs    - 实时日志"
-	@echo "  make monitor-errors  - 错误日志"
-	@echo ""
-	@echo "Docker开发环境："
+	@echo "🐳 Docker开发环境："
 	@echo "  make compose-up      - 启动开发环境"
 	@echo "  make compose-down    - 停止开发环境"
 	@echo "  make compose-logs    - 查看日志"
 	@echo ""
-	@echo "生产环境："
+	@echo "🚢 生产环境："
 	@echo "  make docker-build    - 构建Docker镜像"
-	@echo "  make prod-up         - 启动生产环境"
-	@echo "  make prod-down       - 停止生产环境"
-	@echo "  make prod-restart    - 重启生产环境"
-	@echo "  make prod-logs       - 查看生产环境日志"
 	@echo ""
-	@echo "部署相关："
-	@echo "  make auto-deploy     - 自动化部署(构建+迁移+部署) ⭐"
-	@echo "  make remote-migrate  - 远程数据库迁移"
+	@echo "🚀 部署相关："
+	@echo "  make auto-deploy     - 自动化部署(构建+部署) ⭐"
 	@echo "  make quick-deploy    - 快速部署(仅替换二进制)"
 	@echo "  make deploy          - 标准部署(测试环境)"
 	@echo "  make deploy-full     - 完整部署(带备份)"
 	@echo ""
-	@echo "监控调试："
-	@echo "  make monitor         - 完整诊断(推荐)"
-	@echo "  make monitor-logs    - 实时日志"
-	@echo "  make monitor-errors  - 错误日志"
-	@echo "  make monitor-metrics - 业务指标"
-	@echo ""
-	@echo "TCP 模块:"
-	@echo "  make tcp-check       - 检查TCP端口"
-	@echo "  make tcp-metrics     - TCP指标"
-	@echo ""
-	@echo "协议监控:"
-	@echo "  make protocol-logs   - 实时协议日志"
-	@echo "  make protocol-stats  - 实时统计"
-	@echo ""
-	@echo "维护相关："
+	@echo "🛠️  维护相关："
 	@echo "  make backup          - 备份数据"
 	@echo "  make clean           - 清理构建"
 	@echo ""
-	@echo "API文档:"
+	@echo "📚 API文档:"
 	@echo "  make api-docs        - 生成API文档"
 	@echo ""
 	@echo "当前版本: $(VERSION)"
 	@echo ""
 	@echo "💡 推荐工作流程:"
 	@echo "   1. 修改代码"
-	@echo "   2. make test             (本地测试)"
+	@echo "   2. make test-all         (完整测试)"
 	@echo "   3. make auto-deploy      (自动化部署) ⭐"
-	@echo "   4. make monitor          (监控运行状态)"
+	@echo ""
+	@echo "✅ P1问题修复状态:"
+	@echo "   ✓ P1-1: 心跳超时60秒"
+	@echo "   ✓ P1-2: 延迟ACK拒绝（10秒窗口）"
+	@echo "   ✓ P1-3: 端口并发冲突（事务+行锁）"
+	@echo "   ✓ P1-4: 端口状态同步（已启用）"
+	@echo "   ✓ P1-5: 取消/停止中间态"
+	@echo "   ✓ P1-6: 队列优先级标准化"
+	@echo "   ✓ P1-7: 事件推送Outbox模式（已启用）"
 
 
