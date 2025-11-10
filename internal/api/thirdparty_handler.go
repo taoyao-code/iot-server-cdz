@@ -207,13 +207,13 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 	}
 	defer tx.Rollback(ctx)
 
-	// 4.1. 锁定该端口的所有活跃订单(包含中间态)
+	// 4.1. 同时锁定orders和ports表（P1-3完整方案：防止跨表状态不一致）
 	var existingOrderNo string
 	checkPortSQL := `
-		SELECT order_no FROM orders 
-		WHERE device_id = $1 AND port_no = $2 
+		SELECT order_no FROM orders
+		WHERE device_id = $1 AND port_no = $2
 		  AND status IN (0, 1, 2, 8, 9, 10)  -- pending, confirmed, charging, cancelling, stopping, interrupted
-		ORDER BY created_at DESC 
+		ORDER BY created_at DESC
 		LIMIT 1
 		FOR UPDATE
 	`
@@ -231,6 +231,64 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 			Data: map[string]interface{}{
 				"current_order": existingOrderNo,
 				"port_status":   "charging",
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
+	// 4.2. P1-3: 同时锁定ports表，防止端口状态被其他事务修改
+	lockPortSQL := `
+		SELECT status FROM ports
+		WHERE device_id = $1 AND port_no = $2
+		FOR UPDATE
+	`
+	var lockedPortStatus int
+	err = tx.QueryRow(ctx, lockPortSQL, devID, req.PortNo).Scan(&lockedPortStatus)
+	if err != nil {
+		// 端口不存在，需要先初始化
+		initPortSQL := `
+			INSERT INTO ports (device_id, port_no, status, updated_at)
+			VALUES ($1, $2, 0, NOW())
+			ON CONFLICT (device_id, port_no) DO NOTHING
+		`
+		_, _ = tx.Exec(ctx, initPortSQL, devID, req.PortNo)
+		lockedPortStatus = 0
+	}
+
+	// 4.3. P1-3: 验证端口状态是否可用
+	if lockedPortStatus == 2 {
+		// 端口状态为charging但没有活跃订单，数据不一致
+		tx.Rollback(ctx)
+		h.logger.Error("P1-3: port state mismatch - charging status without active order",
+			zap.String("device_phy_id", devicePhyID),
+			zap.Int("port_no", req.PortNo),
+			zap.Int("port_status", lockedPortStatus))
+		c.JSON(http.StatusConflict, StandardResponse{
+			Code:    40903, // PORT_STATE_INCONSISTENT
+			Message: "port state inconsistent, please retry",
+			Data: map[string]interface{}{
+				"port_no":     req.PortNo,
+				"port_status": lockedPortStatus,
+				"error_code":  "PORT_STATE_INCONSISTENT",
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	} else if lockedPortStatus == 3 {
+		// 端口故障
+		tx.Rollback(ctx)
+		h.logger.Warn("port is in fault state",
+			zap.String("device_phy_id", devicePhyID),
+			zap.Int("port_no", req.PortNo))
+		c.JSON(http.StatusServiceUnavailable, StandardResponse{
+			Code:    503,
+			Message: "port is in fault state",
+			Data: map[string]interface{}{
+				"port_no": req.PortNo,
+				"status":  "fault",
 			},
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
@@ -259,6 +317,26 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		return
 	}
 
+	// 6.5. P1-3: 在同一事务中更新ports表状态为occupied(1)
+	// 避免跨表状态不一致：订单pending时端口应标记为occupied
+	updatePortSQL := `
+		UPDATE ports
+		SET status = 1, updated_at = NOW()
+		WHERE device_id = $1 AND port_no = $2
+	`
+	_, err = tx.Exec(ctx, updatePortSQL, devID, req.PortNo)
+	if err != nil {
+		tx.Rollback(ctx)
+		h.logger.Error("P1-3: failed to update port status", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, StandardResponse{
+			Code:      500,
+			Message:   "failed to update port status",
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
 	// 7. 提交事务
 	if err := tx.Commit(ctx); err != nil {
 		h.logger.Error("failed to commit transaction", zap.Error(err))
@@ -270,6 +348,11 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		})
 		return
 	}
+
+	h.logger.Info("P1-3: order created with port locked",
+		zap.String("order_no", orderNo),
+		zap.Int64("device_id", devID),
+		zap.Int("port_no", req.PortNo))
 
 	// 8. 构造并下发充电指令（BKV 0x0015下行）
 	// 按协议 2.2.8：外层BKV命令0x0015，内层控制命令0x07

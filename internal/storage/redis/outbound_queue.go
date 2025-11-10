@@ -32,7 +32,7 @@ type OutboundMessage struct {
 	DeviceID  int64     `json:"device_id"`  // 设备ID
 	PhyID     string    `json:"phy_id"`     // 物理ID
 	Command   []byte    `json:"command"`    // 命令数据
-	Priority  int       `json:"priority"`   // 优先级（0-9，9最高）
+	Priority  int       `json:"priority"`   // 优先级（1-5，1最高=紧急，5最低=后台）P1-6标准
 	Retries   int       `json:"retries"`    // 已重试次数
 	MaxRetry  int       `json:"max_retry"`  // 最大重试次数
 	CreatedAt time.Time `json:"created_at"` // 创建时间

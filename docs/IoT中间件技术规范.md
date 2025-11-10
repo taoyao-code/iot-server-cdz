@@ -1,18 +1,27 @@
 # 充电桩 IoT 中间件系统 - 技术规范文档
 
-> **文档版本**: v2.2  
-> **更新日期**: 2025-01-06  
-> **系统定位**: 充电设备与第三方业务系统之间的通信中间件  
+> **文档版本**: v2.3
+> **更新日期**: 2025-01-10
+> **系统定位**: 充电设备与第三方业务系统之间的通信中间件
 > **核心职责**: 设备管理、协议适配、状态同步、指令转发、事件推送
 
 ## 📋 版本历史
 
 | 版本 | 日期       | 变更说明                                                                                   |
 | ---- | ---------- | ------------------------------------------------------------------------------------------ |
+| v2.3 | 2025-01-10 | **补充完整对接规范**:新增实现状态总览、第三方API完整规范、BKV协议详细规范、错误码定义 |
 | v2.2 | 2025-01-06 | **修复 P0 级 7 个逻辑漏洞**:统一状态流转定义、时间阈值、补充关键业务流程、完善中断恢复逻辑 |
 | v2.1 | 2025-11-01 | 新增 11 个漏洞修复方案、3 个中间态(cancelling/stopping/interrupted)                        |
 | v2.0 | 2024-12-01 | 扩展订单状态机、完善异常处理流程                                                           |
 | v1.0 | 2024-11-01 | 初始版本                                                                                   |
+
+**⚠️ 重要更新（v2.3）**：
+
+- ✅ **新增实现状态总览**: 清晰标注已实现/待实现功能，预计工期
+- ✅ **补充第三方API完整规范**: 包含认证、接口定义、错误码、Webhook规范
+- ✅ **补充BKV协议详细规范**: 帧格式、命令定义、连接流程、充电控制流程
+- ✅ **统一时间阈值表**: 明确所有关键时间参数和配置位置
+- ✅ **修复文档bug**: 删除重复章节、优化结构
 
 **⚠️ 重要更新（v2.2）**：
 
@@ -33,15 +42,64 @@
 
 ---
 
+## 📊 实现状态总览（v2.3更新）
+
+### 已实现功能 ✅
+
+| 功能模块 | 实现状态 | 代码位置 |
+|---------|---------|---------|
+| **中间态支持** | ✅ 已实现 | `internal/api/thirdparty_handler.go:23-29` |
+| └─ OrderStatusCancelling (8) | ✅ | 取消中状态 |
+| └─ OrderStatusStopping (9) | ✅ | 停止中状态 |
+| └─ OrderStatusInterrupted (10) | ✅ | 中断状态（P0-2） |
+| **事件推送机制** | ✅ 已实现 | `internal/thirdparty/` |
+| └─ EventQueue | ✅ | 异步事件队列 |
+| └─ Pusher | ✅ | Webhook推送器 |
+| └─ Deduper | ✅ | 事件去重 |
+| **订单管理** | ✅ 已实现 | `internal/storage/pg/repo.go` |
+| **BKV协议解析** | ✅ 已实现 | `internal/protocol/bkv/` |
+| **会话管理** | ✅ 已实现 | `internal/session/` |
+
+### 待实现/待完善功能 ⏳
+
+| 优先级 | 功能 | 状态 | 预计工期 |
+|-------|------|------|---------|
+| 🔴 P0-1 | 设备离线强制检查（创建订单前） | ⏳ 待实现 | 1天 |
+| 🟡 P1-2 | 延迟ACK拒绝机制（10秒超时） | ⏳ 待实现 | 2天 |
+| 🟡 P1-3 | 端口并发冲突行锁（FOR UPDATE） | ⏳ 待实现 | 2天 |
+| 🟡 P1-4 | 端口状态实时同步（0x1012查询） | ⏳ 待完善 | 3天 |
+| 🟡 P1-6 | 下行队列优先级与降级策略 | ⏳ 待实现 | 3天 |
+| 🟡 P1-7 | Outbox事件推送模式（事务一致性） | ⏳ 待实现 | 3天 |
+| 🟢 P2-1 | 订单监控CAS原子更新 | ⏳ 待完善 | 2天 |
+| 🟢 P2-2 | 会话状态Redis持久化 | ⏳ 待完善 | 2天 |
+| 🟢 P2-3 | 数据库索引优化 | ⏳ 待实现 | 1天 |
+
+### 关键时间阈值（统一规范）
+
+| 参数 | 值 | 说明 | 配置位置 |
+|------|---|------|---------|
+| **设备在线阈值** | **60秒** | last_seen超时判定设备离线 | `configs/example.yaml` |
+| pending → timeout | 10秒 | 设备ACK超时 | 订单监控任务 |
+| cancelling/stopping超时 | 30秒 | 中间态超时自动流转 | 订单监控任务 |
+| interrupted恢复窗口 | 60秒 | 设备断线后等待恢复时间 | 订单监控任务 |
+| outbound指令超时 | 30秒 | 下行指令发送超时 | `internal/outbound/` |
+| TCP write超时 | 5秒 | TCP写超时 | `internal/tcpserver/` |
+
+---
+
 ## 📋 目录
 
+- [实现状态总览](#实现状态总览v23更新)
 - [1. 系统定位与架构](#1-系统定位与架构)
 - [2. 设备状态管理](#2-设备状态管理)
 - [3. 订单生命周期](#3-订单生命周期)
 - [4. 完整业务流程](#4-完整业务流程)
+  - [4.6 第三方API完整规范](#46-第三方api完整规范)
+  - [4.7 BKV协议详细规范](#47-bkv协议详细规范)
 - [5. 异常场景处理](#5-异常场景处理)
 - [6. 关键检查点与逻辑漏洞修复](#6-关键检查点与逻辑漏洞修复)
 - [7. 监控与告警](#7-监控与告警)
+- [附录](#附录)
 
 ---
 
@@ -486,6 +544,353 @@ flowchart TD
 - **实现方式**: 在状态更新时检查 timestamp,取最新的事件
 
 **代码实现位置**: `internal/api/thirdparty_handler.go::StopOrder()`
+
+### 4.6 第三方API完整规范
+
+#### 4.6.1 认证机制
+
+**API Key认证**：
+```http
+X-API-Key: {api_key}
+X-Timestamp: {unix_timestamp}
+X-Signature: {hmac_sha256_signature}
+```
+
+**签名计算**：
+```
+signature = HMAC_SHA256(
+    secret_key,
+    "{method}\n{path}\n{timestamp}\n{body}"
+)
+```
+
+#### 4.6.2 启动充电API
+
+**接口**: `POST /api/v1/third/devices/{device_id}/charge`
+
+**请求示例**:
+```json
+{
+  "port_no": 1,
+  "charge_mode": 1,
+  "amount": 10000,
+  "duration_minutes": 60,
+  "price_per_kwh": 150,
+  "service_fee": 100
+}
+```
+
+**成功响应(200)**:
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "order_no": "THD1234567890",
+    "status": "pending",
+    "device_id": "82241218000382",
+    "port_no": 1
+  },
+  "request_id": "req_xxx",
+  "timestamp": 1704528000
+}
+```
+
+**错误响应**:
+| HTTP状态码 | 业务错误码 | 说明 |
+|-----------|-----------|------|
+| 400 | 40001 | 参数错误 |
+| 403 | 40301 | 签名验证失败 |
+| 404 | 40401 | 设备不存在 |
+| 404 | 40402 | 端口不存在 |
+| 409 | 40901 | 端口被占用 |
+| 503 | 50301 | 设备离线 |
+| 503 | 50302 | 设备心跳超时 |
+| 503 | 50303 | 设备故障 |
+
+#### 4.6.3 停止充电API
+
+**接口**: `POST /api/v1/third/orders/{order_no}/stop`
+
+**请求体**: `{}` (空对象)
+
+**成功响应(200)**:
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "order_no": "THD1234567890",
+    "status": "stopping",
+    "old_status": "charging"
+  },
+  "request_id": "req_xxx",
+  "timestamp": 1704528000
+}
+```
+
+#### 4.6.4 取消订单API
+
+**接口**: `POST /api/v1/third/orders/{order_no}/cancel`
+
+**请求体**: `{}` (空对象)
+
+**成功响应(200)**:
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "order_no": "THD1234567890",
+    "status": "cancelling",
+    "old_status": "pending"
+  },
+  "request_id": "req_xxx",
+  "timestamp": 1704528000
+}
+```
+
+**错误响应**:
+| HTTP状态码 | 业务错误码 | 说明 |
+|-----------|-----------|------|
+| 400 | 40002 | 订单不可取消（charging状态需先停止） |
+| 404 | 40403 | 订单不存在 |
+| 409 | 40902 | 订单已结束 |
+
+#### 4.6.5 查询订单API
+
+**接口**: `GET /api/v1/third/orders/{order_no}`
+
+**成功响应(200)**:
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "order_no": "THD1234567890",
+    "device_id": "82241218000382",
+    "port_no": 1,
+    "status": 2,
+    "status_text": "charging",
+    "start_time": "2025-01-06T10:00:00Z",
+    "end_time": null,
+    "kwh": 1.234,
+    "amount_cent": 10000,
+    "duration_seconds": 1800
+  },
+  "request_id": "req_xxx",
+  "timestamp": 1704528000
+}
+```
+
+#### 4.6.6 Webhook回调接口
+
+第三方需提供Webhook URL接收事件推送。
+
+**接口**: `POST {third_party_webhook_url}/callback`
+
+**请求头**:
+```http
+Content-Type: application/json
+X-Event-Type: {event_type}
+X-Event-ID: {event_id}
+X-Timestamp: {timestamp}
+X-Signature: {hmac_sha256_signature}
+```
+
+**请求体示例(订单状态变更)**:
+```json
+{
+  "event_id": "order.confirmed-82241218000382-1704528000123456789",
+  "event_type": "order.confirmed",
+  "device_phy_id": "82241218000382",
+  "timestamp": 1704528000,
+  "nonce": "abc12345",
+  "data": {
+    "order_no": "THD1234567890",
+    "device_id": "82241218000382",
+    "port_no": 1,
+    "old_status": "pending",
+    "new_status": "confirmed"
+  }
+}
+```
+
+**事件类型清单**:
+| 事件类型 | 说明 | 触发时机 |
+|---------|------|---------|
+| `device.registered` | 设备注册 | 设备首次连接 |
+| `device.heartbeat` | 设备心跳 | 每30秒 |
+| `order.created` | 订单创建 | 第三方创建订单 |
+| `order.confirmed` | 订单确认 | 设备ACK确认 |
+| `order.timeout` | 订单超时 | pending状态10秒无响应 |
+| `charging.started` | 充电开始 | 订单变为charging |
+| `charging.progress` | 充电进度 | 每分钟上报 |
+| `charging.ended` | 充电结束 | 充电完成 |
+| `order.completed` | 订单完成 | 设备上报完成 |
+| `order.stopped` | 订单停止 | 用户主动停止 |
+| `order.cancelled` | 订单取消 | 用户主动取消 |
+| `order.failed` | 订单失败 | 设备故障/断线 |
+| `device.offline` | 设备离线 | 心跳超时60秒 |
+| `device.alarm` | 设备告警 | 设备上报故障 |
+
+**第三方响应要求**:
+```json
+{
+  "code": 0,
+  "message": "success"
+}
+```
+
+- HTTP状态码200视为成功
+- 非200状态码将触发重试（最多5次）
+- 超时时间：5秒
+
+### 4.7 BKV协议详细规范
+
+#### 4.7.1 帧格式定义
+
+**基本帧结构**:
+```
+[起始标志] [数据长度] [数据域] [校验和]
+  2 Byte    2 Byte     N Byte    可选
+```
+
+**完整帧示例**:
+```
+FC FE 00 10 10 11 AB CD 12 34 56 78 01 02 03 04 05 06 07 08 ...
+│  │  │  │  │  │  │  │  │  │  │  │  └─────────┬─────────────┘
+│  │  │  │  │  │  │  │  │  │  │  │            └─ 数据域(N字节)
+│  │  │  │  │  │  │  │  └──┴──┴──┴─ 网关ID(4字节)
+│  │  │  │  │  │  └──┴─ 消息ID(2字节)
+│  │  │  │  └──┴─ 命令码(2字节)
+│  │  └──┴─ 数据长度(2字节,大端序)
+└──┴─ 起始标志(0xFC 0xFE或0xFC 0xFF)
+```
+
+#### 4.7.2 关键命令定义
+
+**0x0000 - 心跳帧**
+- **方向**: 设备 → 平台
+- **周期**: 30秒
+- **数据域**: 空或状态信息
+- **用途**: 维持连接，更新last_seen_at
+
+**0x1004 - 网络节点帧**
+- **方向**: 设备 → 平台
+- **触发**: 设备上线/重连
+- **数据域**: 设备信息（ICCID, IMEI, 固件版本等）
+- **用途**: 设备注册
+
+**0x100F - 端口状态上报**
+- **方向**: 设备 → 平台
+- **触发**: 端口状态变化
+- **数据域**:
+  ```
+  [端口号(1B)] [状态(1B)] [功率(2B)] ...
+  状态: 0=free, 1=occupied, 2=charging, 3=fault
+  ```
+
+**0x1010 - 刷卡充电上报**
+- **方向**: 设备 → 平台
+- **触发**: 用户刷卡
+- **数据域**:
+  ```
+  [卡号(8B)] [端口号(1B)] [余额(4B)] ...
+  ```
+
+**0x1011 - 控制指令**
+- **方向**: 平台 → 设备
+- **用途**: 启动/停止充电
+- **数据域**:
+  ```
+  [操作类型(1B)] [端口号(1B)] [参数...]
+  操作类型: 0x01=启动, 0x02=停止
+  ```
+
+**0x1012 - 查询端口状态**
+- **方向**: 平台 → 设备
+- **用途**: 实时查询端口状态（P1-4需要）
+- **数据域**: `[端口号(1B)]`
+- **响应**: 通过0x100F上报
+
+**0x0F - ACK确认帧**
+- **方向**: 设备 → 平台
+- **触发**: 响应下行指令
+- **数据域**:
+  ```
+  [原消息ID(2B)] [结果码(1B)] [错误码(2B)]
+  结果码: 0x00=成功, 0x01=失败
+  ```
+
+#### 4.7.3 设备连接流程
+
+```mermaid
+sequenceDiagram
+    participant D as BKV设备
+    participant S as IoT服务器
+
+    D->>S: TCP连接建立(端口6000)
+    S->>D: 连接成功
+    D->>S: 0x1004 网络节点(注册)
+    S->>D: 0x0F ACK确认
+    S->>S: 创建设备记录
+
+    loop 每30秒
+        D->>S: 0x0000 心跳
+        S->>S: 更新last_seen_at
+    end
+
+    D->>S: 0x100F 端口状态(初始化)
+    S->>S: 记录端口状态
+
+    Note over D,S: 设备进入在线状态
+```
+
+#### 4.7.4 充电控制流程
+
+```mermaid
+sequenceDiagram
+    participant TP as 第三方
+    participant S as IoT服务器
+    participant D as BKV设备
+
+    TP->>S: POST /charge (启动充电)
+    S->>S: 检查设备在线
+    S->>S: 创建订单(pending)
+    S->>TP: 200 OK {order_no}
+
+    S->>D: 0x1011 控制指令(启动,msgID=123)
+    D->>D: 执行启动
+    D->>S: 0x0F ACK确认(msgID=123,成功)
+    S->>S: 订单→confirmed
+    S->>TP: Webhook: order.confirmed
+
+    D->>S: 0x100F 端口状态(charging)
+    S->>S: 订单→charging
+    S->>TP: Webhook: charging.started
+
+    loop 充电中
+        D->>S: 充电进度
+        S->>TP: Webhook: charging.progress
+    end
+
+    D->>S: 充电结束
+    S->>S: 订单→completed
+    S->>TP: Webhook: order.completed
+```
+
+#### 4.7.5 错误码定义
+
+| 错误码 | 十六进制 | 说明 |
+|-------|---------|------|
+| 0x0000 | 0x00 0x00 | 成功 |
+| 0x0001 | 0x00 0x01 | 参数错误 |
+| 0x0002 | 0x00 0x02 | 端口不存在 |
+| 0x0003 | 0x00 0x03 | 端口被占用 |
+| 0x0004 | 0x00 0x04 | 端口故障 |
+| 0x0005 | 0x00 0x05 | 充电失败 |
+| 0x00FF | 0x00 0xFF | 未知错误 |
 
 ---
 
@@ -1514,8 +1919,6 @@ graph LR
 - `OutboundQueueBacklog`：下行队列堆积
   - 条件：队列长度 > 100
   - 持续：5 分钟
-
-### 7.3 后台监控任务
 
 ### 7.3 后台监控任务
 

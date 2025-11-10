@@ -36,7 +36,7 @@ func TestOutboundMessage_Serialization(t *testing.T) {
 		DeviceID:  1001,
 		PhyID:     "DEV001",
 		Command:   []byte{0x01, 0x02, 0x03},
-		Priority:  5,
+		Priority:  5, // PriorityBackground (避免循环依赖)
 		Retries:   0,
 		MaxRetry:  3,
 		CreatedAt: time.Now(),

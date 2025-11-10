@@ -8,6 +8,7 @@ import (
 
 	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 	"github.com/taoyao-code/iot-server/internal/storage/pg"
+	"go.uber.org/zap"
 )
 
 const (
@@ -15,17 +16,34 @@ const (
 	OrderACKTimeout = 10 * time.Second // 订单确认ACK超时时间
 )
 
+// CardRepositoryAPI P1-2: Repository接口，用于测试mock
+type CardRepositoryAPI interface {
+	GetTransaction(ctx context.Context, orderNo string) (*pg.CardTransaction, error)
+	UpdateTransactionChargingWithEvent(ctx context.Context, orderNo string, eventData []byte) error
+	FailTransactionWithEvent(ctx context.Context, orderNo, reason string, eventData []byte) error
+	GetCard(ctx context.Context, cardNo string) (*pg.Card, error)
+	CreateCard(ctx context.Context, cardNo string, balance float64, status string) (*pg.Card, error)
+	CreateTransaction(ctx context.Context, tx *pg.CardTransaction) (*pg.CardTransaction, error)
+	UpdateCardBalance(ctx context.Context, cardNo string, amount float64, changeType, description string) error
+	CompleteTransaction(ctx context.Context, orderNo string, energyKwh, totalAmount float64) error
+	GetCardTransactions(ctx context.Context, cardNo string, limit int) ([]pg.CardTransaction, error)
+	GetNextSequenceNo(ctx context.Context, orderNo string) (int, error)
+	InsertEvent(ctx context.Context, orderNo, eventType string, eventData []byte, sequenceNo int) error
+}
+
 // CardService 刷卡充电业务服务
 type CardService struct {
-	repo    *pg.Repository
+	repo    CardRepositoryAPI
 	pricing *PricingEngine
+	logger  *zap.Logger // P1-2: 日志记录器
 }
 
 // NewCardService 创建卡片服务
-func NewCardService(repo *pg.Repository, pricing *PricingEngine) *CardService {
+func NewCardService(repo CardRepositoryAPI, pricing *PricingEngine, logger *zap.Logger) *CardService {
 	return &CardService{
 		repo:    repo,
 		pricing: pricing,
+		logger:  logger,
 	}
 }
 
@@ -103,12 +121,30 @@ func (s *CardService) HandleOrderConfirmation(ctx context.Context, conf *bkv.Ord
 
 	// 1. 检查订单状态必须为pending
 	if tx.Status != "pending" {
+		if s.logger != nil {
+			s.logger.Warn("P1-2: ACK rejected due to invalid order status",
+				zap.String("order_no", conf.OrderNo),
+				zap.String("expected_status", "pending"),
+				zap.String("actual_status", tx.Status),
+				zap.Time("order_created_at", tx.CreatedAt),
+			)
+		}
 		return fmt.Errorf("P1-2: invalid order status for ACK, expected=pending, actual=%s, order_no=%s",
 			tx.Status, conf.OrderNo)
 	}
 
 	// 2. 检查ACK时效性（创建时间超过OrderACKTimeout拒绝处理）
 	if time.Since(tx.CreatedAt) > OrderACKTimeout {
+		elapsed := time.Since(tx.CreatedAt)
+		if s.logger != nil {
+			s.logger.Warn("P1-2: ACK rejected due to timeout",
+				zap.String("order_no", conf.OrderNo),
+				zap.Time("order_created_at", tx.CreatedAt),
+				zap.Duration("elapsed", elapsed),
+				zap.Duration("timeout", OrderACKTimeout),
+				zap.Float64("elapsed_seconds", elapsed.Seconds()),
+			)
+		}
 		return fmt.Errorf("P1-2: ACK timeout, order created at %s, timeout=%v, order_no=%s",
 			tx.CreatedAt.Format(time.RFC3339), OrderACKTimeout, conf.OrderNo)
 	}

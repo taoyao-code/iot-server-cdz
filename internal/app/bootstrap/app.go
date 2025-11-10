@@ -18,6 +18,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/metrics"
 	"github.com/taoyao-code/iot-server/internal/protocol/ap3000"
 	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
+	"github.com/taoyao-code/iot-server/internal/service"
 	"github.com/taoyao-code/iot-server/internal/session"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
@@ -89,15 +90,16 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	// 🔥 修复：传入Redis队列，确保心跳ACK能被worker立即发送
 	outboundAdapter := app.NewOutboundAdapter(dbpool, repo, redisQueue)
 
-	// TODO: Week4: 创建CardService（刷卡充电业务）
-	// var cardService bkv.CardServiceAPI = service.NewCardService(...)
+	// P1-2修复: 创建CardService（刷卡充电业务）
+	pricingEngine := service.NewPricingEngine()
+	cardService := service.NewCardService(repo, pricingEngine, log)
 
 	handlerSet := &ap3000.Handlers{Repo: repo, Pusher: pusher, PushURL: pushURL, Metrics: appm}
 
 	// P1修复: 使用NewHandlersWithServices完整初始化BKV处理器
-	// CardService暂时为nil，待Week4实现刷卡充电服务后启用
+	// P1-2修复: 注入CardService，启用订单确认ACK验证
 	// v2.1: 注入Metrics支持充电上报监控（2025-10-31）
-	bkvHandlers := bkv.NewHandlersWithServices(repo, bkvReason, nil, outboundAdapter, eventQueue, deduper)
+	bkvHandlers := bkv.NewHandlersWithServices(repo, bkvReason, cardService, outboundAdapter, eventQueue, deduper)
 	bkvHandlers.Metrics = appm // 注入指标采集器
 
 	log.Info("protocol handlers initialized",
@@ -170,6 +172,19 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 		zap.Duration("check_interval", 1*time.Minute),
 		zap.Duration("pending_threshold", 5*time.Minute),
 		zap.Duration("charging_threshold", 2*time.Hour))
+
+	// ========== 阶段7.7: P1-4启动端口状态同步器(检测端口状态不一致)==========
+	portSyncer := app.NewPortStatusSyncer(repo, redisQueue, appm, log)
+	go portSyncer.Start(ctx)
+	log.Info("P1-4: port status syncer started",
+		zap.Duration("check_interval", 5*time.Minute))
+
+	// ========== 阶段7.8: P1-7启动事件推送器(Outbox模式)==========
+	eventPusher := app.NewEventPusher(repo, eventQueue, log)
+	go eventPusher.Start(ctx)
+	log.Info("P1-7: event pusher started",
+		zap.Duration("check_interval", 10*time.Second),
+		zap.Int("batch_size", 50))
 
 	// ========== 阶段8: 最后启动TCP服务(此时所有依赖已就绪)==========
 	tcpSrv := app.NewTCPServer(cfg.TCP, log) // Week2: 传递logger以支持限流日志
