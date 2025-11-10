@@ -21,6 +21,11 @@ jobs:
         with:
           go-version: "1.24.0"
 
+      - name: 生成 Swagger 文档
+        run: |
+          go install github.com/swaggo/swag/cmd/swag@latest
+          swag init -g cmd/server/main.go -o api/swagger --parseDependency --parseInternal
+
       - name: 获取版本信息
         id: version
         run: |
