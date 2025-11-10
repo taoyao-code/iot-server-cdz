@@ -6,67 +6,102 @@ on:
       - "v*.*.*"
 
 jobs:
-  create-release:
+  release:
     name: 创建 GitHub Release
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: 生成变更日志
-        id: changelog
+      - name: 设置 Go 环境
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.0"
+
+      - name: 获取版本信息
+        id: version
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "发布版本: $VERSION"
 
-          # 提取 CHANGELOG.md 中当前版本的内容
-          if grep -q "$VERSION" CHANGELOG.md; then
-            CHANGELOG=$(sed -n "/## \[$VERSION\]/,/## \[/p" CHANGELOG.md | sed '$d' | tail -n +2)
-            echo "changelog<<EOF" >> $GITHUB_OUTPUT
-            echo "$CHANGELOG" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+      - name: 构建多平台版本
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          BUILD_TIME=$(date -u '+%Y-%m-%d %H:%M:%S')
+
+          # Linux amd64
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+          go build -ldflags="-w -s -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" \
+          -o bin/iot-server-linux-amd64 ./cmd/server
+
+          # Linux arm64
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+          go build -ldflags="-w -s -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" \
+          -o bin/iot-server-linux-arm64 ./cmd/server
+
+          # Darwin amd64
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
+          go build -ldflags="-w -s -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" \
+          -o bin/iot-server-darwin-amd64 ./cmd/server
+
+          # Darwin arm64
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
+          go build -ldflags="-w -s -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" \
+          -o bin/iot-server-darwin-arm64 ./cmd/server
+
+          echo "✅ 多平台构建完成"
+
+      - name: 生成 SHA256 校验和
+        run: |
+          cd bin
+          sha256sum iot-server-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: 提取 CHANGELOG
+        id: changelog
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+
+          if [ -f CHANGELOG.md ]; then
+            # 提取对应版本的 CHANGELOG
+            awk "/## \[${VERSION#v}\]/,/## \[/" CHANGELOG.md | \
+            sed '/## \[/d' | \
+            head -n -1 > /tmp/release_notes.md
+            
+            if [ -s /tmp/release_notes.md ]; then
+              echo "✅ 提取 CHANGELOG 成功"
+              cat /tmp/release_notes.md
+            else
+              echo "⚠️  未找到版本 $VERSION 的 CHANGELOG"
+              echo "版本 $VERSION 发布" > /tmp/release_notes.md
+            fi
           else
-            echo "changelog=无变更日志" >> $GITHUB_OUTPUT
+            echo "⚠️  CHANGELOG.md 不存在"
+            echo "版本 $VERSION 发布" > /tmp/release_notes.md
           fi
 
-      - name: 创建 Release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ steps.changelog.outputs.version }}
-          body: |
-            ## 🎉 版本发布: ${{ steps.changelog.outputs.version }}
-
-            ### 📝 变更内容
-
-            ${{ steps.changelog.outputs.changelog }}
-
-            ### 📦 部署
-
-            ```bash
-            # 拉取镜像
-            docker pull ${{ secrets.DOCKER_USERNAME }}/iot-server:${{ steps.changelog.outputs.version }}
-
-            # 部署
-            export BUILD_VERSION=${{ steps.changelog.outputs.version }}
-            docker-compose up -d
-            ```
-
-            ### 🔗 相关链接
-
-            - [部署文档](./DEPLOYMENT.md)
-            - [API文档](./docs/api/)
-            - [变更日志](./CHANGELOG.md)
+          name: Release ${{ steps.version.outputs.version }}
+          body_path: /tmp/release_notes.md
           draft: false
           prerelease: false
+          files: |
+            bin/iot-server-linux-amd64
+            bin/iot-server-linux-arm64
+            bin/iot-server-darwin-amd64
+            bin/iot-server-darwin-arm64
+            bin/SHA256SUMS
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 上传构建产物
+      - name: 发布通知
+        if: success()
         run: |
-          echo "📦 构建产物上传功能（可选）"
-          # 可以上传编译好的二进制文件
+          echo "🎉 Release ${{ steps.version.outputs.version }} 创建成功！"
+          echo "下载地址: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.version }}"

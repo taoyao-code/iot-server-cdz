@@ -1,301 +1,358 @@
-# GitHub Actions CI/CD 说明
+# GitHub Actions 工作流说明
 
-## 📋 工作流概览
+本目录包含所有 GitHub Actions CI/CD 工作流配置文件。
 
-本项目配置了完整的GitHub Actions CI/CD自动化测试流程。
+## 📋 工作流列表
 
-### 工作流文件
+### 1. CI - 持续集成 (`ci.yml`)
 
-- **`test.yml`** - 主测试工作流
+**触发条件：**
 
-## 🎯 test.yml 工作流
+- Push 到 `main` 或 `develop` 分支
+- 针对 `main` 或 `develop` 的 Pull Request
+- 手动触发
 
-### 触发条件
+**执行内容：**
 
-```yaml
-on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main, develop ]
+- ✅ 代码格式检查 (gofmt)
+- ✅ 静态分析 (go vet)
+- ✅ 单元测试 (带 race 检测)
+- ✅ 测试覆盖率报告
+- ✅ 代码质量检查 (golangci-lint)
+- ✅ 构建验证
+- ✅ Docker 镜像构建
+
+**依赖服务：**
+
+- PostgreSQL 15
+- Redis 7
+
+### 2. Deploy - 测试环境 (`deploy-staging.yml`)
+
+**触发条件：**
+
+- Push 到 `main` 分支（自动）
+- 手动触发（可指定版本）
+
+**执行内容：**
+
+- 构建 Linux 二进制文件
+- 部署到测试服务器
+- 自动健康检查
+- 失败自动回滚
+
+**所需 Secrets：**
+
+- `STAGING_HOST` - 测试服务器地址
+- `STAGING_USER` - SSH 用户名
+- `STAGING_SSH_KEY` - SSH 私钥
+- `STAGING_PORT` - SSH 端口（可选，默认 22）
+
+### 3. Deploy - 生产环境 (`deploy-production.yml`)
+
+**触发条件：**
+
+- Push 版本标签 (`v*.*.*`)
+- 手动触发（需指定版本）
+
+**执行内容：**
+
+- 版本号验证
+- 运行完整测试套件
+- 构建生产版本
+- 创建备份
+- 部署到生产服务器
+- 健康检查（6 次重试）
+- 失败自动回滚
+
+**所需 Secrets：**
+
+- `PROD_HOST` - 生产服务器地址
+- `PROD_USER` - SSH 用户名
+- `PROD_SSH_KEY` - SSH 私钥
+- `PROD_PORT` - SSH 端口（可选，默认 22）
+
+**Environment：**
+
+- 需要配置 `production` 环境
+- 建议启用人工审批
+
+### 4. Release - 版本发布 (`release.yml`)
+
+**触发条件：**
+
+- Push 版本标签 (`v*.*.*`)
+
+**执行内容：**
+
+- 构建多平台二进制文件：
+  - Linux (amd64, arm64)
+  - macOS (amd64, arm64)
+- 生成 SHA256 校验和
+- 从 CHANGELOG.md 提取发布说明
+- 创建 GitHub Release
+- 上传构建产物
+
+## 🚀 使用指南
+
+### 日常开发流程
+
+1. **创建功能分支**
+
+   ```bash
+   git checkout -b feature/new-feature
+   ```
+
+2. **开发并提交代码**
+
+   ```bash
+   git add .
+   git commit -m "feat: 添加新功能"
+   git push origin feature/new-feature
+   ```
+
+3. **创建 Pull Request**
+   - CI 会自动运行所有检查
+   - 通过后即可合并到 `main`
+
+4. **合并到 main**
+   - 自动触发测试环境部署
+
+### 发布生产版本
+
+1. **确保代码已在测试环境验证**
+
+2. **更新 CHANGELOG.md**
+
+   ```bash
+   vim CHANGELOG.md
+   git add CHANGELOG.md
+   git commit -m "docs: 更新 CHANGELOG v1.2.3"
+   git push
+   ```
+
+3. **创建版本标签**
+
+   ```bash
+   git tag -a v1.2.3 -m "Release v1.2.3"
+   git push origin v1.2.3
+   ```
+
+4. **等待工作流执行**
+   - Release 工作流创建 GitHub Release
+   - Production 部署等待审批（如已配置）
+
+5. **审批生产部署**（如已配置）
+   - 进入 Actions → 选择对应的 workflow run
+   - Review deployments → Approve
+
+## ⚙️ 配置说明
+
+### GitHub Secrets 配置
+
+进入仓库 **Settings** → **Secrets and variables** → **Actions**
+
+#### 必需的 Secrets
+
+测试环境：
+
+```
+STAGING_HOST=your-staging-server.com
+STAGING_USER=deploy
+STAGING_SSH_KEY=<SSH私钥内容>
 ```
 
-- 推送到 `main` 或 `develop` 分支时触发
-- 创建或更新针对 `main` 或 `develop` 的PR时触发
+生产环境：
 
-### 包含的Job
+```
+PROD_HOST=your-production-server.com
+PROD_USER=deploy
+PROD_SSH_KEY=<SSH私钥内容>
+```
 
-#### 1. **test** - 完整测试套件
+### GitHub Environments 配置
 
-- **运行环境**: Ubuntu Latest
-- **服务依赖**: 
-  - PostgreSQL 15
-  - Redis 7
-- **执行步骤**:
-  1. 检出代码
-  2. 设置Go 1.23环境
-  3. 下载依赖
-  4. 等待PostgreSQL就绪
-  5. 运行数据库迁移
-  6. 执行所有测试（包含竞态检测）
-  7. 生成覆盖率报告
-  8. 检查覆盖率阈值（≥50%）
-  9. 上传覆盖率到Codecov
+#### 创建 `production` 环境
 
-**覆盖率要求**: ≥50%，否则CI失败
+1. 进入 **Settings** → **Environments** → **New environment**
+2. 名称：`production`
+3. 配置：
+   - ✅ Required reviewers: 添加至少 1 个审批人
+   - ✅ Wait timer: 0 minutes（可选）
+   - ✅ Deployment branches: 限制为 `main` 分支和 `v*.*.*` 标签
 
-#### 2. **storage-pg-tests** - Storage/PG模块专项测试
+#### 创建 `staging` 环境（可选）
 
-- **运行环境**: Ubuntu Latest
-- **服务依赖**: PostgreSQL 15
-- **执行步骤**:
-  1. 检出代码
-  2. 设置Go环境
-  3. 运行数据库迁移
-  4. 执行 `internal/storage/pg/` 所有测试
-  5. 生成模块覆盖率报告
+1. 名称：`staging`
+2. 配置：
+   - 不需要审批人
+   - 允许所有分支
 
-**覆盖率目标**: ≥60%（仅警告，不阻止CI）
+### 服务器准备
 
-**测试内容**:
-- 订单状态流转测试（12个）
-- 异常场景测试（11个）
-- 设备检查测试（10个）
-
-#### 3. **lint** - 代码质量检查
-
-- **工具**: golangci-lint
-- **超时**: 5分钟
-- **用途**: 检查代码规范和潜在问题
-
-#### 4. **build** - 编译检查
-
-- **用途**: 验证代码可以成功编译
-- **输出**: `server` 二进制文件
-
----
-
-## 📊 查看测试结果
-
-### 1. GitHub Actions 界面
-
-访问：`https://github.com/YOUR_ORG/iot-server/actions`
-
-### 2. PR检查状态
-
-每个PR会显示CI状态：
-- ✅ **All checks passed** - 所有测试通过
-- ❌ **Some checks failed** - 部分测试失败
-- 🟡 **Checks running** - 测试进行中
-
-### 3. 覆盖率报告
-
-在每个Job的**Summary**标签页查看：
-- 总体覆盖率统计
-- 各模块覆盖率明细
-- Storage/PG模块详细报告
-
-### 4. Codecov集成
-
-访问：`https://codecov.io/gh/YOUR_ORG/iot-server`
-
-查看：
-- 覆盖率趋势图
-- 未覆盖代码高亮
-- PR覆盖率变化
-
----
-
-## 🔧 本地复现CI环境
-
-### 使用Docker Compose
+在部署服务器上执行：
 
 ```bash
-# 启动测试服务
-docker-compose -f docker-compose.test.yml up -d
+# 1. 创建部署用户
+sudo useradd -m -s /bin/bash deploy
+sudo usermod -aG docker deploy
+
+# 2. 设置 SSH 密钥认证
+sudo -u deploy mkdir -p /home/deploy/.ssh
+# 将 GitHub Actions 的公钥添加到 authorized_keys
+sudo -u deploy vim /home/deploy/.ssh/authorized_keys
+sudo chmod 700 /home/deploy/.ssh
+sudo chmod 600 /home/deploy/.ssh/authorized_keys
+
+# 3. 创建项目目录
+sudo mkdir -p /opt/iot-server
+sudo mkdir -p /opt/backups
+sudo chown deploy:deploy /opt/iot-server /opt/backups
+
+# 4. 部署 docker-compose.yml 和配置文件
+cd /opt/iot-server
+# 上传 docker-compose.yml, configs/production.yaml 等
+```
+
+## 🔧 本地测试
+
+在推送前本地验证：
+
+```bash
+# 代码格式检查
+make fmt-check
 
 # 运行测试
-export TEST_DATABASE_URL="postgres://postgres:postgres@localhost:5432/iot_test?sslmode=disable"
-export REDIS_URL="redis://localhost:6379/0"
-go test ./internal/... -v -race -coverprofile=coverage.out
+make test-all
 
-# 查看覆盖率
-go tool cover -html=coverage.out
-
-# 停止服务
-docker-compose -f docker-compose.test.yml down
+# 构建验证
+make build
 ```
 
-### 使用脚本
+## 📊 工作流状态查看
+
+### 通过 GitHub 网页
+
+1. 进入仓库 → **Actions** 标签
+2. 查看工作流运行历史
+3. 点击具体的 run 查看详情
+
+### 通过 GitHub CLI
 
 ```bash
-# 生成覆盖率报告
-bash scripts/test-coverage.sh
+# 查看最近的工作流运行
+gh run list
+
+# 查看具体工作流详情
+gh run view <run-id>
+
+# 查看工作流日志
+gh run view <run-id> --log
 ```
 
----
+## 🐛 故障排查
 
-## 📈 覆盖率目标
+### CI 失败
 
-| 模块 | 当前 | 目标 | CI阈值 |
-|------|------|------|--------|
-| **整体** | ~29% | **≥50%** | **50%** (失败) |
-| **storage/pg** | 0% → | **≥60%** | 60% (警告) |
-| 订单状态流转 | - | ≥80% | - |
-| 异常场景 | - | ≥70% | - |
-| 设备检查 | - | ≥75% | - |
+**1. 测试失败**
 
----
+- 查看 Actions 日志中的具体错误
+- 本地运行 `make test-all` 重现问题
 
-## 🚨 CI失败处理
-
-### 测试失败
-
-1. 查看失败的测试日志
-2. 本地复现问题
-3. 修复代码后重新提交
-
-### 覆盖率不达标
-
-1. 查看覆盖率报告，找到未覆盖代码
-2. 补充测试用例
-3. 提交后自动重新运行CI
-
-### Lint错误
+**2. 代码格式问题**
 
 ```bash
-# 本地运行lint
-golangci-lint run
+# 自动修复
+make fmt
 
-# 自动修复部分问题
-golangci-lint run --fix
+# 重新提交
+git add .
+git commit --amend --no-edit
+git push -f
 ```
 
----
-
-## 🎓 最佳实践
-
-### 1. 开发流程
+**3. 构建失败**
 
 ```bash
-# 1. 创建分支
-git checkout -b feature/new-feature
+# 清理缓存
+go clean -cache -modcache
 
-# 2. 开发 + 编写测试
-# ...
-
-# 3. 本地测试
-go test ./... -v
-
-# 4. 提交代码
-git push origin feature/new-feature
-
-# 5. 创建PR -> 自动触发CI
-
-# 6. CI通过后合并
+# 重新构建
+make build
 ```
 
-### 2. PR要求
+### 部署失败
 
-- ✅ 所有CI检查通过
-- ✅ 覆盖率≥50%
-- ✅ 无lint错误
-- ✅ Code Review通过
+**1. SSH 连接失败**
 
-### 3. 紧急修复
+- 检查 Secret 中的 SSH_KEY 格式（需包含完整的 BEGIN/END 标记）
+- 验证服务器上的 authorized_keys 配置
 
-如果需要紧急合并但CI失败：
+**2. 健康检查失败**
 
-```bash
-# 仅用于紧急情况
-git commit -m "fix: urgent fix [skip ci]"
+- SSH 到服务器查看容器日志：
+
+  ```bash
+  ssh deploy@server
+  cd /opt/iot-server
+  docker-compose logs iot-server
+  ```
+
+**3. 回滚**
+
+- 系统会自动回滚
+- 如需手动回滚，SSH 到服务器：
+
+  ```bash
+  cd /opt/iot-server
+  cp /opt/backups/latest/iot-server.backup ./iot-server
+  docker-compose restart iot-server
+  ```
+
+## 📝 最佳实践
+
+### 提交规范
+
+使用 [Conventional Commits](https://www.conventionalcommits.org/)：
+
+```
+feat: 添加新功能
+fix: 修复 Bug
+docs: 文档更新
+style: 代码格式调整
+refactor: 代码重构
+test: 测试相关
+chore: 构建/工具链相关
 ```
 
-⚠️ **不推荐**，仅在紧急情况使用
+### 版本管理
 
----
+遵循 [语义化版本](https://semver.org/)：
 
-## 🔐 Secrets配置
+```
+MAJOR.MINOR.PATCH
+1.2.3
 
-### 必需Secrets
-
-无需配置，使用GitHub内置服务
-
-### 可选Secrets
-
-如需Codecov集成：
-
-1. 访问 https://codecov.io
-2. 关联GitHub仓库
-3. 获取 `CODECOV_TOKEN`
-4. 添加到 GitHub Secrets: `Settings -> Secrets -> Actions -> New repository secret`
-
----
-
-## 📝 维护指南
-
-### 更新Go版本
-
-编辑 `.github/workflows/test.yml`:
-
-```yaml
-- name: Set up Go
-  uses: actions/setup-go@v5
-  with:
-    go-version: '1.24'  # 更新版本号
+MAJOR: 不兼容的 API 修改
+MINOR: 向下兼容的功能新增
+PATCH: 向下兼容的问题修正
 ```
 
-### 添加新测试Job
+### 部署时机
 
-```yaml
-new-test-job:
-  name: New Test Suite
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-go@v5
-    - run: go test ./new-module/... -v
-```
+- **测试环境**: 每次合并到 `main` 自动部署
+- **生产环境**: 选择业务低峰期，避开周五和节假日
 
-### 调整覆盖率阈值
+## 🔗 相关资源
 
-编辑覆盖率检查步骤：
+- [CI/CD 完整指南](../../docs/CI-CD-GUIDE.md)
+- [GitHub Secrets 配置指南](../../docs/GITHUB-SECRETS-SETUP.md)
+- [GitHub Actions 官方文档](https://docs.github.com/actions)
 
-```bash
-if (( $(echo "$COVERAGE < 60" | bc -l) )); then
-  echo "❌ 覆盖率低于 60%"
-  exit 1
-fi
-```
+## 📞 支持
 
----
+如有问题，请：
 
-## 📞 故障排查
-
-### Q: 数据库连接失败
-
-A: 检查 `services.postgres` 健康检查是否通过
-
-### Q: 测试超时
-
-A: 增加超时时间或优化慢测试
-
-### Q: 覆盖率计算错误
-
-A: 确保所有包都包含在测试范围内
-
----
-
-## ✅ 检查清单
-
-推送代码前：
-
-- [ ] 本地测试通过
-- [ ] 新代码有测试覆盖
-- [ ] Lint检查通过
-- [ ] 代码可以编译
-
----
-
-**最后更新**: 2025-11-10
-
+1. 查看 Actions 日志
+2. 检查本文档的故障排查章节
+3. 联系开发团队
