@@ -1022,7 +1022,7 @@ func (r *Repository) CompleteOrderByPort(ctx context.Context, deviceID int64, po
 // GetChargingOrderByPort 获取指定设备端口上的charging订单
 func (r *Repository) GetChargingOrderByPort(ctx context.Context, deviceID int64, portNo int) (*Order, error) {
 	const q = `SELECT o.id, o.order_no, o.device_id, o.port_no, o.status, 
-	                  o.start_time, o.end_time, o.kwh_01, o.amount_cent,
+	                  o.start_time, o.end_time, o.kwh_0p01, o.amount_cent,
 	                  d.phy_id
 	           FROM orders o
 	           JOIN devices d ON o.device_id = d.id

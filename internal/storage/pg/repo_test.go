@@ -51,10 +51,18 @@ func setupTestRepo(t *testing.T) *Repository {
 // cleanupTestData 清理测试数据
 func cleanupTestData(t *testing.T, repo *Repository, devicePhyID string) {
 	ctx := context.Background()
-	// 删除测试设备及其关联数据（级联删除）
-	_, err := repo.Pool.Exec(ctx, "DELETE FROM devices WHERE phy_id = $1", devicePhyID)
+	
+	// 先删除订单记录（避免外键约束冲突）
+	// orders 表对 devices 有 ON DELETE RESTRICT 约束
+	_, err := repo.Pool.Exec(ctx, "DELETE FROM orders WHERE device_id IN (SELECT id FROM devices WHERE phy_id = $1)", devicePhyID)
 	if err != nil {
-		t.Logf("清理测试数据失败: %v", err)
+		t.Logf("清理订单数据失败: %v", err)
+	}
+	
+	// 然后删除设备及其级联关联数据（cmd_log, ports等有ON DELETE CASCADE）
+	_, err = repo.Pool.Exec(ctx, "DELETE FROM devices WHERE phy_id = $1", devicePhyID)
+	if err != nil {
+		t.Logf("清理设备数据失败: %v", err)
 	}
 }
 
