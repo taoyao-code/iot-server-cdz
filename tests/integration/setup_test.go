@@ -14,11 +14,11 @@ import (
 
 var (
 	// 全局测试环境
-	testDB       *pgxpool.Pool
-	testRedis    *redis.Client
-	dockerMgr    *testutil.DockerComposeManager
-	skipDocker   bool
-	skipCleanup  bool
+	testDB      *pgxpool.Pool
+	testRedis   *redis.Client
+	dockerMgr   *testutil.DockerComposeManager
+	skipDocker  bool
+	skipCleanup bool
 )
 
 // TestMain 控制整个测试套件的生命周期

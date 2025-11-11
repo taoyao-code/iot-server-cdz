@@ -115,13 +115,13 @@ func TestRedisHashOperations(t *testing.T) {
 
 	t.Run("SessionDetails_Hash", func(t *testing.T) {
 		key := "session:details:TEST_001"
-		
+
 		// 设置会话详情
 		sessionData := map[string]interface{}{
-			"device_id":  "TEST_001",
+			"device_id":    "TEST_001",
 			"connected_at": time.Now().Unix(),
-			"ip_addr":    "192.168.1.100",
-			"protocol":   "AP3000",
+			"ip_addr":      "192.168.1.100",
+			"protocol":     "AP3000",
 		}
 
 		err := rdb.HSet(ctx, key, sessionData).Err()

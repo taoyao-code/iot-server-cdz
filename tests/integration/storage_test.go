@@ -20,7 +20,7 @@ func TestStorageDeviceOperations(t *testing.T) {
 
 	t.Run("EnsureDevice_NewDevice", func(t *testing.T) {
 		phyID := "TEST_DEVICE_001"
-		
+
 		deviceID, err := repo.EnsureDevice(context.Background(), phyID)
 		require.NoError(t, err)
 		assert.Greater(t, deviceID, int64(0))
@@ -47,7 +47,7 @@ func TestStorageDeviceOperations(t *testing.T) {
 
 	t.Run("TouchDeviceLastSeen", func(t *testing.T) {
 		phyID := "TEST_DEVICE_003"
-		
+
 		deviceID, err := repo.EnsureDevice(context.Background(), phyID)
 		require.NoError(t, err)
 
@@ -128,7 +128,7 @@ func TestStorageOrderOperations(t *testing.T) {
 		device := testutil.CreateTestDevice(t, db, "")
 		portNo := 1
 		orderNo := "TEST_ORDER_001"
-		status := 1 // 进行中
+		status := 1   // 进行中
 		kwh01 := 1500 // 15.00 kWh
 
 		err := repo.UpsertOrderProgress(context.Background(), device.ID, portNo, orderNo, 0, kwh01, status, nil)
@@ -171,8 +171,8 @@ func TestStorageOrderOperations(t *testing.T) {
 		portNo := 1
 		orderNo := "TEST_ORDER_003"
 		durationSec := 3600 // 1小时
-		kwh01 := 5000 // 50.00 kWh
-		reason := 1 // 正常结束
+		kwh01 := 5000       // 50.00 kWh
+		reason := 1         // 正常结束
 
 		err := repo.SettleOrder(context.Background(), device.ID, portNo, orderNo, durationSec, kwh01, reason)
 		require.NoError(t, err)
