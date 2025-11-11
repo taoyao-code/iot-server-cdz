@@ -18,7 +18,7 @@ jobs:
   deploy:
     name: 部署到测试环境
     runs-on: ubuntu-latest
-    environment: staging
+    environment: BuJia
     # 防止 dependabot 或其他自动化触发时无法访问 secrets
     if: github.actor != 'dependabot[bot]'
 
@@ -77,16 +77,16 @@ jobs:
 
       - name: 预检与准备 SSH
         env:
-          SSH_HOST: ${{ secrets.STAGING_HOST || secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.STAGING_USER || secrets.SSH_USER }}
-          SSH_KEY: ${{ secrets.STAGING_SSH_KEY || secrets.SSH_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
           SSH_PORT: ${{ secrets.STAGING_PORT || '22' }}
         run: |
           set -Eeuo pipefail
 
           # 1) 校验必需变量
           if [[ -z "${SSH_HOST:-}" || -z "${SSH_USER:-}" || -z "${SSH_KEY:-}" ]]; then
-            echo "❌ 缺少必需的 SSH 配置，请在环境 'staging' 设置 STAGING_HOST / STAGING_USER / STAGING_SSH_KEY（或使用通用 SSH_HOST/SSH_USER/SSH_KEY 作为兜底）。"
+            echo "❌ 缺少必需的 SSH 配置，请在环境 'BuJia' 设置 SSH_HOST / SSH_USER / SSH_KEY。"
             echo "当前值:"
             echo "  SSH_HOST: ${SSH_HOST:-<未设置>}"
             echo "  SSH_USER: ${SSH_USER:-<未设置>}"
@@ -122,8 +122,8 @@ jobs:
 
       - name: 传输与部署到测试服务器
         env:
-          SSH_HOST: ${{ secrets.STAGING_HOST || secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.STAGING_USER || secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PORT: ${{ secrets.STAGING_PORT || '22' }}
         run: |
           set -Eeuo pipefail
