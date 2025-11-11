@@ -1,6 +1,6 @@
 module github.com/taoyao-code/iot-server
 
-go 1.24.0
+go 1.25.4
 
 require (
 	github.com/gin-gonic/gin v1.10.1
