@@ -6,9 +6,22 @@ on:
       - "v*.*.*"
 
 jobs:
-  release:
-    name: 创建 GitHub Release
+  # 并行构建多平台二进制
+  build:
+    name: 构建 - ${{ matrix.os }}-${{ matrix.arch }}
     runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm64
+          - os: darwin
+            arch: amd64
+          - os: darwin
+            arch: arm64
 
     steps:
       - name: 检出代码
@@ -21,10 +34,36 @@ jobs:
         with:
           go-version: "1.24.0"
 
-      - name: 生成 Swagger 文档
+      - name: 缓存 Go 模块
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      # 尝试从最近的 CI workflow 下载 Swagger 文档，失败则本地生成
+      - name: 下载 Swagger 文档
+        uses: dawidd6/action-download-artifact@v3
+        continue-on-error: true
+        with:
+          workflow: ci.yml
+          name: swagger-docs
+          path: api/swagger/
+          if_no_artifact_found: ignore
+
+      - name: 生成 Swagger 文档（如果未下载）
         run: |
-          go install github.com/swaggo/swag/cmd/swag@latest
-          swag init -g cmd/server/main.go -o api/swagger --parseDependency --parseInternal
+          if [ ! -f "api/swagger/swagger.json" ]; then
+            echo "未找到 Swagger artifact，本地生成..."
+            go install github.com/swaggo/swag/cmd/swag@latest
+            swag init -g cmd/server/main.go -o api/swagger --parseDependency --parseInternal
+            echo "✅ Swagger 文档已生成"
+          else
+            echo "✅ 使用下载的 Swagger 文档"
+          fi
 
       - name: 获取版本信息
         id: version
@@ -33,37 +72,65 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "发布版本: $VERSION"
 
-      - name: 构建多平台版本
+      - name: 验证版本号
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ 版本号格式错误: $VERSION"
+            echo "正确格式: v1.2.3"
+            exit 1
+          fi
+          echo "✅ 版本号验证通过"
+
+      - name: 构建 ${{ matrix.os }}-${{ matrix.arch }}
         run: |
           VERSION=${{ steps.version.outputs.version }}
           BUILD_TIME=$(date -u '+%Y-%m-%d %H:%M:%S')
 
-          # Linux amd64
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+          CGO_ENABLED=0 GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} \
           go build -ldflags="-w -s -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" \
-          -o bin/iot-server-linux-amd64 ./cmd/server
+          -o bin/iot-server-${{ matrix.os }}-${{ matrix.arch }} ./cmd/server
 
-          # Linux arm64
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-          go build -ldflags="-w -s -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" \
-          -o bin/iot-server-linux-arm64 ./cmd/server
+          echo "✅ 构建完成: iot-server-${{ matrix.os }}-${{ matrix.arch }}"
 
-          # Darwin amd64
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
-          go build -ldflags="-w -s -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" \
-          -o bin/iot-server-darwin-amd64 ./cmd/server
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.os }}-${{ matrix.arch }}
+          path: bin/iot-server-${{ matrix.os }}-${{ matrix.arch }}
+          retention-days: 1
 
-          # Darwin arm64
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
-          go build -ldflags="-w -s -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" \
-          -o bin/iot-server-darwin-arm64 ./cmd/server
+  # 创建 GitHub Release
+  release:
+    name: 创建 GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
 
-          echo "✅ 多平台构建完成"
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 获取版本信息
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "发布版本: $VERSION"
+
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: bin/
+          merge-multiple: true
 
       - name: 生成 SHA256 校验和
         run: |
           cd bin
           sha256sum iot-server-* > SHA256SUMS
+          echo "✅ SHA256 校验和:"
           cat SHA256SUMS
 
       - name: 提取 CHANGELOG
@@ -76,7 +143,7 @@ jobs:
             awk "/## \[${VERSION#v}\]/,/## \[/" CHANGELOG.md | \
             sed '/## \[/d' | \
             head -n -1 > /tmp/release_notes.md
-            
+
             if [ -s /tmp/release_notes.md ]; then
               echo "✅ 提取 CHANGELOG 成功"
               cat /tmp/release_notes.md
@@ -88,6 +155,21 @@ jobs:
             echo "⚠️  CHANGELOG.md 不存在"
             echo "版本 $VERSION 发布" > /tmp/release_notes.md
           fi
+
+      - name: 验证构建产物
+        run: |
+          echo "📦 构建产物清单:"
+          ls -lh bin/
+
+          # 验证所有必需的二进制文件是否存在
+          for file in iot-server-linux-amd64 iot-server-linux-arm64 iot-server-darwin-amd64 iot-server-darwin-arm64; do
+            if [ ! -f "bin/$file" ]; then
+              echo "❌ 缺少构建产物: $file"
+              exit 1
+            fi
+          done
+
+          echo "✅ 所有构建产物验证通过"
 
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v1

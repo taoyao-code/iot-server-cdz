@@ -25,10 +25,36 @@ jobs:
         with:
           go-version: "1.24.0"
 
-      - name: 生成 Swagger 文档
+      - name: 缓存 Go 模块
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      # 尝试从最近的 CI workflow 下载 Swagger 文档，失败则本地生成
+      - name: 下载 Swagger 文档
+        uses: dawidd6/action-download-artifact@v3
+        continue-on-error: true
+        with:
+          workflow: ci.yml
+          name: swagger-docs
+          path: api/swagger/
+          if_no_artifact_found: ignore
+
+      - name: 生成 Swagger 文档（如果未下载）
         run: |
-          go install github.com/swaggo/swag/cmd/swag@latest
-          swag init -g cmd/server/main.go -o api/swagger --parseDependency --parseInternal
+          if [ ! -f "api/swagger/swagger.json" ]; then
+            echo "未找到 Swagger artifact，本地生成..."
+            go install github.com/swaggo/swag/cmd/swag@latest
+            swag init -g cmd/server/main.go -o api/swagger --parseDependency --parseInternal
+            echo "✅ Swagger 文档已生成"
+          else
+            echo "✅ 使用下载的 Swagger 文档"
+          fi
 
       - name: 构建 Linux 二进制
         run: |
@@ -65,36 +91,63 @@ jobs:
           # 部署
           ssh -p $SSH_PORT -i ~/.ssh/deploy_key ${SSH_USER}@${SSH_HOST} << 'ENDSSH'
             set -e
-            
-            echo "🚀 开始部署..."
-            
+
+            echo "🚀 开始部署测试环境..."
+
+            # 执行数据库迁移
+            echo "📊 执行数据库迁移..."
+            cd /opt/iot-server
+            if [ -f "./bin/migrate.sh" ]; then
+              ./bin/migrate.sh || echo "⚠️ 迁移脚本未找到，跳过"
+            else
+              echo "⚠️ 迁移脚本未找到，跳过数据库迁移"
+            fi
+
             # 备份当前版本
             if [ -f /opt/iot-server/iot-server ]; then
               cp /opt/iot-server/iot-server /opt/iot-server/iot-server.backup
               echo "✅ 备份完成"
             fi
-            
+
             # 替换二进制
             mv /tmp/iot-server-new /opt/iot-server/iot-server
             chmod +x /opt/iot-server/iot-server
-            
-            # 重启服务
+            echo "✅ 二进制文件已更新"
+
+            # 重启服务（统一使用 docker compose）
             cd /opt/iot-server
-            docker-compose restart iot-server || docker compose restart iot-server
-            
-            echo "✅ 服务已重启"
-            
-            # 等待服务启动
-            sleep 5
-            
-            # 健康检查
-            if curl -f http://localhost:7065/healthz > /dev/null 2>&1; then
-              echo "✅ 健康检查通过"
+            if command -v docker compose &> /dev/null; then
+              docker compose restart iot-server
             else
+              docker-compose restart iot-server
+            fi
+
+            echo "✅ 服务已重启"
+
+            # 增强健康检查（10 秒初始等待 + 6 次重试）
+            echo "🔍 健康检查中..."
+            sleep 10
+
+            HEALTH_CHECK_PASSED=false
+            for i in {1..6}; do
+              echo "尝试 $i/6..."
+              if curl -f http://localhost:7055/healthz > /dev/null 2>&1; then
+                echo "✅ 健康检查通过"
+                HEALTH_CHECK_PASSED=true
+                break
+              fi
+              sleep 5
+            done
+
+            if [ "$HEALTH_CHECK_PASSED" = false ]; then
               echo "❌ 健康检查失败，回滚中..."
               if [ -f /opt/iot-server/iot-server.backup ]; then
                 mv /opt/iot-server/iot-server.backup /opt/iot-server/iot-server
-                docker-compose restart iot-server || docker compose restart iot-server
+                if command -v docker compose &> /dev/null; then
+                  docker compose restart iot-server
+                else
+                  docker-compose restart iot-server
+                fi
                 echo "✅ 已回滚到之前版本"
               fi
               exit 1

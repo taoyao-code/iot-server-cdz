@@ -27,10 +27,36 @@ jobs:
         with:
           go-version: "1.24.0"
 
-      - name: 生成 Swagger 文档
+      - name: 缓存 Go 模块
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      # 尝试从最近的 CI workflow 下载 Swagger 文档，失败则本地生成
+      - name: 下载 Swagger 文档
+        uses: dawidd6/action-download-artifact@v3
+        continue-on-error: true
+        with:
+          workflow: ci.yml
+          name: swagger-docs
+          path: api/swagger/
+          if_no_artifact_found: ignore
+
+      - name: 生成 Swagger 文档（如果未下载）
         run: |
-          go install github.com/swaggo/swag/cmd/swag@latest
-          swag init -g cmd/server/main.go -o api/swagger --parseDependency --parseInternal
+          if [ ! -f "api/swagger/swagger.json" ]; then
+            echo "未找到 Swagger artifact，本地生成..."
+            go install github.com/swaggo/swag/cmd/swag@latest
+            swag init -g cmd/server/main.go -o api/swagger --parseDependency --parseInternal
+            echo "✅ Swagger 文档已生成"
+          else
+            echo "✅ 使用下载的 Swagger 文档"
+          fi
 
       - name: 验证版本号
         run: |
@@ -83,52 +109,71 @@ jobs:
           # 部署
           ssh -p $SSH_PORT -i ~/.ssh/deploy_key ${SSH_USER}@${SSH_HOST} << ENDSSH
             set -e
-            
+
             echo "🚀 开始生产环境部署..."
             echo "版本: ${VERSION}"
-            
+
+            # 执行数据库迁移
+            echo "📊 执行数据库迁移..."
+            cd /opt/iot-server
+            if [ -f "./bin/migrate.sh" ]; then
+              ./bin/migrate.sh || echo "⚠️ 迁移脚本执行失败"
+            else
+              echo "⚠️ 迁移脚本未找到，跳过数据库迁移"
+            fi
+
             # 创建备份
             BACKUP_DIR="/opt/backups/\$(date +%Y%m%d_%H%M%S)_${VERSION}"
             mkdir -p "\$BACKUP_DIR"
-            
+
             if [ -f /opt/iot-server/iot-server ]; then
               cp /opt/iot-server/iot-server "\$BACKUP_DIR/iot-server.backup"
               echo "✅ 备份完成: \$BACKUP_DIR"
             fi
-            
+
             # 替换二进制
             mv /tmp/iot-server-${VERSION} /opt/iot-server/iot-server
             chmod +x /opt/iot-server/iot-server
-            
-            # 重启服务（优雅重启）
+            echo "✅ 二进制文件已更新"
+
+            # 重启服务（统一使用 docker compose）
             cd /opt/iot-server
-            docker-compose restart iot-server || docker compose restart iot-server
-            
-            echo "✅ 服务已重启"
-            
-            # 等待服务启动
-            echo "⏳ 等待服务启动..."
-            sleep 10
-            
-            # 健康检查（多次尝试）
-            for i in {1..6}; do
-              if curl -f http://localhost:7065/healthz > /dev/null 2>&1; then
-                echo "✅ 健康检查通过（尝试 \$i/6）"
-                exit 0
-              else
-                echo "⏳ 健康检查失败，重试中... (\$i/6)"
-                sleep 5
-              fi
-            done
-            
-            # 健康检查失败，回滚
-            echo "❌ 健康检查失败，执行回滚..."
-            if [ -f "\$BACKUP_DIR/iot-server.backup" ]; then
-              mv "\$BACKUP_DIR/iot-server.backup" /opt/iot-server/iot-server
-              docker-compose restart iot-server || docker compose restart iot-server
-              echo "✅ 已回滚到之前版本"
+            if command -v docker compose &> /dev/null; then
+              docker compose restart iot-server
+            else
+              docker-compose restart iot-server
             fi
-            exit 1
+
+            echo "✅ 服务已重启"
+
+            # 增强健康检查（15 秒初始等待 + 8 次重试）
+            echo "🔍 健康检查中..."
+            sleep 15
+
+            HEALTH_CHECK_PASSED=false
+            for i in {1..8}; do
+              echo "尝试 \$i/8..."
+              if curl -f http://localhost:7055/healthz > /dev/null 2>&1; then
+                echo "✅ 健康检查通过"
+                HEALTH_CHECK_PASSED=true
+                break
+              fi
+              sleep 5
+            done
+
+            if [ "\$HEALTH_CHECK_PASSED" = false ]; then
+              echo "❌ 健康检查失败，执行回滚..."
+              if [ -f "\$BACKUP_DIR/iot-server.backup" ]; then
+                mv "\$BACKUP_DIR/iot-server.backup" /opt/iot-server/iot-server
+                if command -v docker compose &> /dev/null; then
+                  docker compose restart iot-server
+                else
+                  docker-compose restart iot-server
+                fi
+                echo "✅ 已回滚到之前版本"
+              fi
+              exit 1
+            fi
           ENDSSH
 
           echo "🎉 生产环境部署成功！"
