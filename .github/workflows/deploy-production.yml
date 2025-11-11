@@ -10,6 +10,10 @@ on:
         description: "部署版本 (如: v1.2.3)"
         required: true
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   deploy:
     name: 部署到生产环境

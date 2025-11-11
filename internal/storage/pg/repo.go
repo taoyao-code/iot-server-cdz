@@ -970,7 +970,7 @@ func (r *Repository) UpdateOrderToCharging(ctx context.Context, orderNo string, 
 
 	// 原有逻辑：仅pending(0)可以转为charging
 	const q = `UPDATE orders 
-	           SET status = 1, start_time = $2, updated_at = NOW()
+	           SET status = 2, start_time = $2, updated_at = NOW()
 	           WHERE order_no = $1 AND status = 0
 	           RETURNING id`
 
@@ -1004,7 +1004,7 @@ func (r *Repository) CancelOrderByPort(ctx context.Context, deviceID int64, port
 func (r *Repository) CompleteOrderByPort(ctx context.Context, deviceID int64, portNo int, endTime time.Time, reason int) error {
 	const q = `UPDATE orders 
 	           SET status = 2, end_time = $3, end_reason = $4, updated_at = NOW()
-	           WHERE device_id = $1 AND port_no = $2 AND status = 1
+	           WHERE device_id = $1 AND port_no = $2 AND status = 2
 	           RETURNING order_no`
 
 	var orderNo string
@@ -1022,11 +1022,11 @@ func (r *Repository) CompleteOrderByPort(ctx context.Context, deviceID int64, po
 // GetChargingOrderByPort 获取指定设备端口上的charging订单
 func (r *Repository) GetChargingOrderByPort(ctx context.Context, deviceID int64, portNo int) (*Order, error) {
 	const q = `SELECT o.id, o.order_no, o.device_id, o.port_no, o.status, 
-	                  o.start_time, o.end_time, o.kwh_01, o.amount_cent,
+	                  o.start_time, o.end_time, o.kwh_0p01, o.amount_cent,
 	                  d.phy_id
 	           FROM orders o
 	           JOIN devices d ON o.device_id = d.id
-	           WHERE o.device_id = $1 AND o.port_no = $2 AND o.status = 1
+	           WHERE o.device_id = $1 AND o.port_no = $2 AND o.status = 2
 	           ORDER BY o.created_at DESC
 	           LIMIT 1`
 

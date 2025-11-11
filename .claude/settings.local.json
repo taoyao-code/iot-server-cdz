@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git show:*)"
+      "Bash(git show:*)",
+      "Bash(git rev-parse:*)",
+      "mcp__github__list_commits"
     ],
     "deny": [],
     "ask": []

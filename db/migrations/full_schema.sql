@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS devices (
     rssi            INTEGER,             -- 信号强度
     fw_ver          TEXT,                -- 固件版本(GN协议使用)
     last_seen_at    TIMESTAMPTZ,
+    online          BOOLEAN NOT NULL DEFAULT false,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -48,18 +49,21 @@ CREATE TABLE IF NOT EXISTS ports (
 -- orders: 订单
 CREATE TABLE IF NOT EXISTS orders (
     id              BIGSERIAL PRIMARY KEY,
-    device_id       BIGINT NOT NULL REFERENCES devices(id) ON DELETE RESTRICT,
+    device_id       BIGINT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
     port_no         INT NOT NULL,
     order_no        TEXT NOT NULL,
     start_time      TIMESTAMPTZ,
     end_time        TIMESTAMPTZ,
     kwh_0p01        BIGINT,      -- 以 0.01kWh 为单位
     amount_cent     BIGINT,      -- 分
+    end_reason      INT,         -- 结束原因
     status          INT NOT NULL DEFAULT 0,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(order_no)
 );
+-- 索引：设备 + 创建时间（优化查询最新订单）
+CREATE INDEX IF NOT EXISTS idx_orders_device_created ON orders(device_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_device_port ON orders(device_id, port_no);
 CREATE INDEX IF NOT EXISTS idx_orders_time ON orders(start_time, end_time);
 
@@ -186,18 +190,18 @@ WHERE last_seen_at IS NOT NULL;
 COMMENT ON INDEX idx_devices_last_seen IS '优化在线设备查询';
 
 -- 2. 订单查询优化（复合索引）
--- 查询: SELECT * FROM orders WHERE phy_id = 'DEV001' ORDER BY created_at DESC
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_orders_phy_created 
-ON orders(phy_id, created_at DESC);
+-- 调整：orders不含phy_id，改为 device_id + created_at（避免无效索引）
+CREATE INDEX IF NOT EXISTS idx_orders_device_created_v2 
+ON orders(device_id, created_at DESC);
 
-COMMENT ON INDEX idx_orders_phy_created IS '优化设备订单查询';
+COMMENT ON INDEX idx_orders_device_created_v2 IS '优化设备订单查询 (by device_id)';
 
 -- 3. 命令日志查询优化
--- 查询: SELECT * FROM cmd_logs WHERE device_id = 123 AND created_at BETWEEN ...
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_cmd_logs_device_created 
-ON cmd_logs(device_id, created_at DESC);
+-- 查询: SELECT * FROM cmd_log WHERE device_id = 123 AND created_at BETWEEN ...
+CREATE INDEX IF NOT EXISTS idx_cmdlog_device_created 
+ON cmd_log(device_id, created_at DESC);
 
-COMMENT ON INDEX idx_cmd_logs_device_created IS '优化设备命令日志查询';
+COMMENT ON INDEX idx_cmdlog_device_created IS '优化设备命令日志查询';
 
 -- 4. 下行队列状态索引（如果使用PG队列）
 -- 查询: SELECT * FROM outbound_queue WHERE status IN (0, 1) ORDER BY priority DESC
@@ -214,12 +218,7 @@ ON ports(device_id, port_no);
 
 COMMENT ON INDEX idx_ports_device_no IS '优化端口状态查询';
 
--- 6. 订单hex查询优化（用于重复订单检测）
--- 查询: SELECT * FROM orders WHERE order_hex = '...'
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_orders_hex 
-ON orders(order_hex);
-
-COMMENT ON INDEX idx_orders_hex IS '优化订单hex查询（防重）';
+-- 6. 订单hex查询优化（orders未包含该列，移除）
 -- Week4: 刷卡充电系统数据库设计
 -- 创建卡片表和交易表，支持刷卡充电业务
 

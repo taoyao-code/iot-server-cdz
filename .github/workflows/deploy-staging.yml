@@ -10,6 +10,10 @@ on:
         required: false
         default: ""
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   deploy:
     name: 部署到测试环境
