@@ -19,6 +19,8 @@ jobs:
     name: 部署到测试环境
     runs-on: ubuntu-latest
     environment: staging
+    # 防止 dependabot 或其他自动化触发时无法访问 secrets
+    if: github.actor != 'dependabot[bot]'
 
     steps:
       - name: 检出代码
@@ -73,27 +75,70 @@ jobs:
 
           echo "✅ 构建完成: bin/iot-server-linux (version: ${VERSION})"
 
-      - name: 部署到测试服务器
+      - name: 预检与准备 SSH
         env:
-          SSH_HOST: ${{ secrets.STAGING_HOST }}
-          SSH_USER: ${{ secrets.STAGING_USER }}
-          SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          SSH_HOST: ${{ secrets.STAGING_HOST || secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_USER || secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.STAGING_SSH_KEY || secrets.SSH_KEY }}
           SSH_PORT: ${{ secrets.STAGING_PORT || '22' }}
         run: |
-          # 设置 SSH 密钥
+          set -Eeuo pipefail
+
+          # 1) 校验必需变量
+          if [[ -z "${SSH_HOST:-}" || -z "${SSH_USER:-}" || -z "${SSH_KEY:-}" ]]; then
+            echo "❌ 缺少必需的 SSH 配置，请在环境 'staging' 设置 STAGING_HOST / STAGING_USER / STAGING_SSH_KEY（或使用通用 SSH_HOST/SSH_USER/SSH_KEY 作为兜底）。"
+            echo "当前值:"
+            echo "  SSH_HOST: ${SSH_HOST:-<未设置>}"
+            echo "  SSH_USER: ${SSH_USER:-<未设置>}"
+            echo "  SSH_KEY:  $(if [ -z "${SSH_KEY:-}" ]; then echo "<未设置>"; else echo "<已设置>"; fi)"
+            exit 1
+          fi
+
+          # 2) 准备密钥（兼容明文或 base64）
           mkdir -p ~/.ssh
-          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          if [[ "$SSH_KEY" == *"BEGIN"* ]]; then
+            printf "%s\n" "$SSH_KEY" > ~/.ssh/deploy_key
+          else
+            echo "$SSH_KEY" | base64 -d > ~/.ssh/deploy_key 2>/dev/null || {
+              echo "❌ SSH_KEY 既不是明文私钥也不是有效的 base64 编码，请检查 secret 内容。"
+              exit 1
+            }
+          fi
           chmod 600 ~/.ssh/deploy_key
 
-          # 添加主机到 known_hosts
-          ssh-keyscan -p $SSH_PORT -H $SSH_HOST >> ~/.ssh/known_hosts 2>/dev/null || true
+          # 3) known_hosts 与连通性检查
+          echo "🔍 添加主机到 known_hosts: $SSH_HOST:$SSH_PORT"
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-          # 上传二进制文件
-          scp -P $SSH_PORT -i ~/.ssh/deploy_key \
-            bin/iot-server-linux ${SSH_USER}@${SSH_HOST}:/tmp/iot-server-new
+          echo "🔍 测试连通性: $SSH_HOST:$SSH_PORT"
+          if ! timeout 10 bash -c "cat < /dev/null > /dev/tcp/$SSH_HOST/$SSH_PORT" 2>/dev/null; then
+            echo "❌ 无法连接到 $SSH_HOST:$SSH_PORT，请检查:"
+            echo "  1. 主机名/IP 是否正确"
+            echo "  2. 端口是否开放"
+            echo "  3. 安全组/防火墙是否允许 GitHub Actions IP 访问"
+            exit 1
+          fi
+          echo "✅ 连通性检查通过"
 
-          # 部署
-          ssh -p $SSH_PORT -i ~/.ssh/deploy_key ${SSH_USER}@${SSH_HOST} << 'ENDSSH'
+      - name: 传输与部署到测试服务器
+        env:
+          SSH_HOST: ${{ secrets.STAGING_HOST || secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_USER || secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.STAGING_PORT || '22' }}
+        run: |
+          set -Eeuo pipefail
+
+          echo "📦 上传二进制文件到 $SSH_HOST..."
+          scp -P "$SSH_PORT" -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o IdentitiesOnly=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            bin/iot-server-linux "${SSH_USER}@${SSH_HOST}:/tmp/iot-server-new"
+
+          echo "🚀 执行远程部署..."
+          ssh -p "$SSH_PORT" -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o IdentitiesOnly=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            "${SSH_USER}@${SSH_HOST}" << 'ENDSSH'
             set -e
 
             echo "🚀 开始部署测试环境..."
@@ -102,7 +147,7 @@ jobs:
             echo "📊 执行数据库迁移..."
             cd /opt/iot-server
             if [ -f "./bin/migrate.sh" ]; then
-              ./bin/migrate.sh || echo "⚠️ 迁移脚本未找到，跳过"
+              ./bin/migrate.sh || echo "⚠️ 迁移脚本未找到或执行失败，跳过"
             else
               echo "⚠️ 迁移脚本未找到，跳过数据库迁移"
             fi
