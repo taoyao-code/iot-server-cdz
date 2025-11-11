@@ -148,9 +148,15 @@ main() {
     run_test "P1-2: 延迟ACK拒绝" "go test -run TestHandleOrderConfirmation ./internal/service/" true
     run_test "P1-4: 端口状态同步" "go test -run TestPortStatusSyncer ./internal/app/" true
 
-    # 5. 集成测试（可选）
-    log_info "阶段 5: 集成测试（可选）"
-    run_test "配置文件加载测试" "go test -run TestConfig ./internal/config/..." false
+    # 5. 集成测试
+    log_info "阶段 5: 集成测试"
+    if command -v docker &> /dev/null && docker info &> /dev/null; then
+        log_info "检测到 Docker，运行集成测试..."
+        run_test "存储层集成测试" "make test-integration" false
+    else
+        log_warning "未检测到 Docker，跳过集成测试"
+        SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
+    fi
 
     # 6. 覆盖率测试
     log_info "阶段 6: 测试覆盖率"
