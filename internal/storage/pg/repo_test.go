@@ -108,7 +108,7 @@ func TestOrderStatusTransition_PendingToCharging(t *testing.T) {
 	chargingOrder, err := repo.GetChargingOrderByPort(ctx, deviceID, portNo)
 	require.NoError(t, err)
 	require.NotNil(t, chargingOrder)
-	assert.Equal(t, 2, chargingOrder.Status, "状态应为charging(2)")
+	assert.Equal(t, 1, chargingOrder.Status, "状态应为charging(1)")
 	assert.NotNil(t, chargingOrder.StartTime, "开始时间不应为空")
 }
 
@@ -132,7 +132,7 @@ func TestOrderStatusTransition_ChargingToCompleted(t *testing.T) {
 	order, err := repo.GetChargingOrderByPort(ctx, deviceID, portNo)
 	require.NoError(t, err)
 	require.NotNil(t, order)
-	assert.Equal(t, 2, order.Status)
+	assert.Equal(t, 1, order.Status)
 
 	// 3. 完成订单
 	endTime := time.Now()
@@ -228,7 +228,7 @@ func TestOrderStatusTransition_InterruptedToCharging(t *testing.T) {
 	order, err := repo.GetChargingOrderByPort(ctx, deviceID, portNo)
 	require.NoError(t, err)
 	require.NotNil(t, order, "应有charging订单")
-	assert.Equal(t, 2, order.Status, "状态应为charging(2)")
+	assert.Equal(t, 1, order.Status, "状态应为charging(1)")
 }
 
 // TestOrderStatusTransition_InterruptedToFailed 测试订单状态：interrupted → failed
