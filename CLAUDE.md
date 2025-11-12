@@ -4,529 +4,328 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-这是一个**充电桩物联网服务器**，支持 AP3000、BKV、GN 等多种协议，采用 TCP 网关 + HTTP API 的架构，支持 50,000+ 并发设备连接。
+IOT Server 是一个高性能充电桩物联网服务器，采用 Go 1.24+ 开发，支持 50,000+ 并发设备连接。核心功能包括设备管理、TCP 长连接通信、多协议解析（AP3000/BKV/GN）、订单结算和第三方集成。
 
-### 核心特性
-- **TCP 网关**：多协议支持（AP3000、BKV、GN），自动协议检测，目前重点bkv协议
-- **分布式会话**：基于 Redis 的会话管理，支持水平扩展
-- **异步下行队列**：Redis 优先级队列，支持自动重试和降级
-- **事件推送**：Webhook 方式推送设备事件到第三方平台
-- **监控完善**：Prometheus 指标、健康检查、结构化日志
-
----
+技术栈：Gin (HTTP)、PostgreSQL (主存储)、Redis (会话/队列)、Prometheus (监控)
 
 ## 常用命令
 
-### 本地开发
+### 开发环境
+
 ```bash
-# 一键启动（推荐）
-make dev-all          # 启动依赖服务 + 应用服务器
+# 本地开发（推荐）
+make dev-up              # 启动依赖服务（PostgreSQL + Redis）
+make dev-run             # 启动应用服务器（使用 configs/local.yaml）
+make dev-down            # 停止依赖服务
+make dev-all             # 一键启动完整环境
 
-# 分步启动
-make dev-up           # 启动 PostgreSQL（复用本地 Redis）
-make dev-run          # 启动应用服务器
-make dev-down         # 停止依赖服务
-make dev-clean        # 清理环境（包括数据）
-
-# 独立运行（需先启动依赖服务）
-IOT_CONFIG=./configs/local.yaml go run ./cmd/server
+# Docker Compose 环境
+make compose-up          # 启动完整开发环境（包含应用服务器）
+make compose-down        # 停止开发环境
+make compose-logs        # 查看日志
 ```
 
-### 测试相关
-```bash
-make test             # 运行所有测试（带竞态检测）
-make test-verbose     # 详细输出
-make test-coverage    # 生成覆盖率报告（coverage.html）
+### 测试
 
-# 运行单个测试
-go test -v -race ./internal/protocol/bkv -run TestHandleHeartbeat
-go test -v ./internal/session/...
+```bash
+# 完整测试套件（推荐）
+make test-all            # 运行所有测试（单元测试 + P1 验证测试）
+
+# 单项测试
+make test                # 单元测试（带 race 检测）
+make test-quick          # 快速测试（无 race 检测）
+make test-verbose        # 详细输出
+make test-coverage       # 生成覆盖率报告（coverage.html）
+make test-p1             # P1 问题修复验证测试
 
 # E2E 测试
-make test-e2e
+make test-e2e            # 运行端到端集成测试
+
+# 运行单个测试
+go test -v -run TestFunctionName ./internal/package/
 ```
 
-### 代码规范
+### 代码质量
+
 ```bash
-make fmt              # 格式化代码（自动修复）
-make fmt-check        # 检查格式（CI 模式）
-make vet              # 静态分析
-make lint             # Lint 检查
-make install-hooks    # 安装 Git pre-commit hooks
+make fmt                 # 格式化代码（自动修复）
+make fmt-check           # 检查格式（不修改文件）
+make vet                 # 静态分析
+make lint                # golangci-lint 检查
+make install-hooks       # 安装 Git pre-commit hooks
 ```
 
-### 部署相关
+### 构建与部署
+
 ```bash
-make auto-deploy      # 自动化部署（构建 + 迁移 + 部署）⭐
-make remote-migrate   # 远程数据库迁移
-make quick-deploy     # 快速部署（仅替换二进制，30秒完成）
-make deploy           # 标准部署（测试环境）
-make deploy-full      # 完整部署（带备份，生产环境）
+# 构建
+make build               # 构建本地版本 -> bin/iot-server
+make build-linux         # 构建 Linux 版本（用于部署）
+
+# 部署（测试服务器）
+make auto-deploy         # 自动化部署（构建 + 部署）⭐
+make quick-deploy        # 快速部署（仅替换二进制）
+make deploy              # 标准部署（测试环境，无备份）
+make deploy-full         # 完整部署（带数据库备份）
 
 # Docker 镜像
-make docker-build     # 构建 Docker 镜像
+make docker-build        # 构建 Docker 镜像
 ```
 
-### 监控调试
+### API 文档
+
 ```bash
-make monitor          # 完整诊断（推荐）
-make monitor-logs     # 实时日志
-make monitor-errors   # 错误日志
-make monitor-metrics  # 业务指标
-
-# TCP 模块测试
-make tcp-check        # 检查 TCP 端口
-make tcp-metrics      # TCP 指标
-
-# 协议监控
-make protocol-logs    # 实时协议日志
-make protocol-stats   # 实时统计
+make api-docs            # 生成 Swagger API 文档 -> api/swagger/
 ```
 
-### API 文档生成
+### 运维
+
 ```bash
-make api-docs         # 生成 Swagger API 文档
-# 文档位置：api/swagger/swagger.json
-# 访问：http://localhost:7055/swagger/index.html
+make backup              # 备份数据库
+make restore             # 恢复备份
+make clean               # 清理构建文件
+make clean-all           # 深度清理（包括缓存）
 ```
 
----
+## 项目架构
 
-## 核心架构
+### 架构模式
 
-### 数据流向
-
-#### 上行流（设备 → 服务器）
-```
-TCP 连接 → TCPServer(6000)
-  → Mux（协议检测）
-    → AP3000Adapter/BKVAdapter.Sniff()
-    → StreamDecoder 解析帧
-    → RouterTable 路由到 Handler
-      → Session.Bind（绑定会话）
-      → Session.OnHeartbeat（更新心跳）
-      → 业务处理（数据持久化、事件推送）
-```
-
-**关键文件**：
-- `internal/tcpserver/server.go` - TCP 监听器
-- `internal/tcpserver/mux.go` - 协议检测（23-84 行）
-- `internal/gateway/conn_handler.go` - Handler 注册
-- `internal/protocol/ap3000/adapter.go` - AP3000 协议
-- `internal/protocol/bkv/adapter.go` - BKV 协议
-
-#### 下行流（服务器 → 设备）
-```
-HTTP API 请求
-  → ThirdPartyHandler.StartCharge()
-    → 验证设备在线
-    → 创建订单（PostgreSQL）
-    → 编码命令帧
-      → RedisOutboundQueue.Enqueue()（优先级队列）
-        → RedisWorker 轮询
-          → Session.GetConn() 获取连接
-          → ConnContext.Write() 发送到设备
-            → 等待 ACK
-              → DatabaseRepository.AckOutboundByMsgID()
-```
-
-**关键文件**：
-- `internal/api/thirdparty_handler.go` - API 入口
-- `internal/app/outbound_adapter.go` - 队列适配器
-- `internal/storage/redis/outbound_queue.go` - Redis 队列
-- `internal/outbound/redis_worker.go` - 轮询发送
-- `internal/session/redis_manager.go` - 会话管理
-
-### 启动流程（9 个阶段）
-
-**文件**: `internal/app/bootstrap/app.go` Run() 函数（29-222 行）
+采用 **多层事件驱动架构**，核心分层：
 
 ```
-1. 基础组件    → Metrics、Ready 状态、Server UUID
-2. Redis 客户端 → 必需，会话和队列依赖
-3. 会话管理器   → RedisManager + WeightedPolicy
-4. PostgreSQL  → 连接 + 迁移（db/migrations/*.sql）
-5. 业务处理器   → Repository、BKV handlers、事件队列、下行适配器
-6. HTTP 服务器 → Gin 路由、健康检查、API 端点（非阻塞启动）
-7. 后台 Worker → Redis 下行队列轮询、事件队列、订单监控、端口同步
-8. TCP 服务器  → 最后启动，确保所有依赖就绪（阻塞监听）
-9. 优雅关闭    → SIGINT/SIGTERM 信号处理、10 秒超时
+Gateway 层（TCP 服务器）
+    ↓ 协议检测
+Protocol 层（AP3000/BKV 解析器）
+    ↓ 命令分发
+Business Logic 层（处理器 + 服务）
+    ↓ 异步队列
+Persistence 层（PostgreSQL + Redis）
 ```
 
-**关键决策**：
-- 数据库必须在 Handler 之前就绪
-- Redis 必须在会话管理器之前就绪
-- TCP 最后启动，避免接收连接时 Handler 未初始化
-- 所有 Worker 必须在 TCP 之前运行
+### 核心组件职责
 
-### 协议适配器模式
+| 包路径 | 职责 |
+|--------|------|
+| `internal/app/` | 应用引导、依赖注入、9 阶段启动流程 |
+| `internal/api/` | HTTP REST API（设备查询、订单管理、第三方配置） |
+| `internal/gateway/` | TCP 服务器、协议检测、连接管理 |
+| `internal/protocol/` | 协议解析器（ap3000、bkv、gn） |
+| `internal/session/` | Redis 会话管理、在线状态检测 |
+| `internal/storage/` | 数据库操作（repository 模式）、Redis 队列 |
+| `internal/service/` | 业务逻辑（卡片服务、定价引擎） |
+| `internal/thirdparty/` | 第三方集成（Webhook 推送、事件队列） |
 
-**设计**：基于注册表的可插拔协议处理器
+### 关键设计决策
 
+1. **TCP 服务器最后启动** - 确保所有依赖（数据库、Redis、服务）就绪后才接受设备连接，避免半初始化状态
+2. **异步出站命令** - 下行命令通过 Redis 队列异步发送，处理器逻辑与 TCP I/O 解耦
+3. **直接 SQL（无 ORM）** - 使用 `pgx` 直接操作数据库，显式控制事务和锁
+4. **协议适配器模式** - 新协议通过实现 `ProtocolHandler` 接口添加，无需修改 Gateway 代码
+5. **加权在线检测** - 综合心跳、TCP 状态、ACK 失败三个维度判定设备在线状态
+
+### 数据流示例
+
+#### 设备连接流程
 ```
-┌─────────────────────────────────┐
-│   Protocol Adapter Interface    │
-│  - Sniff([]byte) bool           │
-│  - ProcessBytes([]byte) error   │
-└─────────────────────────────────┘
-       ↑                    ↑
-       │                    │
-  AP3000Adapter        BKVAdapter
-  + StreamDecoder      + StreamDecoder
-  + RouterTable        + RouterTable
-```
-
-**协议检测机制**：
-- AP3000: magic = 0x44, 0x22, 0x4E ("D\"N")
-- BKV: magic = 0xFC, 0xFE 或 0xFC, 0xFF
-- 首帧检测后，后续帧使用同一适配器
-
-**Handler 注册示例**：
-```go
-// AP3000: 命令码 → Handler
-apAdapter.Register(0x20, func(f *Frame) error {
-    bindIfNeeded(f.PhyID)
-    sess.OnHeartbeat(f.PhyID, time.Now())
-    return handlerSet.HandleRegister(ctx, f)
-})
-
-// BKV: 命令码（uint16）→ Handler
-bkvAdapter.Register(0x0000, wrapBKVHandler(func(ctx, f) error {
-    return getBKVHandlers().HandleHeartbeat(ctx, f)
-}))
+设备 TCP 连接
+  → Gateway 读取首包
+  → 协议检测（AP3000/BKV）
+  → 创建 ProtocolHandler
+  → 保存会话到 Redis
+  → 循环读取消息帧
 ```
 
-### 会话管理
-
-**Redis 存储结构**：
+#### 订单创建流程
 ```
-session:device:{phyID}           → {connID, serverID, lastSeen}  (Hash)
-session:conn:{connID}            → phyID                         (String)
-session:server:{serverID}:conns  → Set<connID>                   (Set)
-session:tcp_down:{phyID}         → timestamp                     (String, TTL)
-session:ack_timeout:{phyID}      → timestamp                     (String, TTL)
-```
-
-**在线检测策略**：
-
-1. **简单检测**：`IsOnline(phyID, now)` - 心跳超时判断
-2. **加权检测**：`IsOnlineWeighted(phyID, now, policy)` - 多信号评分
-   ```
-   score = 0.0
-   if (now - lastHeartbeat) ≤ HeartbeatTimeout:
-       score += 1.0
-   if (now - lastTCPDown) ≤ TCPDownWindow:
-       score -= TCPDownPenalty (0.2)
-   if (now - lastAckTimeout) ≤ AckWindow:
-       score -= AckTimeoutPenalty (0.3)
-   return score ≥ Threshold (0.5)
-   ```
-
-**文件**：`internal/session/redis_manager.go`（215-244 行）
-
-### 优先级队列与降级策略
-
-**队列长度监控**：
-```
-正常 (0-200)      → 接受所有命令
-警告 (200-500)    → 拒绝优先级 > 5（低优先级）
-严重 (500-1000)   → 拒绝优先级 > 2（仅普通/高优先级）
-紧急 (>1000)      → 仅接受优先级 ≤ 1（紧急命令）
+HTTP API (/api/v1/orders)
+  → OrderHandler 验证参数
+  → OrderService 创建订单（DB 事务）
+  → OutboundAdapter 推送到 Redis 队列
+  → Worker 从队列取出
+  → 通过 SessionManager 发送 TCP 命令
 ```
 
-**优先级值**：
-- 1 = 紧急（心跳 ACK、紧急停止）
-- 2 = 高（启动充电、停止充电）
-- 5 = 普通（参数查询、状态查询）
-- 9 = 低（分析、慢速操作）
+#### 心跳处理流程
+```
+设备发送心跳
+  → BKVHandler 解析帧
+  → 更新会话时间戳（Redis）
+  → HeartbeatHandler 处理
+  → 立即返回 ACK（优先级队列）
+```
 
-**文件**：
-- `internal/outbound/priority.go` - 优先级计算
-- `internal/storage/redis/outbound_queue.go`（54-73 行）- 队列长度检查
+### 重要修复（P1 问题）
 
----
+以下是已修复的关键问题，修改代码时需注意：
 
-## BKV 协议开发指南
+- **P1-1**：心跳超时设置为 60 秒（`internal/session/manager.go`）
+- **P1-2**：延迟 ACK 拒绝（10 秒窗口，`internal/service/order_service.go`）
+- **P1-3**：端口并发冲突保护（数据库事务 + 行锁，`internal/storage/port_repository.go`）
+- **P1-4**：端口状态自动同步（`internal/app/port_syncer.go`，默认启用）
+- **P1-5**：订单取消/停止中间态处理（`internal/protocol/bkv/handler.go`）
+- **P1-6**：队列优先级标准化（`internal/storage/redis_queue.go`）
+- **P1-7**：事件推送 Outbox 模式（`internal/thirdparty/event_queue.go`，默认启用）
 
-**重要**：BKV 协议任务必须先阅读：`docs/协议/设备对接指引-组网设备2024(1).txt`
+运行 `make test-p1` 验证这些修复的测试用例。
 
-**关注章节**：
-- 2.1 心跳
-- 2.2 网络节点
-- 2.2.8 控制
-- 刷卡充电
-- 异常事件
-- OTA
+## 配置文件
 
-**命令号映射**：
-- 0x0000: 心跳
-- 0x1007: 启动充电
-- 0x1004: 停止充电
-- 0x1010: 查询状态
-- 0x1011: 参数设置
-
-**关键文件**：
-- `internal/protocol/bkv/adapter.go` - 命令注册
-- `internal/protocol/bkv/handlers.go` - 业务逻辑（~1500 行）
-- `internal/protocol/bkv/parser.go` - 帧解析
-- `internal/protocol/bkv/*_test.go` - 单元测试
-- `internal/protocol/bkv/testdata/` - 测试帧样本
-
-**影响范围**：
-- `session.Manager` - 会话绑定
-- `outbound` - ACK 跟踪
-- `internal/storage/pg/repo.go` - 数据库操作
-- `outbound_queue` - 下行队列表
-- `devices` - 设备表
-- `orders` - 订单表
-
----
-
-## 关键模块文件
-
-### 启动与配置
-| 文件 | 职责 |
-|------|------|
-| `cmd/server/main.go` | 入口，配置加载 |
-| `internal/app/bootstrap/app.go` | 9 阶段初始化编排 |
-| `internal/config/*.go` | 配置结构 |
-
-### TCP 网关层
-| 文件 | 职责 |
-|------|------|
-| `internal/tcpserver/server.go` | TCP 监听器、连接生命周期 |
-| `internal/tcpserver/conn.go` | ConnContext 包装、写缓冲 |
-| `internal/tcpserver/mux.go` | 协议检测、适配器分发 |
-| `internal/gateway/conn_handler.go` | Handler 注册（~300 行）|
-
-### 协议适配器
-| 文件 | 职责 |
-|------|------|
-| `internal/protocol/adapter/adapter.go` | 适配器接口 |
-| `internal/protocol/ap3000/adapter.go` | AP3000 实现 |
-| `internal/protocol/ap3000/handlers.go` | AP3000 业务逻辑 |
-| `internal/protocol/bkv/adapter.go` | BKV 实现 |
-| `internal/protocol/bkv/handlers.go` | BKV 业务逻辑（~1500 行）|
-
-### 下行队列
-| 文件 | 职责 |
-|------|------|
-| `internal/storage/redis/outbound_queue.go` | Redis 队列操作 |
-| `internal/outbound/redis_worker.go` | 轮询发送 |
-| `internal/outbound/priority.go` | 优先级计算 |
-| `internal/app/outbound_adapter.go` | Handler → Redis 桥接 |
-
-### HTTP API
-| 文件 | 职责 |
-|------|------|
-| `internal/api/thirdparty_handler.go` | 命令 API（充电、停止、OTA）|
-| `internal/api/readonly_handler.go` | 查询 API |
-| `internal/api/network_handler.go` | 组网管理 |
-| `internal/api/ota_handler.go` | OTA 升级 |
-
-### 数据持久化
-| 文件 | 职责 |
-|------|------|
-| `internal/storage/pg/pool.go` | PostgreSQL 连接池 |
-| `internal/storage/pg/repo.go` | 数据库查询（~700 行）|
-| `internal/app/db.go` | 数据库工厂与迁移 |
-| `db/migrations/*.sql` | 数据库迁移脚本 |
-
-### 监控与健康检查
-| 文件 | 职责 |
-|------|------|
-| `internal/health/aggregator.go` | 复合健康状态 |
-| `internal/health/database_checker.go` | 数据库探针 |
-| `internal/health/redis_checker.go` | Redis 探针 |
-| `internal/health/tcp_checker.go` | TCP 服务器探针 |
-| `internal/metrics/metrics.go` | Prometheus 指标 |
-
----
-
-## 配置说明
-
-**关键配置项**：
-- `tcp.addr` - TCP 网关绑定地址（默认: :6000）
-- `tcp.max_connections` - 连接限制（默认: 10000）
-- `redis.addr` - Redis 服务器（必需）
-- `database.dsn` - PostgreSQL 连接串（必需）
-- `protocols.ap3000.enabled` - 启用 AP3000 协议
-- `protocols.bkv.enabled` - 启用 BKV 协议
-- `session.heartbeat_timeout` - 会话超时（默认: 5m）
-- `gateway.throttle_ms` - Worker 轮询间隔（默认: 100ms）
-- `gateway.retry_max` - 消息最大重试次数（默认: 3）
-
-**配置文件**：
-- `configs/example.yaml` - 示例配置
-- `configs/local.yaml` - 本地开发配置
+- `configs/example.yaml` - 开发环境配置模板
+- `configs/local.yaml` - 本地开发配置（`make dev-run` 使用）
 - `configs/production.yaml` - 生产环境配置
+- `scripts/env.example` - Docker Compose 环境变量模板
 
----
+配置通过环境变量 `IOT_CONFIG` 指定路径。
 
-## 故障排查
+## 数据库
 
-### 设备离线检测
-1. 检查 Redis 会话：`HGETALL session:device:{phyID}`
-2. 验证心跳时间：`LastSeen` 时间戳
-3. 检查加权策略：`WeightedPolicy.Enabled` 和评分计算
+### 连接信息（本地开发）
 
-### 下行队列堆积
-1. 检查队列长度：`ZCARD outbound:queue`
-2. 检查处理中：`SCAN outbound:processing:*`
-3. 检查死信队列：`LLEN outbound:dead`
-4. 查看日志："write to device failed", "device connection not available"
+- PostgreSQL: `localhost:5432`（用户：`iot`，密码：`iot123`，数据库：`iot_server`）
+- Redis: `localhost:6379`（密码：`123456`）
 
-### 协议不匹配
-1. 检查原始流的前 8 字节
-2. 验证 magic bytes 是否匹配预期协议
-3. 查看 `mux_test.go` 中的帧示例
-4. 检查 `adapter.Sniff()` 是否匹配实际帧
+### 数据库迁移
 
-### 命令未执行
-1. 验证设备在线：`sess.IsOnline(phyID, now)`
-2. 检查下行队列：消息是否入队？
-3. 检查 Worker 日志："downlink message sent" vs "write failed"
-4. 验证会话：connContext 是否仍然有效？
+迁移脚本位于 `db/migrations/`，由应用启动时自动执行（`internal/app/bootstrap.go`）。
 
----
-
-## 测试策略
-
-### 单元测试
+手动执行迁移：
 ```bash
-# 协议层测试
-go test -v ./internal/protocol/ap3000/...
-go test -v ./internal/protocol/bkv/...
-
-# 会话管理测试
-go test -v ./internal/session/...
-
-# 队列测试
-go test -v ./internal/storage/redis/...
-
-# 适配器测试
-go test -v ./internal/protocol/*/adapter_test.go
+psql -U iot -d iot_server -f db/migrations/001_initial_schema.sql
 ```
 
-### 集成测试
+## 协议说明
+
+支持三种协议，文档位于 `docs/协议/`：
+
+1. **AP3000** - 交流桩协议（帧格式：STX + 长度 + 数据 + CRC + ETX）
+2. **BKV** - 直流桩协议（25+ 命令类型，TLV 编码）
+3. **GN** - 组网协议（设备间通信）
+
+协议解析器位置：
+- `internal/protocol/ap3000/parser.go`
+- `internal/protocol/bkv/parser.go`
+- `internal/protocol/gn/parser.go`
+
+添加新协议需实现 `internal/protocol/protocol.go` 中的 `ProtocolHandler` 接口。
+
+## 第三方集成
+
+Webhook 推送机制（`internal/thirdparty/webhook.go`）：
+- 异步推送事件到第三方 URL
+- 支持重试（最多 3 次，指数退避）
+- HMAC-SHA256 签名验证
+- 超时时间：10 秒
+
+配置第三方推送 URL：
 ```bash
-# E2E 测试（完整流程）
-make test-e2e
-cd test/e2e && go test -v -timeout 10m ./...
+curl -X POST http://localhost:7055/api/v1/third-party \
+  -H "Content-Type: application/json" \
+  -d '{"name":"客户A","webhook_url":"https://example.com/webhook","api_key":"secret"}'
 ```
 
-### 负载测试
-```bash
-# 连接限制测试
-go test -v ./internal/tcpserver/limiter_test.go
-
-# 队列饱和测试
-go test -v ./internal/outbound/...
-```
-
----
-
-## 扩展指南
-
-### 添加新协议
-1. 创建 `internal/protocol/{proto}/adapter.go` 实现 Adapter 接口
-2. 创建 parser/decoder 用于帧格式解析
-3. 创建 handlers 处理命令类型
-4. 在 `gateway/conn_handler.go` 注册
-5. 添加到 `config.Protocols`
-
-### 添加新 API 端点
-1. 在 `api/thirdparty_handler.go` 创建 handler 方法
-2. 在 `api/thirdparty_routes.go` 注册路由
-3. 在 `storage/pg/repo.go` 实现数据库查询
-4. 在 `api/*_test.go` 编写测试
-
-### 自定义下行优先级
-1. 修改 `outbound/priority.go` GetCommandPriority()
-2. 更新 handler 逻辑中的优先级映射
-3. 测试队列降级场景
-
----
-
-## 开发工作流模式
-
-根据 `.github/copilot-instructions.md` 规范，开发过程遵循 **研究 → 构思 → 计划 → 执行 → 评审** 流程：
-
-### [模式：研究]
-- BKV 协议任务优先阅读协议文档
-- 建立架构全局图：main.go → bootstrap → TCP/HTTP/会话/存储/队列
-- 确认数据流：TCP → gateway → 协议适配器 → 持久化/会话/推送
-
-### [模式：构思]
-- 提出至少两种实现思路
-- 说明对 session.Manager、outbound、PG 仓储的影响
-- 使用 Context7 获取最新 API（如需第三方库）
-
-### [模式：计划]
-- 拆解到文件级别
-- 列出预期命令/帧字段校验
-- 说明数据库表影响（outbound_queue, devices, orders）
-- 指明文档更新位置
-
-### [模式：执行]
-- 代码改动紧贴计划
-- BKV 命令注册在 `adapter.go`，业务逻辑在 `handlers.go`
-- 构建运行：`IOT_CONFIG=./configs/example.yaml go run ./cmd/server`
-- 测试：`go test -race ./...`
-- 更新指标同步调整 `metrics.go` 并在 bootstrap 注入
-
-### [模式：评审]
-- 对照计划检查：命令码、会话绑定、PG 写入、下行 ACK、指标、文档
-- 汇总测试结果，指出剩余风险
-
----
-
-## 性能指标
-
-| 指标 | 数值 |
-|------|------|
-| 最大并发连接 | 50,000+ |
-| HTTP API QPS | 10,000+ |
-| TCP 消息吞吐 | 100,000+/秒 |
-| 平均响应时间 | < 50ms |
-| 内存占用 | < 2GB |
-
----
-
-## 监控端点
+## 监控与健康检查
 
 ```bash
-# 存活检查
-curl http://localhost:7055/healthz
-
-# 就绪检查
-curl http://localhost:7055/readyz
+# 健康检查
+curl http://localhost:7055/healthz        # 存活检查
+curl http://localhost:7055/readyz         # 就绪检查（包含依赖检查）
 
 # Prometheus 指标
 curl http://localhost:7055/metrics
 ```
 
----
+关键指标：
+- `iot_connected_devices` - 在线设备数
+- `iot_http_requests_total` - HTTP 请求总数
+- `iot_protocol_messages_total` - 协议消息计数
+- `iot_outbound_queue_size` - 出站队列长度
+
+## 开发工作流
+
+推荐工作流：
+
+1. **启动环境**：`make dev-up`（启动依赖服务）
+2. **运行服务器**：`make dev-run`（启动应用）
+3. **修改代码**：编辑相关文件
+4. **运行测试**：`make test-all`（完整测试）
+5. **格式化代码**：`make fmt`（自动格式化）
+6. **部署测试**：`make auto-deploy`（自动化部署）
+
+### 添加新功能
+
+1. 在 `internal/` 对应包中添加代码
+2. 在 `internal/` 对应包的 `_test.go` 中添加单元测试
+3. 如需修改数据库，添加迁移脚本到 `db/migrations/`
+4. 如需暴露 API，在 `internal/api/` 添加路由和处理器
+5. 运行 `make test-all` 确保所有测试通过
+6. 运行 `make fmt` 格式化代码
+
+### 调试技巧
+
+- 查看应用日志：`make compose-logs` 或 `make dev-logs`
+- 查看 PostgreSQL 日志：`docker-compose logs postgres`
+- 查看 Redis 命令：`redis-cli -a 123456 MONITOR`
+- 连接数据库：`psql -h localhost -U iot -d iot_server`
+- 查看 Redis 会话：`redis-cli -a 123456 KEYS "session:*"`
+
+## 性能注意事项
+
+- **连接池**：PostgreSQL 连接池大小配置在 `configs/*.yaml` 的 `database.pool_size`
+- **并发控制**：TCP 连接使用 Goroutine per Connection 模式，依赖 Go runtime 调度
+- **内存优化**：大对象（如订单事件）使用对象池减少 GC 压力
+- **Redis 优化**：会话数据使用 Hash 结构，TTL 设置为 90 秒（心跳超时 60 秒 + 30 秒缓冲）
+
+## 安全注意事项
+
+- **SQL 注入防护**：所有 SQL 查询使用参数化查询（`pgx` 占位符 `$1, $2, ...`）
+- **API 认证**：生产环境需配置 API Key（通过 HTTP Header `X-API-Key` 传递）
+- **限流**：HTTP API 使用令牌桶限流（配置：`api.rate_limit`）
+- **数据加密**：敏感数据（如卡号）存储前需加密
+- **日志脱敏**：避免在日志中打印密码、API Key 等敏感信息
+
+## 故障排查
+
+### 常见问题
+
+1. **设备连接失败** → 检查防火墙端口 7070（TCP）是否开放
+2. **数据库连接超时** → 检查 PostgreSQL 是否启动：`docker-compose ps`
+3. **Redis 连接失败** → 检查 Redis 密码配置是否正确
+4. **心跳超时断连** → 检查 `session.heartbeat_timeout` 配置（应为 60 秒）
+5. **订单推送失败** → 查看 `internal/thirdparty/event_queue.go` 日志，检查 Redis 队列
+
+### 日志级别
+
+修改 `configs/*.yaml` 中的 `log.level`：
+- `debug` - 详细调试日志（包含协议帧内容）
+- `info` - 常规信息（默认）
+- `warn` - 警告信息
+- `error` - 错误信息
 
 ## 提交规范
 
 遵循 [Conventional Commits](https://www.conventionalcommits.org/)：
 
 ```
-feat: 添加 BKV 0x1007 启动充电命令
-fix: 修复会话管理器在高并发下的竞态条件
-perf: 优化下行队列轮询性能
-docs: 更新 BKV 协议文档
-test: 添加端口状态同步测试用例
-refactor: 重构协议适配器注册机制
+feat: 添加新功能
+fix: 修复 Bug
+refactor: 重构代码
+test: 添加测试
+docs: 更新文档
+chore: 构建/工具变更
 ```
 
----
+示例：
+```bash
+git commit -m "feat: 添加 AP3000 协议心跳 ACK 支持"
+git commit -m "fix: 修复端口状态并发更新冲突"
+```
 
-## 关键依赖
+## 相关文档
 
-- Go 1.24+
-- PostgreSQL 14+
-- Redis 6+
-- Docker 20.10+ (可选)
-- Docker Compose 2.0+ (可选)
+- [README.md](README.md) - 项目介绍和快速开始
+- [DEPLOYMENT.md](DEPLOYMENT.md) - 完整部署指南
+- [docs/架构/项目架构设计.md](docs/架构/项目架构设计.md) - 详细架构文档
+- [docs/协议/](docs/协议/) - 协议规范文档
+- [docs/api/](docs/api/) - HTTP API 文档
+- [docs/CI-CD-GUIDE.md](docs/CI-CD-GUIDE.md) - CI/CD 自动化部署
