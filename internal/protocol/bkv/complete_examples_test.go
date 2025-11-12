@@ -6,19 +6,6 @@ import (
 	"testing"
 )
 
-// helper: compute checksum exactly like encoder.Build (sum from len field to byte before checksum)
-func testCalcChecksum(raw []byte) byte {
-	if len(raw) < 5 {
-		return 0
-	}
-	var sum byte
-	// sum b[2 : len-3]
-	for _, b := range raw[2 : len(raw)-3] {
-		sum += b
-	}
-	return sum
-}
-
 type exCase struct {
 	name      string
 	hexStr    string
@@ -48,13 +35,13 @@ func samples() []exCase {
 		{name: "2.2.5-设备-网络节点列表回复", uplink: true, expectCmd: 0x0005, expectGW: "86004459453005", hexStr: "fcfe00150005001c94f90186004459453005000108016bfcee"},
 		{name: "2.2.6-下发网络节点列表-添加单个插座", uplink: false, expectCmd: 0x0005, expectGW: "86004459453005", hexStr: "fcff001b0005001c979c0086004459453005000709033500307012474dfcee", rebuildDL: true},
 		{name: "2.2.6-设备-添加单个插座回复", uplink: true, expectCmd: 0x0005, expectGW: "86004459453005", hexStr: "fcfe00150005001c979c01860044594530050001090112fcee"},
-		{name: "2.2.8-控制设备(按时充电)", uplink: false, expectCmd: 0x0015, expectGW: "86004459453005", hexStr: "fcff001c0015001c9a5100860044594530050008070200010100f00000c8fcee", rebuildDL: false, checkCtl15: true},
+		{name: "2.2.8-控制设备(按时充电)", uplink: false, expectCmd: 0x0015, expectGW: "86004459453005", hexStr: "fcff001c0015001c9a5100860044594530050008070200010100f00000d8fcee", rebuildDL: false, checkCtl15: true},
 		{name: "2.2.8-控制设备回复", uplink: true, expectCmd: 0x0015, expectGW: "86004459453005", hexStr: "fcfe00190015001c9c2b0186004459453005000507010200006826fcee"},
 		{name: "2.2.9-充电结束上报(按时/按电量)", uplink: true, expectCmd: 0x0015, expectGW: "86004459453005", hexStr: "fcfe00250015000000000186004459453005001102025036302000980068000000010050002d41fcee", checkEnd15: true},
 		{name: "2.2.1-按功率下发充电命令", uplink: false, expectCmd: 0x0005, expectGW: "86004459453005", hexStr: "fcff0038000500282bda008600445945300500241701000100640507d00019003c0fa00032003c17700064003c1f400096003c4e2001f4007829fcee", rebuildDL: true},
 		{name: "2.2.2-按功率充电结束上报", uplink: true, expectCmd: 0x0015, expectGW: "86004459453005", hexStr: "fcfe003c00150000000001860044594530050028180151362d2000980017000000020001002407e406080e150702000f0000050024000000000000000037fcee", checkEnd15: true},
-		{name: "2.2.2-按电费+服务费下发", uplink: false, expectCmd: 0x1000, expectGW: "82210225000520", hexStr: "fcff00631000215445a5008221022500052004010110070a010200000000215445a50901038221022500052003014a01030108000301130103011204030147010301f40204018800640301800103018901080183173b003200325ffcee", expectBKV: bkv1017(0x1007), rebuildDL: true, skipParse: true},
-		{name: "2.2.2-充电结束上报(BKV)", uplink: true, expectCmd: 0x1000, expectGW: "82210225000520", hexStr: "fcfe007d100000000000018221022500052004010110040a01020000000000000000090103822102250005200301072a03014a01030108000301199804010a003304010b000004010c000004010d000004010e000109012e2024082310172903012f08030112040401850000040186000003018901080184000100000000dbfcee", expectBKV: bkv1017(0x1004)},
+		{name: "2.2.2-按电费+服务费下发", uplink: false, expectCmd: 0x1000, expectGW: "82210225000520", hexStr: "fcff00591000215445a5008221022500052004010110070a010200000000215445a50901038221022500052003014a01030108000301130103011204030147010301f40204018800640301800103018901080183173b0032003255fcee", expectBKV: bkv1017(0x1007), rebuildDL: true},
+		{name: "2.2.2-充电结束上报(BKV)", uplink: true, expectCmd: 0x1000, expectGW: "82210225000520", hexStr: "fcfe007d100000000000018221022500052004010110040a01020000000000000000090103822102250005200301072a03014a01030108000301199804010a003304010b000004010c000104010d000004010e000109012e2024082310172903012f08030112040401850000040186000003018901080184000100000000ecfcee", expectBKV: bkv1017(0x1004)},
 		{name: "2.2.2-平台回复(BKV)", uplink: false, expectCmd: 0x1000, expectGW: "82210225000520", hexStr: "fcff0037100000000000008221022500052004010110040a010200000000000000000901038221022500052003010f0103014a0103010800c8fcee", expectBKV: bkv1017(0x1004), rebuildDL: true},
 	}
 }
@@ -404,7 +391,7 @@ func Test_Cmd0015_ControlAck_Minimal(t *testing.T) {
 	}
 }
 
-// 1004 充电结束上报（BKV，uplink）：最小关键片段断言
+// 1004 充电结束上报（BKV， uplink）：最小关键片段断言
 func Test_BKV_1004_End_Minimal(t *testing.T) {
 	tc := sampleByName("2.2.2-充电结束上报(BKV)")
 	raw, _ := hex.DecodeString(tc.hexStr)

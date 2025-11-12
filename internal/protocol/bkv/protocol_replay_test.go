@@ -31,7 +31,7 @@ func TestReplayProtocolDocExamples(t *testing.T) {
 		},
 		{
 			name:        "控制设备-按时充电",
-			hexData:     "fcff001c0015001c9a5100860044594530050008070200010100f00000c8fcee",
+			hexData:     "fcff001c0015001c9a5100860044594530050008070200010100f00000d8fcee",
 			description: "按时充电控制：2号插座A孔，240分钟",
 			expectCmd:   0x0015,
 			expectType:  "control_by_time",

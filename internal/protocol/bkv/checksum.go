@@ -19,7 +19,7 @@ func CalculateChecksum(data []byte) byte {
 }
 
 // VerifyChecksum 验证校验和
-// dataWithChecksum: 包含校验和的完整数据（们len字段到校验和）
+// dataWithChecksum: 包含校验和的完整数据（从 len字段到校验和）
 func VerifyChecksum(dataWithChecksum []byte) error {
 	if len(dataWithChecksum) < 1 {
 		return errors.New("data too short for checksum verification")
@@ -40,7 +40,7 @@ func VerifyChecksum(dataWithChecksum []byte) error {
 }
 
 // BuildChecksummedData 为数据添加校验和
-// data: 不包含校验和的数据（们len字段到数据部分）
+// data: 不包含校验和的数据（从 len字段到数据部分）
 // 返回：带校验和的完整数据
 func BuildChecksummedData(data []byte) []byte {
 	checksum := CalculateChecksum(data)
