@@ -1,8 +1,9 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
-	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
@@ -42,7 +43,7 @@ func ThirdPartyAuth(apiKeys []string, logger *zap.Logger) gin.HandlerFunc {
 		if !keyMap[apiKey] {
 			logger.Warn("third party auth failed: invalid api key",
 				zap.String("path", c.Request.URL.Path),
-				zap.String("api_key", apiKey[:min(len(apiKey), 8)]+"***"))
+				zap.String("api_key_prefix", maskAPIKey(apiKey)))
 
 			thirdparty.RecordAPIAuthFailure(c.Request.URL.Path, "invalid_key")
 
@@ -84,7 +85,6 @@ func RequestTracing() gin.HandlerFunc {
 
 // generateRequestID 生成请求ID
 func generateRequestID() string {
-	// 简单实现：使用时间戳
-	// 生产环境可以使用UUID
-	return strings.ReplaceAll(strings.Split(strings.Split(http.TimeFormat, " ")[0], ",")[0], ":", "")
+	// 简单实现：使用纳秒时间戳，避免引入新依赖
+	return fmt.Sprintf("req-%d", time.Now().UnixNano())
 }

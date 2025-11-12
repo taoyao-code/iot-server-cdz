@@ -137,7 +137,8 @@ func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
 	// 🔥 关键修复：回复心跳ACK，否则设备会在60秒后断开连接
 	if h.Outbound != nil {
 		ackPayload := encodeHeartbeatAck(devicePhyID)
-		_ = h.Outbound.SendDownlink(devicePhyID, 0x0000, 0, ackPayload)
+		// 2-A: 复用上行帧的MsgID，便于设备匹配应答
+		_ = h.Outbound.SendDownlink(devicePhyID, 0x0000, f.MsgID, ackPayload)
 	}
 
 	// P0-2修复: 检查是否有interrupted订单需要恢复

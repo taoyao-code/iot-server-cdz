@@ -120,8 +120,21 @@ func (m *RedisManager) UnbindByPhy(phyID string) {
 		return
 	}
 
-	// 删除本地连接缓存
+	// 🔥 关键修复: 通知TCP层关闭连接，避免僵尸连接
 	if data.ConnID != "" {
+		// 获取连接对象
+		m.mu.RLock()
+		conn, ok := m.localConn[data.ConnID]
+		m.mu.RUnlock()
+
+		// 尝试关闭连接
+		if ok {
+			if closer, ok := conn.(interface{ Close() error }); ok {
+				_ = closer.Close()
+			}
+		}
+
+		// 删除本地连接缓存
 		m.mu.Lock()
 		delete(m.localConn, data.ConnID)
 		m.mu.Unlock()

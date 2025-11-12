@@ -39,6 +39,12 @@ func NewConnHandler(
 			if cc.Server() != nil && cc.Server().GetLogger() != nil {
 				bkvAdapter.SetLogger(cc.Server().GetLogger())
 			}
+			// 设置checksum错误指标回调
+			if appm != nil {
+				bkvAdapter.SetChecksumErrorFunc(func() {
+					appm.ProtocolChecksumErrorTotal.WithLabelValues("bkv").Inc()
+				})
+			}
 			adapters = append(adapters, bkvAdapter)
 		}
 

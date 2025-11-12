@@ -208,34 +208,50 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 	defer tx.Rollback(ctx)
 
 	// 4.1. 同时锁定orders和ports表（P1-3完整方案：防止跨表状态不一致）
+	// 🔥 关键修复: 使用SKIP LOCKED快速失败，锁定所有活跃订单
 	var existingOrderNo string
 	checkPortSQL := `
 		SELECT order_no FROM orders
 		WHERE device_id = $1 AND port_no = $2
 		  AND status IN (0, 1, 2, 8, 9, 10)  -- pending, confirmed, charging, cancelling, stopping, interrupted
 		ORDER BY created_at DESC
-		LIMIT 1
-		FOR UPDATE
+		FOR UPDATE SKIP LOCKED
 	`
-	err = tx.QueryRow(ctx, checkPortSQL, devID, req.PortNo).Scan(&existingOrderNo)
-	if err == nil {
-		// 端口已被占用
+	rows, err := tx.Query(ctx, checkPortSQL, devID, req.PortNo)
+	if err != nil {
 		tx.Rollback(ctx)
-		h.logger.Warn("port already in use",
-			zap.String("device_phy_id", devicePhyID),
-			zap.Int("port_no", req.PortNo),
-			zap.String("existing_order", existingOrderNo))
-		c.JSON(http.StatusConflict, StandardResponse{
-			Code:    409,
-			Message: "port is busy",
-			Data: map[string]interface{}{
-				"current_order": existingOrderNo,
-				"port_status":   "charging",
-			},
+		h.logger.Error("failed to check port", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, StandardResponse{
+			Code:      500,
+			Message:   "database error",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
 		return
+	}
+	defer rows.Close()
+
+	// 检查是否有活跃订单
+	if rows.Next() {
+		if err := rows.Scan(&existingOrderNo); err == nil {
+			// 端口已被占用
+			tx.Rollback(ctx)
+			h.logger.Warn("port already in use",
+				zap.String("device_phy_id", devicePhyID),
+				zap.Int("port_no", req.PortNo),
+				zap.String("existing_order", existingOrderNo))
+			c.JSON(http.StatusConflict, StandardResponse{
+				Code:    409,
+				Message: "port is busy",
+				Data: map[string]interface{}{
+					"current_order": existingOrderNo,
+					"port_status":   "charging",
+				},
+				RequestID: requestID,
+				Timestamp: time.Now().Unix(),
+			})
+			return
+		}
 	}
 
 	// 4.2. P1-3: 同时锁定ports表，防止端口状态被其他事务修改

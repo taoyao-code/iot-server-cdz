@@ -50,6 +50,12 @@ type AppMetrics struct {
 	PortStatusMismatchTotal      *prometheus.CounterVec // labels: reason=port_missing|status_mismatch|device_offline
 	PortStatusAutoFixedTotal     prometheus.Counter     // 自动修复成功次数
 	PortStatusQueryResponseTotal *prometheus.CounterVec // labels: device_id, status=空闲|充电中|故障
+
+	// 关键监控指标（健康评估新增）
+	OutboundACKTimeoutTotal       *prometheus.CounterVec // labels: device_id, cmd - ACK超时计数
+	OrderStateInconsistencyTotal  *prometheus.CounterVec // labels: type=duplicate|invalid_transition - 订单状态不一致
+	SessionZombieConnectionsGauge prometheus.Gauge       // 僵尸连接数（无会话但连接未关闭）
+	ProtocolChecksumErrorTotal    *prometheus.CounterVec // labels: protocol=bkv|ap3000 - 校验和错误
 }
 
 // NewAppMetrics 注册并返回业务指标
@@ -135,6 +141,22 @@ func NewAppMetrics(reg *prometheus.Registry) *AppMetrics {
 			Name: "port_status_query_response_total",
 			Help: "P1-4: Port status query responses (0x1D) by device and status.",
 		}, []string{"device_id", "status"}),
+		OutboundACKTimeoutTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "outbound_ack_timeout_total",
+			Help: "Total ACK timeouts by device and command.",
+		}, []string{"device_id", "cmd"}),
+		OrderStateInconsistencyTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "order_state_inconsistency_total",
+			Help: "Order state inconsistencies detected by type.",
+		}, []string{"type"}),
+		SessionZombieConnectionsGauge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "session_zombie_connections",
+			Help: "Number of zombie connections (no session but connection not closed).",
+		}),
+		ProtocolChecksumErrorTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "protocol_checksum_error_total",
+			Help: "Protocol checksum errors by protocol type.",
+		}, []string{"protocol"}),
 	}
 	reg.MustRegister(
 		m.TCPAccepted, m.TCPBytesReceived,
@@ -144,6 +166,7 @@ func NewAppMetrics(reg *prometheus.Registry) *AppMetrics {
 		m.OutboundQueueSize, m.SessionOfflineTotal,
 		m.ChargeReportTotal, m.ChargeReportPowerGauge, m.ChargeReportCurrentGauge, m.ChargeReportEnergyTotal,
 		m.PortStatusMismatchTotal, m.PortStatusAutoFixedTotal, m.PortStatusQueryResponseTotal,
+		m.OutboundACKTimeoutTotal, m.OrderStateInconsistencyTotal, m.SessionZombieConnectionsGauge, m.ProtocolChecksumErrorTotal,
 	)
 	return m
 }

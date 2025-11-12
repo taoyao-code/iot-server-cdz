@@ -8,9 +8,10 @@ import (
 
 // Adapter BKV 协议最小适配器：基于流式解码与路由表分发
 type Adapter struct {
-	decoder *StreamDecoder
-	table   *Table
-	logger  *zap.Logger
+	decoder         *StreamDecoder
+	table           *Table
+	logger          *zap.Logger
+	checksumErrFunc func() // 校验和错误回调（用于指标上报）
 }
 
 // NewAdapter 创建最小适配器
@@ -23,6 +24,11 @@ func (a *Adapter) SetLogger(logger *zap.Logger) {
 	if a.table != nil {
 		a.table.SetLogger(logger)
 	}
+}
+
+// SetChecksumErrorFunc 设置校验和错误回调
+func (a *Adapter) SetChecksumErrorFunc(f func()) {
+	a.checksumErrFunc = f
 }
 
 // Register 注册指令处理器
@@ -39,6 +45,13 @@ func (a *Adapter) ProcessBytes(p []byte) error {
 
 	frames, err := a.decoder.Feed(p)
 	if err != nil {
+		// 如果是checksum错误，上报指标
+		if err == ErrChecksumMismatch && a.checksumErrFunc != nil {
+			a.checksumErrFunc()
+			if a.logger != nil {
+				a.logger.Warn("⚠️ BKV校验和错误", zap.Error(err), zap.String("hex", hex.EncodeToString(p)))
+			}
+		}
 		return err
 	}
 	for _, fr := range frames {

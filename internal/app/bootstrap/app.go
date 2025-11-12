@@ -135,8 +135,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 		}
 		log.Info("third party api authentication config",
 			zap.Int("api_keys_count", len(thirdpartyAuthCfg.APIKeys)),
-			zap.Bool("enabled", thirdpartyAuthCfg.Enabled),
-			zap.Strings("api_keys", thirdpartyAuthCfg.APIKeys))
+			zap.Bool("enabled", thirdpartyAuthCfg.Enabled))
 		api.RegisterThirdPartyRoutes(r, repo, sess, redisQueue, eventQueue, thirdpartyAuthCfg, log)
 
 		app.RegisterHealthRoutes(r, healthAgg) // Week2: 健康检查路由

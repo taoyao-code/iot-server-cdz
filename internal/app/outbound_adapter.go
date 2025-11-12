@@ -36,6 +36,7 @@ func (a *OutboundAdapter) SendDownlink(gatewayID string, cmd uint16, msgID uint3
 	}
 
 	ctx := context.Background()
+	now := time.Now()
 
 	// 构造BKV下行帧
 	frame := bkv.Build(cmd, msgID, gatewayID, data)
@@ -47,16 +48,20 @@ func (a *OutboundAdapter) SendDownlink(gatewayID string, cmd uint16, msgID uint3
 	}
 
 	// 插入到Redis队列（立即发送）
-	// P1-6修复: 使用标准化优先级
+	// P1-6修复: 使用标准化优先级 + 补全时间戳与超时，避免processing键TTL=0
 	priority := outbound.GetCommandPriority(cmd)
+	defaultTimeoutMs := 3000 // 1-B: 按最佳实践默认3秒
 
 	err = a.queue.Enqueue(ctx, &redisstorage.OutboundMessage{
-		ID:       fmt.Sprintf("bkv_%d_%d", cmd, time.Now().UnixNano()),
-		DeviceID: deviceID,
-		PhyID:    gatewayID,
-		Command:  frame,
-		Priority: priority,
-		MaxRetry: 1,
+		ID:        fmt.Sprintf("bkv_%d_%d", cmd, now.UnixNano()),
+		DeviceID:  deviceID,
+		PhyID:     gatewayID,
+		Command:   frame,
+		Priority:  priority,
+		MaxRetry:  1,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Timeout:   defaultTimeoutMs,
 	})
 	if err != nil {
 		return fmt.Errorf("enqueue to redis: %w", err)

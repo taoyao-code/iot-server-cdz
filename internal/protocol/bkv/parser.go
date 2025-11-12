@@ -90,6 +90,13 @@ func Parse(b []byte) (*Frame, error) {
 	// 校验和
 	frame.Checksum = b[checksumPos]
 
+	// 验证校验和（们len字段开始到校验和之前的所有数据）
+	// dataWithChecksum = len(2) + cmd(2) + msgID(4) + direction(1) + gatewayID(7) + data + checksum(1)
+	dataWithChecksum := b[2 : totalLen-2] // 们len开始，排除tail
+	if err := VerifyChecksum(dataWithChecksum); err != nil {
+		return nil, err
+	}
+
 	return frame, nil
 }
 

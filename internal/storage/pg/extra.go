@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -65,13 +66,23 @@ func (r *Repository) GetPendingOrderByPort(ctx context.Context, deviceID int64, 
 
 // UpdateOrderToCharging 将订单更新为 charging，并设置开始时间（若为空则使用 NOW()）
 func (r *Repository) UpdateOrderToCharging(ctx context.Context, orderNo string, startTime time.Time) error {
-	const q = `UPDATE orders SET status=1, start_time=COALESCE($2, NOW()), updated_at=NOW() WHERE order_no=$1`
+	const q = `
+		UPDATE orders 
+		SET status=1, start_time=COALESCE($2, NOW()), updated_at=NOW() 
+		WHERE order_no=$1 AND status=0
+	`
 	var st *time.Time
 	if !startTime.IsZero() {
 		st = &startTime
 	}
-	_, err := r.Pool.Exec(ctx, q, orderNo, st)
-	return err
+	tag, err := r.Pool.Exec(ctx, q, orderNo, st)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("order not found or not in pending state")
+	}
+	return nil
 }
 
 // GetChargingOrderByPort 返回 charging 订单（若无返回 nil,nil）
