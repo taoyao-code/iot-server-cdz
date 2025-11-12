@@ -289,37 +289,8 @@ func (s *CardService) RechargeCard(ctx context.Context, cardNo string, amount fl
 }
 
 // ===== P1-7修复: 事件插入辅助方法 =====
-
-func (s *CardService) insertOrderConfirmedEvent(ctx context.Context, orderNo string) error {
-	seqNo, err := s.repo.GetNextSequenceNo(ctx, orderNo)
-	if err != nil {
-		return err
-	}
-
-	eventData := map[string]interface{}{
-		"order_no":     orderNo,
-		"confirmed_at": time.Now().Format(time.RFC3339),
-	}
-	data, _ := json.Marshal(eventData)
-
-	return s.repo.InsertEvent(ctx, orderNo, "order.confirmed", data, seqNo)
-}
-
-func (s *CardService) insertOrderFailedEvent(ctx context.Context, orderNo, reason string) error {
-	seqNo, err := s.repo.GetNextSequenceNo(ctx, orderNo)
-	if err != nil {
-		return err
-	}
-
-	eventData := map[string]interface{}{
-		"order_no":  orderNo,
-		"reason":    reason,
-		"failed_at": time.Now().Format(time.RFC3339),
-	}
-	data, _ := json.Marshal(eventData)
-
-	return s.repo.InsertEvent(ctx, orderNo, "order.failed", data, seqNo)
-}
+// 注：insertOrderConfirmedEvent 和 insertOrderFailedEvent 已被 UpdateTransactionChargingWithEvent
+// 和 FailTransactionWithEvent 取代（事务版本，更高效）
 
 func (s *CardService) insertOrderCompletedEvent(ctx context.Context, orderNo string, energyKwh, totalAmount float64) error {
 	seqNo, err := s.repo.GetNextSequenceNo(ctx, orderNo)
