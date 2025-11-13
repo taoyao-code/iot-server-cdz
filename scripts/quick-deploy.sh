@@ -34,13 +34,21 @@ if [ ! -f "$SSH_KEY" ]; then
     exit 1
 fi
 
-# 步骤 1: 编译
-echo "🚀 [1/4] 编译 Linux 版本..."
-if ! CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/iot-server-linux ./cmd/server; then
-    echo "❌ 编译失败"
-    exit 1
+# 步骤 1: 编译（可跳过）
+if [ "${SKIP_BUILD:-false}" = "true" ]; then
+    echo "⏭  跳过编译（SKIP_BUILD=true），使用现有二进制: bin/iot-server-linux"
+    if [ ! -f "bin/iot-server-linux" ]; then
+        echo "❌ 未找到现有二进制 bin/iot-server-linux，无法跳过编译"
+        exit 1
+    fi
+else
+    echo "🚀 [1/4] 编译 Linux 版本..."
+    if ! CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/iot-server-linux ./cmd/server; then
+        echo "❌ 编译失败"
+        exit 1
+    fi
+    echo "✅ 编译完成"
 fi
-echo "✅ 编译完成"
 
 # 步骤 2: 上传
 echo ""

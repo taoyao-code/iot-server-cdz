@@ -309,30 +309,44 @@ func (s *PortStatusSyncer) getExpectedPortStatus(orderStatus int) int {
 	}
 }
 
-// shouldAutoFix 判断是否应该自动修复
+// shouldAutoFix D修复: 判断是否应该自动修复（更精确的防护条件）
 func (s *PortStatusSyncer) shouldAutoFix(orderStatus int, portStatus *int, online bool, timeSinceUpdate time.Duration) bool {
-	// 自动修复条件：
-	// 1. 设备离线超过5分钟 且 订单是charging → 标记订单为failed
+	// D修复: 自动修复条件增强：
+	// 1. 设备离线超过5分钟 且 订单是charging 且 订单更新时间>3分钟 → 标记订单为failed
 	// 2. 端口是free 且 订单是charging 且 超过15分钟未更新 → 标记订单为completed
+	// 3. D修复: 订单interrupted状态 且 超过1小时 → 标记为failed
 
-	if !online && timeSinceUpdate > 5*time.Minute && orderStatus == 2 {
-		return true // 设备长时间离线，自动失败订单
+	// 条件1: 设备长时间离线，订单还在charging
+	// D修复: 增加订单更新时间限制，避免误修复刚刚更新的订单
+	if !online && timeSinceUpdate > 3*time.Minute && orderStatus == 2 {
+		return true
 	}
 
+	// 条件2: 端口已free但订单还是charging，可能是充电结束事件丢失
 	if portStatus != nil && *portStatus == 0 && orderStatus == 2 && timeSinceUpdate > 15*time.Minute {
-		return true // 端口已free但订单还是charging，可能是充电结束事件丢失
+		return true
+	}
+
+	// 条件3: D修复 - interrupted订单长期未恢复，自动标记失败
+	if orderStatus == 10 && timeSinceUpdate > 1*time.Hour {
+		return true
 	}
 
 	return false
 }
 
-// autoFixInconsistency 自动修复不一致状态
+// autoFixInconsistency D修复: 自动修复不一致状态（增强interrupted支持）
 func (s *PortStatusSyncer) autoFixInconsistency(ctx context.Context, orderNo string, deviceID int64, portNo int, orderStatus int, portStatus *int) error {
 	// 根据情况选择修复策略
 	var newStatus int
 	var reason string
 
-	if portStatus == nil || *portStatus == 0 {
+	// D修复: 支持interrupted订单自动失败
+	if orderStatus == 10 {
+		// interrupted订单长期未恢复，标记为failed
+		newStatus = 6 // failed
+		reason = "interrupted_timeout_auto_fix"
+	} else if portStatus == nil || *portStatus == 0 {
 		// 端口是free或缺失，订单标记为completed
 		newStatus = 3 // completed
 		reason = "port_status_free_auto_fix"

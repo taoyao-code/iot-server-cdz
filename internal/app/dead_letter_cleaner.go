@@ -64,14 +64,26 @@ func (c *DeadLetterCleaner) cleanExpiredMessages(ctx context.Context) {
 	c.logger.Info("P1-6: checking dead letter queue",
 		zap.Int64("dead_count", count))
 
-	// 注意: 当前Redis队列实现使用List存储死信，没有过期时间
-	// 这里只是记录日志，实际清理逻辑需要在Redis队列中实现
-	// TODO: 在 redis/outbound_queue.go 中添加 CleanExpiredDead 方法
+	// B修复: 清理超过24小时的死信消息
+	cutoff := 24 * time.Hour
+	cleaned, err := c.queue.CleanExpiredDead(ctx, cutoff, 100)
+	if err != nil {
+		c.logger.Error("P1-6: failed to clean expired dead messages",
+			zap.Error(err),
+			zap.Int64("dead_count", count))
+	} else if cleaned > 0 {
+		c.statsCleaned += cleaned
+		c.logger.Info("P1-6: cleaned expired dead messages",
+			zap.Int64("cleaned", cleaned),
+			zap.Int64("remaining", count-cleaned),
+			zap.Int64("total_cleaned", c.statsCleaned))
+	}
 
-	// 临时方案：如果死信队列超过1000条，触发告警
-	if count > 1000 {
+	// 告警阈值检查
+	remainingCount := count - cleaned
+	if remainingCount > 1000 {
 		c.logger.Warn("⚠️ P1-6: dead letter queue overloaded",
-			zap.Int64("dead_count", count),
+			zap.Int64("dead_count", remainingCount),
 			zap.String("suggestion", "manual intervention required"))
 	}
 }

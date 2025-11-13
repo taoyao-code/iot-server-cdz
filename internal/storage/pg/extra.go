@@ -170,24 +170,50 @@ func (r *Repository) FailOrder(ctx context.Context, orderNo, reason string) erro
 	return err
 }
 
-// ===== 参数写入回读：最小空实现（避免引入额外表） =====
+// ===== 参数写入回读：数据库持久化（C修复） =====
 
+// StoreParamWrite C修复: 存储参数写入记录到device_params表
 func (r *Repository) StoreParamWrite(ctx context.Context, deviceID int64, paramID int, value []byte, msgID int) error {
-	// 最小空实现：直接返回成功
-	return nil
+	const q = `INSERT INTO device_params (device_id, param_id, param_value, msg_id, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 0, NOW(), NOW())
+		ON CONFLICT (device_id, param_id) 
+		DO UPDATE SET param_value=$3, msg_id=$4, status=0, updated_at=NOW(), error_message=NULL`
+	_, err := r.Pool.Exec(ctx, q, deviceID, paramID, value, msgID)
+	return err
 }
 
+// GetParamWritePending C修复: 获取待确认的参数写入值
 func (r *Repository) GetParamWritePending(ctx context.Context, deviceID int64, paramID int) ([]byte, int, error) {
-	// 最小空实现：无待验证值
-	return nil, 0, nil
+	const q = `SELECT param_value, msg_id FROM device_params 
+		WHERE device_id=$1 AND param_id=$2 AND status=0`
+	var value []byte
+	var msgID int
+	err := r.Pool.QueryRow(ctx, q, deviceID, paramID).Scan(&value, &msgID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, 0, nil // 无待验证值
+		}
+		return nil, 0, err
+	}
+	return value, msgID, nil
 }
 
+// ConfirmParamWrite C修复: 确认参数写入成功
 func (r *Repository) ConfirmParamWrite(ctx context.Context, deviceID int64, paramID int, msgID int) error {
-	return nil
+	const q = `UPDATE device_params 
+		SET status=1, confirmed_at=NOW(), updated_at=NOW() 
+		WHERE device_id=$1 AND param_id=$2 AND msg_id=$3 AND status=0`
+	_, err := r.Pool.Exec(ctx, q, deviceID, paramID, msgID)
+	return err
 }
 
+// FailParamWrite C修复: 标记参数写入失败
 func (r *Repository) FailParamWrite(ctx context.Context, deviceID int64, paramID int, msgID int, errMsg string) error {
-	return nil
+	const q = `UPDATE device_params 
+		SET status=2, error_message=$4, updated_at=NOW() 
+		WHERE device_id=$1 AND param_id=$2 AND msg_id=$3 AND status=0`
+	_, err := r.Pool.Exec(ctx, q, deviceID, paramID, msgID, errMsg)
+	return err
 }
 
 // ===== 组网插座：最小空实现 =====
@@ -288,14 +314,6 @@ func (r *Repository) GetCardTransactions(ctx context.Context, cardNo string, lim
 	return []CardTransaction{}, nil
 }
 
-func (r *Repository) GetNextSequenceNo(ctx context.Context, orderNo string) (int, error) {
-	return 1, nil
-}
-
-func (r *Repository) InsertEvent(ctx context.Context, orderNo, eventType string, eventData []byte, sequenceNo int) error {
-	return nil
-}
-
 // ===== 参数管理 =====
 
 type DeviceParam struct {
@@ -329,18 +347,115 @@ type Event struct {
 	ErrorMessage *string
 }
 
+// GetPendingEvents E修复: 获取待推送的事件
 func (r *Repository) GetPendingEvents(ctx context.Context, limit int) ([]Event, error) {
-	return []Event{}, nil
+	if limit <= 0 {
+		limit = 50
+	}
+
+	const q = `SELECT id, order_no, event_type, event_data, sequence_no, status, retry_count, created_at, pushed_at, error_message
+		FROM events 
+		WHERE status IN (0, 2) AND retry_count < 5
+		ORDER BY order_no, sequence_no
+		LIMIT $1`
+
+	rows, err := r.Pool.Query(ctx, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []Event
+	for rows.Next() {
+		var e Event
+		var errorMsg *string
+		var pushedAt *time.Time
+
+		err := rows.Scan(&e.ID, &e.OrderNo, &e.EventType, &e.EventData, &e.SequenceNo,
+			&e.Status, &e.RetryCount, &e.CreatedAt, &pushedAt, &errorMsg)
+		if err != nil {
+			return nil, err
+		}
+
+		if pushedAt != nil {
+			e.PushedAt = pushedAt
+		}
+		if errorMsg != nil {
+			e.ErrorMessage = errorMsg
+		}
+
+		events = append(events, e)
+	}
+
+	return events, rows.Err()
 }
 
+// MarkEventPushed E修复: 标记事件已推送
 func (r *Repository) MarkEventPushed(ctx context.Context, eventID int64) error {
-	return nil
+	const q = `UPDATE events SET status=1, pushed_at=NOW() WHERE id=$1`
+	_, err := r.Pool.Exec(ctx, q, eventID)
+	return err
 }
 
+// MarkEventFailed E修复: 标记事件推送失败
 func (r *Repository) MarkEventFailed(ctx context.Context, eventID int64, errorMsg string) error {
-	return nil
+	const q = `UPDATE events 
+		SET status=2, retry_count=retry_count+1, error_message=$2 
+		WHERE id=$1`
+	_, err := r.Pool.Exec(ctx, q, eventID, errorMsg)
+	return err
 }
 
+// GetOrderEvents E修复: 获取订单的所有事件
 func (r *Repository) GetOrderEvents(ctx context.Context, orderNo string) ([]Event, error) {
-	return []Event{}, nil
+	const q = `SELECT id, order_no, event_type, event_data, sequence_no, status, retry_count, created_at, pushed_at, error_message
+		FROM events 
+		WHERE order_no=$1
+		ORDER BY sequence_no`
+
+	rows, err := r.Pool.Query(ctx, q, orderNo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []Event
+	for rows.Next() {
+		var e Event
+		var errorMsg *string
+		var pushedAt *time.Time
+
+		err := rows.Scan(&e.ID, &e.OrderNo, &e.EventType, &e.EventData, &e.SequenceNo,
+			&e.Status, &e.RetryCount, &e.CreatedAt, &pushedAt, &errorMsg)
+		if err != nil {
+			return nil, err
+		}
+
+		if pushedAt != nil {
+			e.PushedAt = pushedAt
+		}
+		if errorMsg != nil {
+			e.ErrorMessage = errorMsg
+		}
+
+		events = append(events, e)
+	}
+
+	return events, rows.Err()
+}
+
+// GetNextSequenceNo E修复: 获取订单的下一个序列号
+func (r *Repository) GetNextSequenceNo(ctx context.Context, orderNo string) (int, error) {
+	const q = `SELECT COALESCE(MAX(sequence_no), 0) + 1 FROM events WHERE order_no=$1`
+	var seqNo int
+	err := r.Pool.QueryRow(ctx, q, orderNo).Scan(&seqNo)
+	return seqNo, err
+}
+
+// InsertEvent E修复: 插入事件到events表
+func (r *Repository) InsertEvent(ctx context.Context, orderNo, eventType string, eventData []byte, sequenceNo int) error {
+	const q = `INSERT INTO events (order_no, event_type, event_data, sequence_no, status, created_at)
+		VALUES ($1, $2, $3, $4, 0, NOW())`
+	_, err := r.Pool.Exec(ctx, q, orderNo, eventType, eventData, sequenceNo)
+	return err
 }

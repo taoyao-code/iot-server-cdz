@@ -11,9 +11,10 @@ import (
 
 const (
 	// Redis Key前缀
-	outboundQueueKey      = "outbound:queue"         // 待处理队列（Sorted Set，按优先级+时间排序）
-	outboundProcessingKey = "outbound:processing:%s" // 处理中（Hash，设备维度）
-	outboundDeadKey       = "outbound:dead"          // 死信队列（List）
+	outboundQueueKey        = "outbound:queue"                  // 待处理队列（Sorted Set，按优先级+时间排序）
+	outboundProcessingKey   = "outbound:processing:%s"          // 处理中（Hash，设备维度）
+	outboundProcessingIndex = "outbound:processing_index:%s:%d" // ACK关联索引: phy_id:msg_id -> message_id
+	outboundDeadKey         = "outbound:dead"                   // 死信队列（List）
 
 	// P1-6修复: 队列降级阈值
 	QueueLengthWarning   = 200  // 队列警告阈值
@@ -32,6 +33,8 @@ type OutboundMessage struct {
 	DeviceID  int64     `json:"device_id"`  // 设备ID
 	PhyID     string    `json:"phy_id"`     // 物理ID
 	Command   []byte    `json:"command"`    // 命令数据
+	MsgID     uint32    `json:"msg_id"`     // 协议层消息ID（用于ACK关联）
+	Cmd       uint16    `json:"cmd"`        // 命令码（用于指标和日志）
 	Priority  int       `json:"priority"`   // 优先级（1-5，1最高=紧急，5最低=后台）P1-6标准
 	Retries   int       `json:"retries"`    // 已重试次数
 	MaxRetry  int       `json:"max_retry"`  // 最大重试次数
@@ -124,6 +127,13 @@ func (q *OutboundQueue) MarkProcessing(ctx context.Context, msg *OutboundMessage
 	pipe := q.client.Pipeline()
 	pipe.HSet(ctx, processingKey, msg.ID, data)
 	pipe.Expire(ctx, processingKey, time.Duration(msg.Timeout)*time.Millisecond*2)
+
+	// A修复: 如果msgID非零，创建ACK关联索引
+	if msg.MsgID > 0 {
+		indexKey := fmt.Sprintf(outboundProcessingIndex, msg.PhyID, msg.MsgID)
+		pipe.Set(ctx, indexKey, msg.ID, time.Duration(msg.Timeout)*time.Millisecond*2)
+	}
+
 	_, err = pipe.Exec(ctx)
 
 	return err
@@ -132,15 +142,69 @@ func (q *OutboundQueue) MarkProcessing(ctx context.Context, msg *OutboundMessage
 // MarkSuccess 标记消息处理成功（删除）
 func (q *OutboundQueue) MarkSuccess(ctx context.Context, msg *OutboundMessage) error {
 	processingKey := fmt.Sprintf(outboundProcessingKey, msg.PhyID)
-	return q.client.HDel(ctx, processingKey, msg.ID).Err()
+
+	pipe := q.client.Pipeline()
+	pipe.HDel(ctx, processingKey, msg.ID)
+
+	// A修复: 清理ACK关联索引
+	if msg.MsgID > 0 {
+		indexKey := fmt.Sprintf(outboundProcessingIndex, msg.PhyID, msg.MsgID)
+		pipe.Del(ctx, indexKey)
+	}
+
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// MarkSuccessByPhyMsgID A修复: 通过PhyID和MsgID标记消息成功（用于ACK关联）
+func (q *OutboundQueue) MarkSuccessByPhyMsgID(ctx context.Context, phyID string, msgID uint32) error {
+	if msgID == 0 {
+		return fmt.Errorf("msgID cannot be zero")
+	}
+
+	// 1. 查找索引获取message_id
+	indexKey := fmt.Sprintf(outboundProcessingIndex, phyID, msgID)
+	messageID, err := q.client.Get(ctx, indexKey).Result()
+	if err == redis.Nil {
+		// 索引不存在，可能已超时或已处理
+		return fmt.Errorf("no processing message found for phy_id=%s msg_id=%d", phyID, msgID)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to lookup processing index: %w", err)
+	}
+
+	// 2. 查找并反序列化消息
+	processingKey := fmt.Sprintf(outboundProcessingKey, phyID)
+	data, err := q.client.HGet(ctx, processingKey, messageID).Result()
+	if err == redis.Nil {
+		// 消息不存在，可能已被删除
+		return fmt.Errorf("message %s not found in processing", messageID)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to get processing message: %w", err)
+	}
+
+	var msg OutboundMessage
+	if err := json.Unmarshal([]byte(data), &msg); err != nil {
+		return fmt.Errorf("failed to unmarshal message: %w", err)
+	}
+
+	// 3. 标记成功
+	return q.MarkSuccess(ctx, &msg)
 }
 
 // MarkFailed 标记消息处理失败（重试或进入死信队列）
 func (q *OutboundQueue) MarkFailed(ctx context.Context, msg *OutboundMessage, errMsg string) error {
 	processingKey := fmt.Sprintf(outboundProcessingKey, msg.PhyID)
 
-	// 先从处理中删除
-	if err := q.client.HDel(ctx, processingKey, msg.ID).Err(); err != nil {
+	// 先从处理中删除，并清理ACK索引
+	pipe := q.client.Pipeline()
+	pipe.HDel(ctx, processingKey, msg.ID)
+	if msg.MsgID > 0 {
+		indexKey := fmt.Sprintf(outboundProcessingIndex, msg.PhyID, msg.MsgID)
+		pipe.Del(ctx, indexKey)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
 		return err
 	}
 
@@ -201,6 +265,87 @@ func (q *OutboundQueue) GetProcessingCount(ctx context.Context) (int64, error) {
 // GetDeadCount 获取死信队列消息数量
 func (q *OutboundQueue) GetDeadCount(ctx context.Context) (int64, error) {
 	return q.client.LLen(ctx, outboundDeadKey).Result()
+}
+
+// CleanExpiredDead B修复: 清理过期的死信消息
+func (q *OutboundQueue) CleanExpiredDead(ctx context.Context, cutoff time.Duration, batchSize int) (int64, error) {
+	if batchSize <= 0 {
+		batchSize = 100 // 默认批处理100条
+	}
+
+	var totalCleaned int64
+	cutoffTime := time.Now().Add(-cutoff)
+
+	// 从列表头部开始检查（最早的消息）
+	for {
+		// 获取一批死信消息
+		results, err := q.client.LRange(ctx, outboundDeadKey, 0, int64(batchSize-1)).Result()
+		if err != nil {
+			return totalCleaned, fmt.Errorf("lrange dead queue: %w", err)
+		}
+
+		if len(results) == 0 {
+			break // 队列为空
+		}
+
+		// 检查每条消息的时间戳
+		var toRemove []string
+		for _, data := range results {
+			var deadMsg map[string]interface{}
+			if err := json.Unmarshal([]byte(data), &deadMsg); err != nil {
+				continue // 跳过无法解析的消息
+			}
+
+			// 获取failed_at时间戳
+			failedAt, ok := deadMsg["failed_at"].(string)
+			if !ok {
+				// 尝试解析unix时间戳
+				if ts, ok := deadMsg["failed_at"].(float64); ok {
+					failedTime := time.Unix(int64(ts), 0)
+					if failedTime.Before(cutoffTime) {
+						toRemove = append(toRemove, data)
+					}
+				}
+				continue
+			}
+
+			// 解析时间字符串
+			failedTime, err := time.Parse(time.RFC3339, failedAt)
+			if err != nil {
+				continue
+			}
+
+			if failedTime.Before(cutoffTime) {
+				toRemove = append(toRemove, data)
+			} else {
+				// 因为List是按时间顺序的，如果这条不过期，后面的也不会过期
+				break
+			}
+		}
+
+		if len(toRemove) == 0 {
+			break // 没有过期消息
+		}
+
+		// 批量删除过期消息
+		pipe := q.client.Pipeline()
+		for _, data := range toRemove {
+			pipe.LRem(ctx, outboundDeadKey, 1, data)
+		}
+		_, err = pipe.Exec(ctx)
+		if err != nil {
+			return totalCleaned, fmt.Errorf("remove expired dead messages: %w", err)
+		}
+
+		totalCleaned += int64(len(toRemove))
+
+		// 如果删除数量少于批处理大小，说明已经处理完
+		if len(toRemove) < batchSize {
+			break
+		}
+	}
+
+	return totalCleaned, nil
 }
 
 // CleanupStale 清理过期的处理中消息（已被Expire自动清理，此方法用于手动触发）
