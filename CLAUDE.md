@@ -1,3 +1,24 @@
+<!-- OPENSPEC:START -->
+# OpenSpec 指南
+
+这些指南是为在此项目中工作的 AI 助手准备的。
+
+当请求满足以下条件时，始终打开 `@/openspec/AGENTS.md`：
+
+- 提及计划或提案 (如 proposal, spec, change, plan 等词语)
+- 引入新功能、重大变更、架构调整，或大型性能/安全工作
+- 听起来模棱两可，在编码前需要权威规范
+
+使用 `@/openspec/AGENTS.md` 来学习：
+
+- 如何创建和应用变更提案
+- 规范的格式和约定
+- 项目结构和指导方针
+
+请保留此托管块，以便 'openspec update' 可以刷新这些指南。
+
+<!-- OPENSPEC:END -->
+
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
@@ -29,14 +50,13 @@ make compose-logs        # 查看日志
 
 ```bash
 # 完整测试套件（推荐）
-make test-all            # 运行所有测试（单元测试 + P1 验证测试）
+make test-all            # 运行所有测试（单元测试）
 
 # 单项测试
 make test                # 单元测试（带 race 检测）
 make test-quick          # 快速测试（无 race 检测）
 make test-verbose        # 详细输出
 make test-coverage       # 生成覆盖率报告（coverage.html）
-make test-p1             # P1 问题修复验证测试
 
 # E2E 测试
 make test-e2e            # 运行端到端集成测试
@@ -127,6 +147,7 @@ Persistence 层（PostgreSQL + Redis）
 ### 数据流示例
 
 #### 设备连接流程
+
 ```
 设备 TCP 连接
   → Gateway 读取首包
@@ -137,6 +158,7 @@ Persistence 层（PostgreSQL + Redis）
 ```
 
 #### 订单创建流程
+
 ```
 HTTP API (/api/v1/orders)
   → OrderHandler 验证参数
@@ -147,6 +169,7 @@ HTTP API (/api/v1/orders)
 ```
 
 #### 心跳处理流程
+
 ```
 设备发送心跳
   → BKVHandler 解析帧
@@ -154,20 +177,6 @@ HTTP API (/api/v1/orders)
   → HeartbeatHandler 处理
   → 立即返回 ACK（优先级队列）
 ```
-
-### 重要修复（P1 问题）
-
-以下是已修复的关键问题，修改代码时需注意：
-
-- **P1-1**：心跳超时设置为 60 秒（`internal/session/manager.go`）
-- **P1-2**：延迟 ACK 拒绝（10 秒窗口，`internal/service/order_service.go`）
-- **P1-3**：端口并发冲突保护（数据库事务 + 行锁，`internal/storage/port_repository.go`）
-- **P1-4**：端口状态自动同步（`internal/app/port_syncer.go`，默认启用）
-- **P1-5**：订单取消/停止中间态处理（`internal/protocol/bkv/handler.go`）
-- **P1-6**：队列优先级标准化（`internal/storage/redis_queue.go`）
-- **P1-7**：事件推送 Outbox 模式（`internal/thirdparty/event_queue.go`，默认启用）
-
-运行 `make test-p1` 验证这些修复的测试用例。
 
 ## 配置文件
 
@@ -190,6 +199,7 @@ HTTP API (/api/v1/orders)
 迁移脚本位于 `db/migrations/`，由应用启动时自动执行（`internal/app/bootstrap.go`）。
 
 手动执行迁移：
+
 ```bash
 psql -U iot -d iot_server -f db/migrations/001_initial_schema.sql
 ```
@@ -203,6 +213,7 @@ psql -U iot -d iot_server -f db/migrations/001_initial_schema.sql
 3. **GN** - 组网协议（设备间通信）
 
 协议解析器位置：
+
 - `internal/protocol/ap3000/parser.go`
 - `internal/protocol/bkv/parser.go`
 - `internal/protocol/gn/parser.go`
@@ -212,12 +223,14 @@ psql -U iot -d iot_server -f db/migrations/001_initial_schema.sql
 ## 第三方集成
 
 Webhook 推送机制（`internal/thirdparty/webhook.go`）：
+
 - 异步推送事件到第三方 URL
 - 支持重试（最多 3 次，指数退避）
 - HMAC-SHA256 签名验证
 - 超时时间：10 秒
 
 配置第三方推送 URL：
+
 ```bash
 curl -X POST http://localhost:7055/api/v1/third-party \
   -H "Content-Type: application/json" \
@@ -236,6 +249,7 @@ curl http://localhost:7055/metrics
 ```
 
 关键指标：
+
 - `iot_connected_devices` - 在线设备数
 - `iot_http_requests_total` - HTTP 请求总数
 - `iot_protocol_messages_total` - 协议消息计数
@@ -297,6 +311,7 @@ curl http://localhost:7055/metrics
 ### 日志级别
 
 修改 `configs/*.yaml` 中的 `log.level`：
+
 - `debug` - 详细调试日志（包含协议帧内容）
 - `info` - 常规信息（默认）
 - `warn` - 警告信息
@@ -316,6 +331,7 @@ chore: 构建/工具变更
 ```
 
 示例：
+
 ```bash
 git commit -m "feat: 添加 AP3000 协议心跳 ACK 支持"
 git commit -m "fix: 修复端口状态并发更新冲突"

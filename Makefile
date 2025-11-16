@@ -78,39 +78,6 @@ test-coverage:
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "覆盖率报告: coverage.html"
 
-# P1问题修复验证测试
-.PHONY: test-p1 test-p1-all test-p1-session test-p1-card test-p1-port
-
-test-p1-all: test-p1-session test-p1-card test-p1-port
-	@echo ""
-	@echo "✅ 所有P1测试通过！"
-	@echo ""
-	@echo "已验证的P1修复："
-	@echo "  ✓ P1-1: 心跳超时60秒"
-	@echo "  ✓ P1-2: 延迟ACK拒绝（10秒窗口）"
-	@echo "  ✓ P1-3: 端口并发冲突（事务+行锁）"
-	@echo "  ✓ P1-4: 端口状态同步"
-	@echo "  ✓ P1-5: 取消/停止中间态"
-	@echo "  ✓ P1-6: 队列优先级标准化"
-	@echo "  ✓ P1-7: 事件推送Outbox模式"
-
-test-p1-session:
-	@echo "🧪 P1-1测试: 心跳超时60秒..."
-	@go test -v -run TestSessionTimeout ./internal/app/ || (echo "❌ P1-1测试失败"; exit 1)
-	@echo "✅ P1-1测试通过"
-
-test-p1-card:
-	@echo "🧪 P1-2测试: 延迟ACK拒绝..."
-	@go test -v -run TestHandleOrderConfirmation ./internal/service/ || (echo "❌ P1-2测试失败"; exit 1)
-	@echo "✅ P1-2测试通过"
-
-test-p1-port:
-	@echo "🧪 P1-4测试: 端口状态同步..."
-	@go test -v -run TestPortStatusSyncer ./internal/app/ || (echo "❌ P1-4测试失败"; exit 1)
-	@echo "✅ P1-4测试通过"
-
-test-p1: test-p1-all
-
 # 完整测试套件
 .PHONY: test-all test-quick test-ci
 
@@ -347,7 +314,6 @@ help:
 	@echo "  make test-quick      - 快速测试（无race检测）"
 	@echo "  make test-verbose    - 详细测试输出"
 	@echo "  make test-coverage   - 生成覆盖率报告"
-	@echo "  make test-p1         - P1问题修复验证测试 ⭐"
 	@echo "  make test-ci         - CI环境测试"
 	@echo ""
 	@echo "🐳 Docker开发环境："

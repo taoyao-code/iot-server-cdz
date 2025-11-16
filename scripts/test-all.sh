@@ -142,14 +142,8 @@ main() {
     run_test "internal/outbound 包测试" "go test ./internal/outbound/..." true
     run_test "internal/storage 包测试" "go test ./internal/storage/..." false
 
-    # 4. P1问题修复验证
-    log_info "阶段 4: P1问题修复验证"
-    run_test "P1-1: 心跳超时60秒" "go test -run TestSessionTimeout ./internal/app/" true
-    run_test "P1-2: 延迟ACK拒绝" "go test -run TestHandleOrderConfirmation ./internal/service/" true
-    run_test "P1-4: 端口状态同步" "go test -run TestPortStatusSyncer ./internal/app/" true
-
-    # 5. 集成测试
-    log_info "阶段 5: 集成测试"
+    # 4. 集成测试
+    log_info "阶段 4: 集成测试"
     if command -v docker &> /dev/null && docker info &> /dev/null; then
         log_info "检测到 Docker，运行集成测试..."
         run_test "存储层集成测试" "make test-integration" false
@@ -158,8 +152,8 @@ main() {
         SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
     fi
 
-    # 6. 覆盖率测试
-    log_info "阶段 6: 测试覆盖率"
+    # 5. 覆盖率测试
+    log_info "阶段 5: 测试覆盖率"
     if run_test "生成覆盖率报告" "go test -coverprofile=/tmp/coverage.out ./..." false; then
         coverage=$(go tool cover -func=/tmp/coverage.out | grep total | awk '{print $3}')
         log_info "总体覆盖率: $coverage"
