@@ -57,7 +57,24 @@ if ! scp -i "$SSH_KEY" bin/iot-server-linux $SERVER_USER@$SERVER:$SERVER_PATH/bi
     echo "❌ 上传失败，请检查网络或 SSH 配置"
     exit 1
 fi
-echo "✅ 上传完成"
+echo "✅ 二进制文件上传完成"
+
+# 步骤 2.5: 上传Web静态文件（测试控制台）
+echo ""
+echo "📤 [2.5/4] 上传Web静态文件..."
+if [ -d "web/static" ]; then
+    # 创建远程web目录（如果不存在）
+    ssh -i "$SSH_KEY" $SERVER_USER@$SERVER "mkdir -p $SERVER_PATH/web"
+
+    # 上传静态文件
+    if ! scp -r -i "$SSH_KEY" web/static $SERVER_USER@$SERVER:$SERVER_PATH/web/; then
+        echo "⚠️  Web静态文件上传失败（非致命错误，继续部署）"
+    else
+        echo "✅ Web静态文件上传完成"
+    fi
+else
+    echo "⚠️  未找到web/static目录，跳过Web文件上传"
+fi
 
 # 步骤 3: 替换
 echo ""
@@ -72,6 +89,12 @@ if ! ssh -i "$SSH_KEY" $SERVER_USER@$SERVER "cd $SERVER_PATH && docker cp bin/io
     echo "❌ 替换失败，正在恢复容器..."
     ssh -i "$SSH_KEY" $SERVER_USER@$SERVER "docker start $CONTAINER_NAME"
     exit 1
+fi
+
+# 复制Web静态文件到容器
+if [ -d "web/static" ]; then
+    echo "🔄 [3/4] 复制Web静态文件到容器..."
+    ssh -i "$SSH_KEY" $SERVER_USER@$SERVER "cd $SERVER_PATH && docker cp web $CONTAINER_NAME:/app/" || echo "⚠️  Web文件复制失败（非致命）"
 fi
 
 echo "🔄 [3/4] 启动容器..."

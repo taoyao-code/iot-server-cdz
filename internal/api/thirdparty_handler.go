@@ -106,8 +106,9 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		h.logger.Error("invalid request body", zap.Error(err))
 		c.JSON(http.StatusBadRequest, StandardResponse{
-			Code:      400,
-			Message:   fmt.Sprintf("invalid request: %v", err),
+			Code: 400,
+			// EN: invalid request body
+			Message:   fmt.Sprintf("无效的请求: %v", err),
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -125,8 +126,9 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("failed to get device", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code:      500,
-			Message:   "failed to get device",
+			Code: 500,
+			// EN: failed to get device
+			Message:   "获取设备失败",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -139,8 +141,9 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		h.logger.Warn("device offline, rejecting order creation",
 			zap.String("device_phy_id", devicePhyID))
 		c.JSON(http.StatusServiceUnavailable, StandardResponse{
-			Code:    503,
-			Message: "device is offline, cannot create order",
+			Code: 503,
+			// EN: device is offline, cannot create order
+			Message: "设备离线，无法创建订单",
 			Data: map[string]interface{}{
 				"device_id": devicePhyID,
 				"status":    "offline",
@@ -180,8 +183,9 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 			zap.Int("db_status", portStatus),
 			zap.String("action", "rejecting order creation"))
 		c.JSON(http.StatusConflict, StandardResponse{
-			Code:    40901, // PORT_STATE_MISMATCH
-			Message: "port state mismatch, port may be in use",
+			Code: 40901, // PORT_STATE_MISMATCH
+			// EN: port state mismatch, port may be in use
+			Message: "端口状态不一致，端口可能正在使用中",
 			Data: map[string]interface{}{
 				"port_no":    req.PortNo,
 				"status":     portStatus,
@@ -198,8 +202,9 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("failed to begin transaction", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code:      500,
-			Message:   "database error",
+			Code: 500,
+			// EN: database error
+			Message:   "数据库错误",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -222,8 +227,9 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		tx.Rollback(ctx)
 		h.logger.Error("failed to check port", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code:      500,
-			Message:   "database error",
+			Code: 500,
+			// EN: database error
+			Message:   "数据库错误",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -241,8 +247,9 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 				zap.Int("port_no", req.PortNo),
 				zap.String("existing_order", existingOrderNo))
 			c.JSON(http.StatusConflict, StandardResponse{
-				Code:    409,
-				Message: "port is busy",
+				Code: 409,
+				// EN: port is busy
+				Message: "端口正在使用中",
 				Data: map[string]interface{}{
 					"current_order": existingOrderNo,
 					"port_status":   "charging",
@@ -282,8 +289,9 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 			zap.Int("port_no", req.PortNo),
 			zap.Int("port_status", lockedPortStatus))
 		c.JSON(http.StatusConflict, StandardResponse{
-			Code:    40903, // PORT_STATE_INCONSISTENT
-			Message: "port state inconsistent, please retry",
+			Code: 40903, // PORT_STATE_INCONSISTENT
+			// EN: port state inconsistent, please retry
+			Message: "端口状态不一致，请重试",
 			Data: map[string]interface{}{
 				"port_no":     req.PortNo,
 				"port_status": lockedPortStatus,
@@ -300,8 +308,9 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 			zap.String("device_phy_id", devicePhyID),
 			zap.Int("port_no", req.PortNo))
 		c.JSON(http.StatusServiceUnavailable, StandardResponse{
-			Code:    503,
-			Message: "port is in fault state",
+			Code: 503,
+			// EN: port is in fault state
+			Message: "端口故障",
 			Data: map[string]interface{}{
 				"port_no": req.PortNo,
 				"status":  "fault",
@@ -325,8 +334,9 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		tx.Rollback(ctx)
 		h.logger.Error("failed to create order", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code:      500,
-			Message:   "failed to create order",
+			Code: 500,
+			// EN: failed to create order
+			Message:   "创建订单失败",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -345,8 +355,9 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		tx.Rollback(ctx)
 		h.logger.Error("P1-3: failed to update port status", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code:      500,
-			Message:   "failed to update port status",
+			Code: 500,
+			// EN: failed to update port status
+			Message:   "更新端口状态失败",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -357,8 +368,9 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 	if err := tx.Commit(ctx); err != nil {
 		h.logger.Error("failed to commit transaction", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code:      500,
-			Message:   "database error",
+			Code: 500,
+			// EN: database error
+			Message:   "数据库错误",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -466,8 +478,9 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 
 	// 9. 返回成功响应
 	c.JSON(http.StatusOK, StandardResponse{
-		Code:    0,
-		Message: "charge command sent successfully",
+		Code: 0,
+		// EN: charge command sent successfully
+		Message: "充电指令发送成功",
 		Data: map[string]interface{}{
 			"device_id": devicePhyID,
 			"order_no":  orderNo,
@@ -508,8 +521,9 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		h.logger.Error("invalid request body", zap.Error(err))
 		c.JSON(http.StatusBadRequest, StandardResponse{
-			Code:      400,
-			Message:   fmt.Sprintf("invalid request: %v", err),
+			Code: 400,
+			// EN: invalid request body
+			Message:   fmt.Sprintf("无效的请求: %v", err),
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -525,8 +539,9 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("failed to get device", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code:      500,
-			Message:   "failed to get device",
+			Code: 500,
+			// EN: failed to get device
+			Message:   "获取设备失败",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -546,8 +561,9 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	if err != nil {
 		h.logger.Warn("no active order found", zap.Error(err))
 		c.JSON(http.StatusNotFound, StandardResponse{
-			Code:      404,
-			Message:   "no active charging session found",
+			Code: 404,
+			// EN: no active charging session found
+			Message:   "未找到活动的充电会话",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -565,8 +581,9 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("failed to update order to stopping", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code:      500,
-			Message:   "failed to stop order",
+			Code: 500,
+			// EN: failed to stop order
+			Message:   "停止订单失败",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -576,8 +593,9 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		h.logger.Warn("order status changed, cannot stop",
 			zap.String("order_no", orderNo))
 		c.JSON(http.StatusConflict, StandardResponse{
-			Code:      409,
-			Message:   "order status has changed, cannot stop",
+			Code: 409,
+			// EN: order status has changed, cannot stop
+			Message:   "订单状态已变更，无法停止",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -618,8 +636,9 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 
 	// 4. 返回成功响应
 	c.JSON(http.StatusOK, StandardResponse{
-		Code:    0,
-		Message: "stop command sent, order will be stopped in 30 seconds",
+		Code: 0,
+		// EN: stop command sent, order will be stopped in 30 seconds
+		Message: "停止指令已发送，订单将在30秒内停止",
 		Data: map[string]interface{}{
 			"device_id": devicePhyID,
 			"order_no":  orderNo,
@@ -671,8 +690,9 @@ func (h *ThirdPartyHandler) CancelOrder(c *gin.Context) {
 	if err != nil {
 		h.logger.Warn("order not found", zap.String("order_no", orderNo), zap.Error(err))
 		c.JSON(http.StatusNotFound, StandardResponse{
-			Code:      404,
-			Message:   "order not found",
+			Code: 404,
+			// EN: order does not exist
+			Message:   "订单不存在",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -692,7 +712,6 @@ func (h *ThirdPartyHandler) CancelOrder(c *gin.Context) {
 				"status":      orderStatus,
 				"status_name": "charging",
 				"error_code":  "ORDER_IS_CHARGING",
-				"suggest":     "请先停止充电,订单变为stopped后即为终态",
 			},
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
@@ -724,8 +743,9 @@ func (h *ThirdPartyHandler) CancelOrder(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("failed to update order status", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code:      500,
-			Message:   "failed to cancel order",
+			Code: 500,
+			// EN: failed to cancel order
+			Message:   "取消订单失败",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -741,8 +761,9 @@ func (h *ThirdPartyHandler) CancelOrder(c *gin.Context) {
 		zap.Int("original_status", orderStatus))
 
 	c.JSON(http.StatusOK, StandardResponse{
-		Code:    0,
-		Message: "cancel command sent, order will be cancelled in 30 seconds",
+		Code: 0,
+		// EN: cancel command sent, order will be cancelled in 30 seconds
+		Message: "取消指令已发送，订单将在30秒内取消",
 		Data: map[string]interface{}{
 			"order_no": orderNo,
 			"status":   "cancelling",
@@ -776,8 +797,9 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("failed to get device", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code:      500,
-			Message:   "failed to get device",
+			Code: 500,
+			// EN: failed to get device
+			Message:   "获取设备失败",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -792,8 +814,9 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("failed to query device", zap.Error(err))
 		c.JSON(http.StatusNotFound, StandardResponse{
-			Code:      404,
-			Message:   "device not found",
+			Code: 404,
+			// EN: device not found
+			Message:   "设备不存在",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -835,8 +858,9 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, StandardResponse{
-		Code:      0,
-		Message:   "success",
+		Code: 0,
+		// EN: success
+		Message:   "成功",
 		Data:      deviceData,
 		RequestID: requestID,
 		Timestamp: time.Now().Unix(),
@@ -882,8 +906,9 @@ func (h *ThirdPartyHandler) GetOrder(c *gin.Context) {
 	if err != nil {
 		h.logger.Warn("order not found", zap.String("order_no", orderNo), zap.Error(err))
 		c.JSON(http.StatusNotFound, StandardResponse{
-			Code:      404,
-			Message:   "order not found",
+			Code: 404,
+			// EN: order not found
+			Message:   "订单不存在",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -914,8 +939,9 @@ func (h *ThirdPartyHandler) GetOrder(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, StandardResponse{
-		Code:      0,
-		Message:   "success",
+		Code: 0,
+		// EN: success
+		Message:   "成功",
 		Data:      orderData,
 		RequestID: requestID,
 		Timestamp: time.Now().Unix(),

@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IOT 充电桩测试控制台</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Vue 3 CDN -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- Axios CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        [v-cloak] {
+            display: none;
+        }
+        .pulse-dot {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: .5;
+            }
+        }
+        .status-online {
+            @apply bg-green-500;
+        }
+        .status-offline {
+            @apply bg-red-500;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div id="app" v-cloak class="min-h-screen">
+        <!-- 顶部导航 -->
+        <nav class="bg-indigo-600 text-white shadow-lg">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between h-16">
+                    <div class="flex items-center">
+                        <i class="fas fa-charging-station text-2xl mr-3"></i>
+                        <h1 class="text-xl font-bold">IOT 充电桩测试控制台</h1>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <button @click="currentView = 'devices'"
+                                :class="currentView === 'devices' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                                class="px-4 py-2 rounded-md transition">
+                            <i class="fas fa-list mr-2"></i>设备列表
+                        </button>
+                        <button @click="currentView = 'sessions'"
+                                :class="currentView === 'sessions' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
+                                class="px-4 py-2 rounded-md transition">
+                            <i class="fas fa-clock-rotate-left mr-2"></i>测试会话
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <!-- 主内容区 -->
+        <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <!-- 设备列表视图 -->
+            <div v-if="currentView === 'devices'" class="space-y-6">
+                <!-- 搜索和过滤 -->
+                <div class="bg-white p-4 rounded-lg shadow">
+                    <div class="flex space-x-4">
+                        <input v-model="searchQuery"
+                               type="text"
+                               placeholder="搜索设备 ID..."
+                               class="flex-1 px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+                        <select v-model="filterStatus"
+                                class="px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500">
+                            <option value="">全部状态</option>
+                            <option value="online">在线</option>
+                            <option value="offline">离线</option>
+                        </select>
+                        <button @click="loadDevices"
+                                class="px-6 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition">
+                            <i class="fas fa-refresh mr-2"></i>刷新
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 设备卡片列表 -->
+                <div v-if="loading" class="text-center py-12">
+                    <i class="fas fa-spinner fa-spin text-4xl text-indigo-600"></i>
+                    <p class="mt-4 text-gray-600">加载中...</p>
+                </div>
+
+                <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div v-for="device in filteredDevices"
+                         :key="device.device_phy_id"
+                         class="bg-white rounded-lg shadow-md hover:shadow-xl transition-shadow cursor-pointer"
+                         @click="selectDevice(device)">
+                        <div class="p-6">
+                            <!-- 设备头部 -->
+                            <div class="flex justify-between items-start mb-4">
+                                <div>
+                                    <h3 class="text-lg font-semibold text-gray-900">{{ device.device_phy_id }}</h3>
+                                    <p class="text-sm text-gray-500">ID: {{ device.device_id }}</p>
+                                </div>
+                                <span :class="device.is_online ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'"
+                                      class="px-3 py-1 rounded-full text-xs font-medium flex items-center">
+                                    <span :class="device.is_online ? 'status-online' : 'status-offline'"
+                                          class="w-2 h-2 rounded-full mr-2 pulse-dot"></span>
+                                    {{ device.is_online ? '在线' : '离线' }}
+                                </span>
+                            </div>
+
+                            <!-- 端口状态 -->
+                            <div class="mb-4">
+                                <h4 class="text-sm font-medium text-gray-700 mb-2">端口状态</h4>
+                                <div class="flex space-x-2">
+                                    <div v-for="port in device.ports"
+                                         :key="port.port_no"
+                                         :class="getPortStatusClass(port.status)"
+                                         class="flex-1 py-2 px-3 rounded text-center text-xs">
+                                        <div class="font-semibold">端口{{ port.port_no }}</div>
+                                        <div class="mt-1">{{ getPortStatusText(port.status) }}</div>
+                                        <div v-if="port.power" class="mt-1 text-xs">{{ port.power }}W</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 活跃订单 -->
+                            <div v-if="device.active_orders && device.active_orders.length > 0"
+                                 class="border-t pt-4">
+                                <h4 class="text-sm font-medium text-gray-700 mb-2">活跃订单</h4>
+                                <div v-for="order in device.active_orders"
+                                     :key="order.order_no"
+                                     class="text-xs text-gray-600 mb-1">
+                                    <span class="font-mono">{{ order.order_no }}</span>
+                                    <span class="ml-2">端口{{ order.port_no }}</span>
+                                    <span class="ml-2">{{ getOrderStatusText(order.status) }}</span>
+                                </div>
+                            </div>
+
+                            <!-- 注册时间 -->
+                            <div class="mt-4 text-xs text-gray-500">
+                                注册时间: {{ formatDate(device.registered_at) }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 空状态 -->
+                <div v-if="!loading && filteredDevices.length === 0"
+                     class="text-center py-12 bg-white rounded-lg">
+                    <i class="fas fa-inbox text-6xl text-gray-300 mb-4"></i>
+                    <p class="text-gray-600">没有找到设备</p>
+                </div>
+            </div>
+
+            <!-- 设备详情和测试视图 -->
+            <div v-if="currentView === 'device-detail'" class="space-y-6">
+                <div class="bg-white p-6 rounded-lg shadow-md">
+                    <button @click="currentView = 'devices'"
+                            class="mb-4 text-indigo-600 hover:text-indigo-800">
+                        <i class="fas fa-arrow-left mr-2"></i>返回设备列表
+                    </button>
+
+                    <h2 class="text-2xl font-bold mb-6">{{ selectedDevice.device_phy_id }}</h2>
+
+                    <!-- 测试场景选择 -->
+                    <div class="mb-6">
+                        <h3 class="text-lg font-semibold mb-4">选择测试场景</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div v-for="scenario in scenarios"
+                                 :key="scenario.id"
+                                 @click="selectScenario(scenario)"
+                                 :class="selectedScenario && selectedScenario.id === scenario.id ? 'border-indigo-600 bg-indigo-50' : 'border-gray-300'"
+                                 class="border-2 p-4 rounded-lg cursor-pointer hover:border-indigo-400 transition">
+                                <h4 class="font-semibold text-gray-900">{{ scenario.name }}</h4>
+                                <p class="text-sm text-gray-600 mt-2">{{ scenario.description }}</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 测试参数 -->
+                    <div v-if="selectedScenario" class="mb-6">
+                        <h3 class="text-lg font-semibold mb-4">测试参数</h3>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">端口号</label>
+                                <select v-model.number="testParams.port_no"
+                                        class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500"
+                                        :disabled="!hasValidPorts">
+                                    <option v-for="port in validPorts"
+                                            :key="port.port_no"
+                                            :value="port.port_no">
+                                        端口{{ port.port_no }} ({{ getPortStatusText(port.status) }})
+                                    </option>
+                                </select>
+                                <p v-if="!hasValidPorts" class="mt-1 text-sm text-red-600">
+                                    <i class="fas fa-exclamation-triangle mr-1"></i>此设备没有有效端口
+                                </p>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">充电模式</label>
+                                <select v-model="testParams.charge_mode"
+                                        class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500">
+                                    <option :value="1">按时长</option>
+                                    <option :value="2">按电量</option>
+                                    <option :value="3">按功率</option>
+                                    <option :value="4">充满自停</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">金额（分）</label>
+                                <input v-model.number="testParams.amount"
+                                       type="number"
+                                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">时长（分钟）</label>
+                                <input v-model.number="testParams.duration_minutes"
+                                       type="number"
+                                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 操作按钮 -->
+                    <div v-if="selectedScenario" class="flex space-x-4">
+                        <button @click="startTest"
+                                :disabled="testRunning || !hasValidPorts"
+                                class="px-6 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition">
+                            <i class="fas fa-play mr-2"></i>
+                            {{ testRunning ? '测试进行中...' : (hasValidPorts ? '开始测试' : '无有效端口') }}
+                        </button>
+                        <button v-if="currentTestSessionId"
+                                @click="stopTest"
+                                class="px-6 py-3 bg-red-600 text-white rounded-md hover:bg-red-700 transition">
+                            <i class="fas fa-stop mr-2"></i>停止充电
+                        </button>
+                    </div>
+
+                    <!-- 当前测试会话 -->
+                    <div v-if="currentTestSessionId" class="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                        <h4 class="font-semibold text-blue-900 mb-2">当前测试会话</h4>
+                        <p class="text-sm text-blue-800 font-mono">{{ currentTestSessionId }}</p>
+                        <button @click="viewTimeline(currentTestSessionId)"
+                                class="mt-3 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm">
+                            <i class="fas fa-timeline mr-2"></i>查看时间线
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 测试会话时间线视图 -->
+            <div v-if="currentView === 'timeline'" class="space-y-6">
+                <div class="bg-white p-6 rounded-lg shadow-md">
+                    <div class="flex justify-between items-center mb-6">
+                        <div>
+                            <button @click="goBack" class="text-indigo-600 hover:text-indigo-800 mb-4">
+                                <i class="fas fa-arrow-left mr-2"></i>返回
+                            </button>
+                            <h2 class="text-2xl font-bold">测试会话时间线</h2>
+                            <p class="text-sm text-gray-600 font-mono mt-2">{{ currentTimelineSessionId }}</p>
+                        </div>
+                        <button @click="exportTimeline"
+                                class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700">
+                            <i class="fas fa-download mr-2"></i>导出数据
+                        </button>
+                    </div>
+
+                    <!-- 时间线摘要 -->
+                    <div v-if="timeline" class="mb-6 grid grid-cols-4 gap-4">
+                        <div class="bg-gray-50 p-4 rounded-lg">
+                            <div class="text-2xl font-bold text-gray-900">{{ timeline.summary.total_events }}</div>
+                            <div class="text-sm text-gray-600">总事件数</div>
+                        </div>
+                        <div class="bg-green-50 p-4 rounded-lg">
+                            <div class="text-2xl font-bold text-green-900">{{ timeline.summary.orders_created }}</div>
+                            <div class="text-sm text-green-600">订单创建</div>
+                        </div>
+                        <div class="bg-blue-50 p-4 rounded-lg">
+                            <div class="text-2xl font-bold text-blue-900">{{ timeline.summary.commands_sent }}</div>
+                            <div class="text-sm text-blue-600">命令发送</div>
+                        </div>
+                        <div class="bg-purple-50 p-4 rounded-lg">
+                            <div class="text-2xl font-bold text-purple-900">{{ timeline.summary.events_pushed }}</div>
+                            <div class="text-sm text-purple-600">事件推送</div>
+                        </div>
+                    </div>
+
+                    <!-- 时间线事件列表 -->
+                    <div v-if="timeline && timeline.events.length > 0" class="space-y-4">
+                        <div v-for="(event, index) in timeline.events"
+                             :key="index"
+                             class="border-l-4 pl-4 py-3"
+                             :class="getEventBorderClass(event.type)">
+                            <div class="flex justify-between items-start">
+                                <div class="flex-1">
+                                    <div class="flex items-center space-x-2">
+                                        <i :class="getEventIcon(event.type)" class="text-gray-600"></i>
+                                        <span class="font-semibold text-gray-900">{{ event.description }}</span>
+                                        <span class="px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-700">
+                                            {{ event.type }}
+                                        </span>
+                                    </div>
+                                    <div class="mt-2 text-sm text-gray-600">
+                                        来源: {{ event.source }}
+                                    </div>
+                                    <div class="mt-2">
+                                        <button @click="toggleEventData(index)"
+                                                class="text-xs text-indigo-600 hover:text-indigo-800">
+                                            <i :class="expandedEvents[index] ? 'fa-chevron-up' : 'fa-chevron-down'"
+                                               class="fas mr-1"></i>
+                                            {{ expandedEvents[index] ? '收起' : '展开' }}详情
+                                        </button>
+                                    </div>
+                                    <div v-if="expandedEvents[index]" class="mt-3 p-3 bg-gray-50 rounded text-xs font-mono">
+                                        <pre>{{ JSON.stringify(event.data, null, 2) }}</pre>
+                                        <div v-if="event.raw_payload" class="mt-2 pt-2 border-t">
+                                            <div class="font-semibold mb-1">原始负载:</div>
+                                            <div class="text-gray-600 break-all">{{ event.raw_payload }}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="text-xs text-gray-500 ml-4">
+                                    {{ formatDateTime(event.timestamp) }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 空状态 -->
+                    <div v-else-if="!timelineLoading" class="text-center py-12">
+                        <i class="fas fa-inbox text-6xl text-gray-300 mb-4"></i>
+                        <p class="text-gray-600">暂无事件数据</p>
+                    </div>
+
+                    <!-- 加载中 -->
+                    <div v-if="timelineLoading" class="text-center py-12">
+                        <i class="fas fa-spinner fa-spin text-4xl text-indigo-600"></i>
+                        <p class="mt-4 text-gray-600">加载时间线数据...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 测试会话列表视图 -->
+            <div v-if="currentView === 'sessions'" class="space-y-6">
+                <div class="bg-white p-6 rounded-lg shadow-md">
+                    <h2 class="text-2xl font-bold mb-6">测试会话历史</h2>
+                    <div class="mb-4">
+                        <input v-model="sessionSearchQuery"
+                               type="text"
+                               placeholder="输入测试会话ID查看时间线..."
+                               class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500"
+                               @keyup.enter="viewSessionById">
+                        <button @click="viewSessionById"
+                                class="mt-3 px-6 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700">
+                            <i class="fas fa-search mr-2"></i>查看时间线
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- 通知提示 -->
+        <div v-if="notification"
+             :class="notification.type === 'success' ? 'bg-green-500' : 'bg-red-500'"
+             class="fixed bottom-4 right-4 px-6 py-4 text-white rounded-lg shadow-lg z-50 transition-all">
+            <div class="flex items-center">
+                <i :class="notification.type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'"
+                   class="fas text-xl mr-3"></i>
+                <span>{{ notification.message }}</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

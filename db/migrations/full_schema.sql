@@ -60,12 +60,14 @@ CREATE TABLE IF NOT EXISTS orders (
     status          INT NOT NULL DEFAULT 0,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    test_session_id TEXT,        -- E2E测试会话标识
     UNIQUE(order_no)
 );
 -- 索引：设备 + 创建时间（优化查询最新订单）
 CREATE INDEX IF NOT EXISTS idx_orders_device_created ON orders(device_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_device_port ON orders(device_id, port_no);
 CREATE INDEX IF NOT EXISTS idx_orders_time ON orders(start_time, end_time);
+CREATE INDEX IF NOT EXISTS idx_orders_test_session ON orders(test_session_id) WHERE test_session_id IS NOT NULL;
 
 -- cmd_log: 指令日志（上下行）
 CREATE TABLE IF NOT EXISTS cmd_log (
@@ -78,10 +80,12 @@ CREATE TABLE IF NOT EXISTS cmd_log (
     success         BOOLEAN,
     err_code        INT,
     duration_ms     INT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    test_session_id TEXT         -- E2E测试会话标识
 );
 CREATE INDEX IF NOT EXISTS idx_cmdlog_device_time ON cmd_log(device_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cmdlog_msg ON cmd_log(msg_id, cmd);
+CREATE INDEX IF NOT EXISTS idx_cmd_log_test_session ON cmd_log(test_session_id) WHERE test_session_id IS NOT NULL;
 
 -- outbound_queue: 下行任务队列(由 0002_outbox.up.sql 创建)
 -- 此处已移除,避免重复创建
@@ -104,7 +108,8 @@ CREATE TABLE IF NOT EXISTS outbound_queue (
     correlation_id TEXT,
     last_error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    test_session_id TEXT                   -- E2E测试会话标识
 );
 
 CREATE INDEX IF NOT EXISTS idx_outbound_queue_status_notbefore
@@ -115,6 +120,9 @@ CREATE INDEX IF NOT EXISTS idx_outbound_queue_device
 
 CREATE UNIQUE INDEX IF NOT EXISTS uid_outbound_correlation
     ON outbound_queue(correlation_id) WHERE correlation_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_outbound_queue_test_session
+    ON outbound_queue(test_session_id) WHERE test_session_id IS NOT NULL;
 
 -- trigger to update updated_at
 CREATE OR REPLACE FUNCTION set_updated_at()
@@ -443,16 +451,18 @@ CREATE TABLE IF NOT EXISTS events (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     pushed_at TIMESTAMPTZ,
     error_message TEXT,
+    test_session_id TEXT,             -- E2E测试会话标识
     CONSTRAINT events_order_seq UNIQUE(order_no, sequence_no)
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_status_created ON events(status, created_at) WHERE status IN (0, 2);
 CREATE INDEX IF NOT EXISTS idx_events_order_no ON events(order_no);
 CREATE INDEX IF NOT EXISTS idx_events_retry ON events(status, retry_count, created_at) WHERE status = 2 AND retry_count < 5;
+CREATE INDEX IF NOT EXISTS idx_events_test_session ON events(test_session_id) WHERE test_session_id IS NOT NULL;
 
 COMMENT ON TABLE events IS 'P1-7: 事件推送Outbox模式，确保事件可靠推送';
 COMMENT ON COLUMN events.status IS '0=待推送, 1=已推送, 2=失败';
 COMMENT ON COLUMN events.sequence_no IS '同一订单的事件序列号，确保顺序';
 
 -- 记录所有迁移版本
-INSERT INTO schema_migrations(version) VALUES (1), (2), (3), (5), (6), (7), (8), (9), (11), (12);
+INSERT INTO schema_migrations(version) VALUES (1), (2), (3), (5), (6), (7), (8), (9), (11), (12), (13);
