@@ -1,32 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git show:*)",
-      "Bash(git rev-parse:*)",
-      "mcp__github__list_commits",
-      "Bash(make test-p1:*)",
-      "Bash(make test-quick:*)",
-      "Bash(openspec list:*)",
-      "Bash(openspec validate:*)",
-      "Bash(test:*)",
-      "Bash(go build:*)",
-      "Bash(openspec show:*)",
-      "Bash(cat:*)",
-      "Bash(/Users/zhanghai/code/充电桩/iot-server/internal/api/testconsole_handler.go)",
-      "Bash(git checkout:*)",
-      "Bash(internal/api/testconsole_handler.go)",
-      "SlashCommand(/openspec:apply add-device-e2e-test-console)",
-      "Bash(make test:*)",
-      "Bash(make build-linux:*)",
-      "Bash(make:*)",
-      "Bash(curl -s http://182.43.177.92:7055/healthz)",
-      "Bash(curl:*)",
-      "Bash(ssh -i ~/.ssh/id_rsa root@182.43.177.92 \"docker exec iot-server-prod ls -la /app/configs/\")",
-      "Bash(ssh:*)",
-      "Bash(scp:*)",
-      "Bash(python3:*)",
-      "Bash(go test:*)",
-      "Bash(grep -E 'int.*`json:')"
+      "Bash(psql:*)",
+      "Bash(docker exec:*)",
+      "Bash('http://182.43.177.92:7055/internal/test/sync-ports')",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []

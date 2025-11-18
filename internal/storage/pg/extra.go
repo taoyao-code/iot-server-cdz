@@ -67,8 +67,8 @@ func (r *Repository) GetPendingOrderByPort(ctx context.Context, deviceID int64, 
 // UpdateOrderToCharging 将订单更新为 charging，并设置开始时间（若为空则使用 NOW()）
 func (r *Repository) UpdateOrderToCharging(ctx context.Context, orderNo string, startTime time.Time) error {
 	const q = `
-		UPDATE orders 
-		SET status=1, start_time=COALESCE($2, NOW()), updated_at=NOW() 
+		UPDATE orders
+		SET status=2, start_time=COALESCE($2, NOW()), updated_at=NOW()
 		WHERE order_no=$1 AND status=0
 	`
 	var st *time.Time
@@ -88,7 +88,7 @@ func (r *Repository) UpdateOrderToCharging(ctx context.Context, orderNo string, 
 // GetChargingOrderByPort 返回 charging 订单（若无返回 nil,nil）
 func (r *Repository) GetChargingOrderByPort(ctx context.Context, deviceID int64, portNo int) (*Order, error) {
 	const q = `SELECT id, device_id, '' as phy_id, port_no, order_no, charge_mode, start_time, end_time, kwh_0p01, amount_cent, status
-		FROM orders WHERE device_id=$1 AND port_no=$2 AND status=1 ORDER BY id DESC LIMIT 1`
+		FROM orders WHERE device_id=$1 AND port_no=$2 AND status=2 ORDER BY id DESC LIMIT 1`
 	var (
 		ord Order
 		kwh *int64
@@ -106,10 +106,10 @@ func (r *Repository) GetChargingOrderByPort(ctx context.Context, deviceID int64,
 	return &ord, nil
 }
 
-// CompleteOrderByPort 完成端口上的充电订单（设置 end_time 并置状态为 completed=2）
+// CompleteOrderByPort 完成端口上的充电订单（设置 end_time 并置状态为 completed=3）
 func (r *Repository) CompleteOrderByPort(ctx context.Context, deviceID int64, portNo int, endTime time.Time, reason int) error {
-	const q = `UPDATE orders SET end_time=COALESCE($3, NOW()), status=2, updated_at=NOW()
-		WHERE device_id=$1 AND port_no=$2 AND status=1`
+	const q = `UPDATE orders SET end_time=COALESCE($3, NOW()), status=3, updated_at=NOW()
+		WHERE device_id=$1 AND port_no=$2 AND status=2`
 	var et *time.Time
 	if !endTime.IsZero() {
 		et = &endTime
@@ -118,15 +118,15 @@ func (r *Repository) CompleteOrderByPort(ctx context.Context, deviceID int64, po
 	return err
 }
 
-// CancelOrderByPort 取消 pending 订单（置为 cancelled=9）
+// CancelOrderByPort 取消 pending 订单（置为 cancelled=5）
 func (r *Repository) CancelOrderByPort(ctx context.Context, deviceID int64, portNo int) error {
-	_, err := r.Pool.Exec(ctx, `UPDATE orders SET status=9, updated_at=NOW() WHERE device_id=$1 AND port_no=$2 AND status=0`, deviceID, portNo)
+	_, err := r.Pool.Exec(ctx, `UPDATE orders SET status=5, updated_at=NOW() WHERE device_id=$1 AND port_no=$2 AND status=0`, deviceID, portNo)
 	return err
 }
 
 // MarkChargingOrdersAsInterrupted 将设备上的 charging 订单标记为 interrupted=10
 func (r *Repository) MarkChargingOrdersAsInterrupted(ctx context.Context, deviceID int64) (int64, error) {
-	cmdTag, err := r.Pool.Exec(ctx, `UPDATE orders SET status=10, updated_at=NOW() WHERE device_id=$1 AND status=1`, deviceID)
+	cmdTag, err := r.Pool.Exec(ctx, `UPDATE orders SET status=10, updated_at=NOW() WHERE device_id=$1 AND status=2`, deviceID)
 	if err != nil {
 		return 0, err
 	}
@@ -158,15 +158,15 @@ func (r *Repository) GetInterruptedOrders(ctx context.Context, deviceID int64) (
 	return res, rows.Err()
 }
 
-// RecoverOrder 将 interrupted 订单恢复为 charging=1
+// RecoverOrder 将 interrupted 订单恢复为 charging=2
 func (r *Repository) RecoverOrder(ctx context.Context, orderNo string) error {
-	_, err := r.Pool.Exec(ctx, `UPDATE orders SET status=1, updated_at=NOW() WHERE order_no=$1 AND status=10`, orderNo)
+	_, err := r.Pool.Exec(ctx, `UPDATE orders SET status=2, updated_at=NOW() WHERE order_no=$1 AND status=10`, orderNo)
 	return err
 }
 
-// FailOrder 将订单标记为 failed=11
+// FailOrder 将订单标记为 failed=6
 func (r *Repository) FailOrder(ctx context.Context, orderNo, reason string) error {
-	_, err := r.Pool.Exec(ctx, `UPDATE orders SET status=11, updated_at=NOW() WHERE order_no=$1`, orderNo)
+	_, err := r.Pool.Exec(ctx, `UPDATE orders SET status=6, updated_at=NOW() WHERE order_no=$1`, orderNo)
 	return err
 }
 

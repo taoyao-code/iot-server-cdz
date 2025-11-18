@@ -32,7 +32,7 @@ createApp({
                 port_no: 1,
                 charge_mode: 1,
                 amount: 100,
-                duration_minutes: 5,
+                duration_minutes: 2,
                 power: 0,
                 price_per_kwh: 100,
                 service_fee: 100

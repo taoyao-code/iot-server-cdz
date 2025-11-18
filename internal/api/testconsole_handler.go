@@ -412,6 +412,90 @@ func (h *TestConsoleHandler) StartTestCharge(c *gin.Context) {
 	// 将test_session_id注入到context中
 	c.Set("test_session_id", testSessionID)
 
+	// 根据测试场景执行对应逻辑
+	switch req.ScenarioID {
+	case "device-offline":
+		// 场景：设备离线拒绝 - 直接返回503错误，不调用充电API
+		h.logger.Info("scenario: device-offline - returning 503",
+			zap.String("test_session_id", testSessionID))
+		c.JSON(http.StatusServiceUnavailable, StandardResponse{
+			Code:    503,
+			Message: "设备离线，无法创建订单",
+			Data: map[string]interface{}{
+				"test_session_id": testSessionID,
+				"device_id":       devicePhyID,
+				"status":          "offline",
+				"scenario":        "device-offline",
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+
+	case "port-busy":
+		// 场景：端口占用冲突 - 检查端口是否真的被占用
+		// 如果没有占用，先创建一个pending订单模拟占用
+		device, err := h.repo.GetDeviceByPhyID(ctx, devicePhyID)
+		if err != nil {
+			c.JSON(http.StatusNotFound, StandardResponse{
+				Code:      404,
+				Message:   "device not found",
+				RequestID: requestID,
+				Timestamp: time.Now().Unix(),
+			})
+			return
+		}
+
+		// 检查是否已有活跃订单
+		var existingOrder string
+		checkSQL := `SELECT order_no FROM orders
+			WHERE device_id = $1 AND port_no = $2 AND status IN (0, 2, 8, 9, 10)
+			ORDER BY created_at DESC LIMIT 1`
+		_ = h.repo.Pool.QueryRow(ctx, checkSQL, device.ID, req.PortNo).Scan(&existingOrder)
+
+		if existingOrder == "" {
+			// 没有活跃订单，创建一个pending订单来模拟占用
+			mockOrderNo := fmt.Sprintf("MOCK%d%03d", time.Now().Unix(), req.PortNo)
+			insertSQL := `INSERT INTO orders (device_id, order_no, port_no, amount_cent, status, charge_mode, created_at)
+				VALUES ($1, $2, $3, $4, 0, $5, NOW())`
+			_, _ = h.repo.Pool.Exec(ctx, insertSQL, device.ID, mockOrderNo, req.PortNo, req.Amount, req.ChargeMode)
+			existingOrder = mockOrderNo
+			h.logger.Info("scenario: port-busy - created mock order",
+				zap.String("test_session_id", testSessionID),
+				zap.String("mock_order", mockOrderNo))
+		}
+
+		// 返回端口占用错误
+		c.JSON(http.StatusConflict, StandardResponse{
+			Code:    409,
+			Message: "端口正在使用中",
+			Data: map[string]interface{}{
+				"test_session_id": testSessionID,
+				"current_order":   existingOrder,
+				"port_status":     "charging",
+				"scenario":        "port-busy",
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+
+	case "normal-charge", "manual-stop", "":
+		// 场景：正常充电 或 手动停止充电 - 正常调用充电API
+		// 空scenario_id也走正常流程
+		h.logger.Info("scenario: normal flow",
+			zap.String("test_session_id", testSessionID),
+			zap.String("scenario_id", req.ScenarioID))
+		// 继续执行下面的正常逻辑
+
+	default:
+		// 未知场景
+		h.logger.Warn("unknown scenario_id, using normal flow",
+			zap.String("test_session_id", testSessionID),
+			zap.String("scenario_id", req.ScenarioID))
+		// 继续执行正常逻辑
+	}
+
 	// 构造StartChargeRequest并调用第三方API逻辑
 	chargeReq := StartChargeRequest{
 		PortNo:          req.PortNo,
@@ -521,7 +605,7 @@ func (h *TestConsoleHandler) getActiveOrders(ctx context.Context, deviceID int64
 	query := `
 		SELECT order_no, port_no, status, start_time, amount_cent
 		FROM orders
-		WHERE device_id = $1 AND status IN (0, 1, 2, 8, 9, 10)
+		WHERE device_id = $1 AND status IN (0, 2, 8, 9, 10)
 		ORDER BY created_at DESC
 		LIMIT 10
 	`

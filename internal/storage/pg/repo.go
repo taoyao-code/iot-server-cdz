@@ -70,9 +70,9 @@ func (r *Repository) UpsertOrderProgress(ctx context.Context, deviceID int64, po
 // SettleOrder 结算订单（结束时间、耗电、金额占位、结束原因）
 func (r *Repository) SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, reason int) error {
 	const q = `INSERT INTO orders (device_id, port_no, order_no, start_time, end_time, kwh_0p01, status)
-               VALUES ($1,$2,$3,NOW()-make_interval(secs => $4), NOW(), $5, 2)
+               VALUES ($1,$2,$3,NOW()-make_interval(secs => $4), NOW(), $5, 3)
                ON CONFLICT (order_no)
-               DO UPDATE SET end_time=NOW(), kwh_0p01=$5, status=2, updated_at=NOW()`
+               DO UPDATE SET end_time=NOW(), kwh_0p01=$5, status=3, updated_at=NOW()`
 	_, err := r.Pool.Exec(ctx, q, deviceID, portNo, orderHex, durationSec, kwh01)
 	return err
 }
