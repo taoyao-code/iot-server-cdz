@@ -3,7 +3,12 @@
     "allow": [
       "Bash(git show:*)",
       "Bash(git rev-parse:*)",
-      "mcp__github__list_commits"
+      "mcp__github__list_commits",
+      "Bash(make test-p1:*)",
+      "Bash(make test-quick:*)",
+      "Bash(openspec list:*)",
+      "Bash(openspec validate:*)",
+      "Bash(test:*)"
     ],
     "deny": [],
     "ask": []

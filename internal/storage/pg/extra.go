@@ -335,16 +335,17 @@ func (r *Repository) ListDeviceParams(ctx context.Context, deviceID int64) ([]De
 // ===== 事件推送 =====
 
 type Event struct {
-	ID           int64
-	OrderNo      string
-	EventType    string
-	EventData    []byte
-	RetryCount   int
-	Status       int
-	CreatedAt    time.Time
-	PushedAt     *time.Time
-	SequenceNo   int
-	ErrorMessage *string
+	ID            int64
+	OrderNo       string
+	EventType     string
+	EventData     []byte
+	RetryCount    int
+	Status        int
+	CreatedAt     time.Time
+	PushedAt      *time.Time
+	SequenceNo    int
+	ErrorMessage  *string
+	TestSessionID *string
 }
 
 // GetPendingEvents E修复: 获取待推送的事件
@@ -353,7 +354,7 @@ func (r *Repository) GetPendingEvents(ctx context.Context, limit int) ([]Event, 
 		limit = 50
 	}
 
-	const q = `SELECT id, order_no, event_type, event_data, sequence_no, status, retry_count, created_at, pushed_at, error_message
+	const q = `SELECT id, order_no, event_type, event_data, sequence_no, status, retry_count, created_at, pushed_at, error_message, test_session_id
 		FROM events 
 		WHERE status IN (0, 2) AND retry_count < 5
 		ORDER BY order_no, sequence_no
@@ -370,9 +371,10 @@ func (r *Repository) GetPendingEvents(ctx context.Context, limit int) ([]Event, 
 		var e Event
 		var errorMsg *string
 		var pushedAt *time.Time
+		var sessionID *string
 
 		err := rows.Scan(&e.ID, &e.OrderNo, &e.EventType, &e.EventData, &e.SequenceNo,
-			&e.Status, &e.RetryCount, &e.CreatedAt, &pushedAt, &errorMsg)
+			&e.Status, &e.RetryCount, &e.CreatedAt, &pushedAt, &errorMsg, &sessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -382,6 +384,9 @@ func (r *Repository) GetPendingEvents(ctx context.Context, limit int) ([]Event, 
 		}
 		if errorMsg != nil {
 			e.ErrorMessage = errorMsg
+		}
+		if sessionID != nil {
+			e.TestSessionID = sessionID
 		}
 
 		events = append(events, e)
@@ -408,7 +413,7 @@ func (r *Repository) MarkEventFailed(ctx context.Context, eventID int64, errorMs
 
 // GetOrderEvents E修复: 获取订单的所有事件
 func (r *Repository) GetOrderEvents(ctx context.Context, orderNo string) ([]Event, error) {
-	const q = `SELECT id, order_no, event_type, event_data, sequence_no, status, retry_count, created_at, pushed_at, error_message
+	const q = `SELECT id, order_no, event_type, event_data, sequence_no, status, retry_count, created_at, pushed_at, error_message, test_session_id
 		FROM events 
 		WHERE order_no=$1
 		ORDER BY sequence_no`
@@ -424,9 +429,10 @@ func (r *Repository) GetOrderEvents(ctx context.Context, orderNo string) ([]Even
 		var e Event
 		var errorMsg *string
 		var pushedAt *time.Time
+		var sessionID *string
 
 		err := rows.Scan(&e.ID, &e.OrderNo, &e.EventType, &e.EventData, &e.SequenceNo,
-			&e.Status, &e.RetryCount, &e.CreatedAt, &pushedAt, &errorMsg)
+			&e.Status, &e.RetryCount, &e.CreatedAt, &pushedAt, &errorMsg, &sessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -436,6 +442,9 @@ func (r *Repository) GetOrderEvents(ctx context.Context, orderNo string) ([]Even
 		}
 		if errorMsg != nil {
 			e.ErrorMessage = errorMsg
+		}
+		if sessionID != nil {
+			e.TestSessionID = sessionID
 		}
 
 		events = append(events, e)
@@ -454,8 +463,10 @@ func (r *Repository) GetNextSequenceNo(ctx context.Context, orderNo string) (int
 
 // InsertEvent E修复: 插入事件到events表
 func (r *Repository) InsertEvent(ctx context.Context, orderNo, eventType string, eventData []byte, sequenceNo int) error {
-	const q = `INSERT INTO events (order_no, event_type, event_data, sequence_no, status, created_at)
-		VALUES ($1, $2, $3, $4, 0, NOW())`
+	const q = `INSERT INTO events (order_no, event_type, event_data, sequence_no, status, created_at, test_session_id)
+		VALUES ($1, $2, $3, $4, 0, NOW(), (
+			SELECT test_session_id FROM orders WHERE order_no=$1 LIMIT 1
+		))`
 	_, err := r.Pool.Exec(ctx, q, orderNo, eventType, eventData, sequenceNo)
 	return err
 }
