@@ -107,6 +107,7 @@ type Order struct {
 	PhyID         string
 	PortNo        int
 	OrderNo       string
+	ChargeMode    int // 充电模式: 1=按时长, 2=按电量, 3=按功率, 4=充满自停
 	StartTime     *time.Time
 	EndTime       *time.Time
 	Kwh01         *int64
@@ -178,7 +179,7 @@ func (r *Repository) ListPortsByPhyID(ctx context.Context, phyID string) ([]Port
 // GetOrderByID 根据ID查询订单，包含设备phy_id
 
 func (r *Repository) GetOrderByID(ctx context.Context, id int64) (*Order, error) {
-	const q = `SELECT o.id, o.device_id, d.phy_id, o.port_no, o.order_no, o.start_time, o.end_time, o.kwh_0p01, o.amount_cent, o.status, o.test_session_id
+	const q = `SELECT o.id, o.device_id, d.phy_id, o.port_no, o.order_no, o.charge_mode, o.start_time, o.end_time, o.kwh_0p01, o.amount_cent, o.status, o.test_session_id
 		FROM orders o JOIN devices d ON o.device_id = d.id WHERE o.id=$1`
 	var (
 		ord       Order
@@ -186,7 +187,7 @@ func (r *Repository) GetOrderByID(ctx context.Context, id int64) (*Order, error)
 		amt       *int64
 		sessionID *string
 	)
-	if err := r.Pool.QueryRow(ctx, q, id).Scan(&ord.ID, &ord.DeviceID, &ord.PhyID, &ord.PortNo, &ord.OrderNo, &ord.StartTime, &ord.EndTime, &kwh, &amt, &ord.Status, &sessionID); err != nil {
+	if err := r.Pool.QueryRow(ctx, q, id).Scan(&ord.ID, &ord.DeviceID, &ord.PhyID, &ord.PortNo, &ord.OrderNo, &ord.ChargeMode, &ord.StartTime, &ord.EndTime, &kwh, &amt, &ord.Status, &sessionID); err != nil {
 		return nil, err
 	}
 	ord.Kwh01 = kwh

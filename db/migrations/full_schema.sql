@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS orders (
     amount_cent     BIGINT,      -- 分
     end_reason      INT,         -- 结束原因
     status          INT NOT NULL DEFAULT 0,
+    charge_mode     INT NOT NULL DEFAULT 1,  -- 充电模式: 1=按时长, 2=按电量, 3=按功率, 4=充满自停
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     test_session_id TEXT,        -- E2E测试会话标识
@@ -409,8 +410,11 @@ COMMENT ON COLUMN ota_tasks.progress IS '升级进度百分比 0-100';
 -- 用于charging订单的设备断线场景
 
 -- 1. 更新orders表status字段注释
-COMMENT ON COLUMN orders.status IS 
+COMMENT ON COLUMN orders.status IS
 '订单状态: 0=pending, 1=confirmed, 2=charging, 3=timeout, 4=cancelled, 5=completed, 6=failed, 7=stopped, 8=cancelling, 9=stopping, 10=interrupted';
+
+-- 2. 添加charge_mode字段注释
+COMMENT ON COLUMN orders.charge_mode IS '充电模式: 1=按时长, 2=按电量, 3=按功率, 4=充满自停';
 
 -- 2. 添加failure_reason字段(如果不存在)
 DO $$ 

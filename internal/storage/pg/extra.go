@@ -45,14 +45,14 @@ type OTATask struct {
 
 // GetPendingOrderByPort 返回某设备端口的 pending 订单（若无返回 nil, nil）
 func (r *Repository) GetPendingOrderByPort(ctx context.Context, deviceID int64, portNo int) (*Order, error) {
-	const q = `SELECT id, device_id, '' as phy_id, port_no, order_no, start_time, end_time, kwh_0p01, amount_cent, status
+	const q = `SELECT id, device_id, '' as phy_id, port_no, order_no, charge_mode, start_time, end_time, kwh_0p01, amount_cent, status
 		FROM orders WHERE device_id=$1 AND port_no=$2 AND status=0 ORDER BY id DESC LIMIT 1`
 	var (
 		ord Order
 		kwh *int64
 		amt *int64
 	)
-	err := r.Pool.QueryRow(ctx, q, deviceID, portNo).Scan(&ord.ID, &ord.DeviceID, &ord.PhyID, &ord.PortNo, &ord.OrderNo, &ord.StartTime, &ord.EndTime, &kwh, &amt, &ord.Status)
+	err := r.Pool.QueryRow(ctx, q, deviceID, portNo).Scan(&ord.ID, &ord.DeviceID, &ord.PhyID, &ord.PortNo, &ord.OrderNo, &ord.ChargeMode, &ord.StartTime, &ord.EndTime, &kwh, &amt, &ord.Status)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -87,14 +87,14 @@ func (r *Repository) UpdateOrderToCharging(ctx context.Context, orderNo string, 
 
 // GetChargingOrderByPort 返回 charging 订单（若无返回 nil,nil）
 func (r *Repository) GetChargingOrderByPort(ctx context.Context, deviceID int64, portNo int) (*Order, error) {
-	const q = `SELECT id, device_id, '' as phy_id, port_no, order_no, start_time, end_time, kwh_0p01, amount_cent, status
+	const q = `SELECT id, device_id, '' as phy_id, port_no, order_no, charge_mode, start_time, end_time, kwh_0p01, amount_cent, status
 		FROM orders WHERE device_id=$1 AND port_no=$2 AND status=1 ORDER BY id DESC LIMIT 1`
 	var (
 		ord Order
 		kwh *int64
 		amt *int64
 	)
-	err := r.Pool.QueryRow(ctx, q, deviceID, portNo).Scan(&ord.ID, &ord.DeviceID, &ord.PhyID, &ord.PortNo, &ord.OrderNo, &ord.StartTime, &ord.EndTime, &kwh, &amt, &ord.Status)
+	err := r.Pool.QueryRow(ctx, q, deviceID, portNo).Scan(&ord.ID, &ord.DeviceID, &ord.PhyID, &ord.PortNo, &ord.OrderNo, &ord.ChargeMode, &ord.StartTime, &ord.EndTime, &kwh, &amt, &ord.Status)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -135,7 +135,7 @@ func (r *Repository) MarkChargingOrdersAsInterrupted(ctx context.Context, device
 
 // GetInterruptedOrders 查询设备的 interrupted 订单
 func (r *Repository) GetInterruptedOrders(ctx context.Context, deviceID int64) ([]Order, error) {
-	rows, err := r.Pool.Query(ctx, `SELECT id, device_id, '' as phy_id, port_no, order_no, start_time, end_time, kwh_0p01, amount_cent, status
+	rows, err := r.Pool.Query(ctx, `SELECT id, device_id, '' as phy_id, port_no, order_no, charge_mode, start_time, end_time, kwh_0p01, amount_cent, status
 		FROM orders WHERE device_id=$1 AND status=10 ORDER BY id DESC`, deviceID)
 	if err != nil {
 		return nil, err
@@ -148,7 +148,7 @@ func (r *Repository) GetInterruptedOrders(ctx context.Context, deviceID int64) (
 			kwh *int64
 			amt *int64
 		)
-		if err := rows.Scan(&ord.ID, &ord.DeviceID, &ord.PhyID, &ord.PortNo, &ord.OrderNo, &ord.StartTime, &ord.EndTime, &kwh, &amt, &ord.Status); err != nil {
+		if err := rows.Scan(&ord.ID, &ord.DeviceID, &ord.PhyID, &ord.PortNo, &ord.OrderNo, &ord.ChargeMode, &ord.StartTime, &ord.EndTime, &kwh, &amt, &ord.Status); err != nil {
 			return nil, err
 		}
 		ord.Kwh01 = kwh

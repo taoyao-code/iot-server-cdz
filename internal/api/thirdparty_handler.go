@@ -326,10 +326,10 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 
 	// 6. 在同一事务中创建订单记录
 	insertOrderSQL := `
-		INSERT INTO orders (device_id, order_no, amount_cent, status, port_no, created_at)
-		VALUES ($1, $2, $3, 0, $4, NOW())
+		INSERT INTO orders (device_id, order_no, amount_cent, status, port_no, charge_mode, created_at)
+		VALUES ($1, $2, $3, 0, $4, $5, NOW())
 	`
-	_, err = tx.Exec(ctx, insertOrderSQL, devID, orderNo, req.Amount, req.PortNo)
+	_, err = tx.Exec(ctx, insertOrderSQL, devID, orderNo, req.Amount, req.PortNo, req.ChargeMode)
 	if err != nil {
 		tx.Rollback(ctx)
 		h.logger.Error("failed to create order", zap.Error(err))

@@ -376,12 +376,14 @@ CREATE TABLE "public"."orders" (
   "created_at" timestamptz(6) NOT NULL DEFAULT now(),
   "updated_at" timestamptz(6) NOT NULL DEFAULT now(),
   "failure_reason" varchar(255) COLLATE "pg_catalog"."default",
-  "test_session_id" text COLLATE "pg_catalog"."default"
+  "test_session_id" text COLLATE "pg_catalog"."default",
+  "charge_mode" int4 NOT NULL DEFAULT 1
 )
 ;
 ALTER TABLE "public"."orders" OWNER TO "iot";
 COMMENT ON COLUMN "public"."orders"."status" IS '订单状态: 0=pending, 1=confirmed, 2=charging, 3=timeout, 4=cancelled, 5=completed, 6=failed, 7=stopped, 8=cancelling, 9=stopping, 10=interrupted';
 COMMENT ON COLUMN "public"."orders"."test_session_id" IS 'E2E 测试会话标识，用于按 test_session_id 追踪订单和完整链路';
+COMMENT ON COLUMN "public"."orders"."charge_mode" IS '充电模式: 1=按时长, 2=按电量, 3=按功率, 4=充满自停';
 
 -- ----------------------------
 -- Table structure for orders_port_migration_backup
