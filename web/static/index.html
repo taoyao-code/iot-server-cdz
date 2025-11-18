@@ -237,10 +237,20 @@
 
                     <!-- 当前测试会话 -->
                     <div v-if="currentTestSessionId" class="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                        <h4 class="font-semibold text-blue-900 mb-2">当前测试会话</h4>
-                        <p class="text-sm text-blue-800 font-mono">{{ currentTestSessionId }}</p>
+                        <div class="flex justify-between items-start mb-2">
+                            <h4 class="font-semibold text-blue-900">当前测试会话</h4>
+                            <button @click="clearTestSession"
+                                    class="text-sm text-red-600 hover:text-red-800">
+                                <i class="fas fa-times mr-1"></i>清除
+                            </button>
+                        </div>
+                        <p class="text-sm text-blue-800 font-mono mb-2">{{ currentTestSessionId }}</p>
+                        <div class="text-xs text-blue-700 mb-3">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            页面刷新后会自动恢复此会话
+                        </div>
                         <button @click="viewTimeline(currentTestSessionId)"
-                                class="mt-3 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm">
+                                class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm">
                             <i class="fas fa-timeline mr-2"></i>查看时间线
                         </button>
                     </div>

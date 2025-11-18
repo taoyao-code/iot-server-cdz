@@ -4,7 +4,9 @@
       "Bash(psql:*)",
       "Bash(docker exec:*)",
       "Bash('http://182.43.177.92:7055/internal/test/sync-ports')",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(chmod:*)",
+      "Bash(./test_e2e.sh:*)"
     ],
     "deny": [],
     "ask": []

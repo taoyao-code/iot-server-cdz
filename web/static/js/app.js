@@ -26,10 +26,11 @@ createApp({
             // 测试场景
             scenarios: [],
             selectedScenario: null,
+            scenarioApplied: false, // 修复：追踪场景模板是否已应用，避免覆盖用户修改
 
             // 测试参数
             testParams: {
-                port_no: 1,
+                port_no: 0, // 修复：默认选择A端口（0），而不是B端口（1）
                 charge_mode: 1,
                 amount: 100,
                 duration_minutes: 2,
@@ -90,6 +91,16 @@ createApp({
             return filtered;
         }
     },
+    // 修复：监听测试参数变化，自动保存到sessionStorage
+    watch: {
+        testParams: {
+            handler(newParams) {
+                // 自动保存测试参数（深度监听）
+                this.saveTestParams();
+            },
+            deep: true
+        }
+    },
     methods: {
         // 加载设备列表
         async loadDevices() {
@@ -101,6 +112,9 @@ createApp({
                     this.devices = response.data.data || [];
                     this.lastUpdate = new Date();
                     this.showNotification('设备列表加载成功', 'success');
+
+                    // 修复：设备列表加载成功后，立即尝试恢复测试会话（响应式，无固定延迟）
+                    this.restoreTestSession();
 
                     // 启动设备列表轮询
                     if (this.currentView === 'devices' && this.pollingEnabled) {
@@ -134,7 +148,8 @@ createApp({
         async selectDevice(device) {
             this.selectedDevice = device;
             this.currentView = 'device-detail';
-            this.currentTestSessionId = null;
+            // 修复：不应清空测试会话，允许在设备间切换时保持会话
+            // this.currentTestSessionId = null; // ❌ 移除此行
 
             // 停止设备列表轮询，启动设备详情轮询
             this.stopPollingDevices();
@@ -151,16 +166,35 @@ createApp({
             if (this.scenarios.length === 0) {
                 await this.loadScenarios();
             }
+
+            // 修复：保存设备选择状态到sessionStorage
+            sessionStorage.setItem('currentDeviceId', device.device_phy_id);
         },
 
         // 选择测试场景
         selectScenario(scenario) {
             this.selectedScenario = scenario;
 
-            // 使用场景模板填充参数
-            if (scenario.template) {
+            // 修复：仅在首次应用场景模板时填充参数，避免覆盖用户修改
+            if (!this.scenarioApplied && scenario.template) {
+                // 保存当前选择的端口号，场景不应改变端口选择
+                const currentPortNo = this.testParams.port_no;
+
+                // 使用场景模板填充参数
                 Object.assign(this.testParams, scenario.template);
+
+                // 恢复端口号
+                this.testParams.port_no = currentPortNo;
+
+                // 标记场景模板已应用
+                this.scenarioApplied = true;
             }
+
+            // 修复：保存场景选择状态到sessionStorage
+            sessionStorage.setItem('currentScenarioId', scenario.id);
+            this.saveTestParams();
+
+            this.showNotification(`已选择场景: ${scenario.name}`, 'info');
         },
 
         // 开始测试
@@ -177,6 +211,14 @@ createApp({
                     scenario_id: this.selectedScenario.id
                 };
 
+                console.log('发送测试请求:', {
+                    device_phy_id: this.selectedDevice.device_phy_id,
+                    port_no: payload.port_no,
+                    port_name: this.getPortName(payload.port_no),
+                    scenario_id: payload.scenario_id,
+                    scenario_name: this.selectedScenario.name
+                });
+
                 const response = await axios.post(
                     `${API_BASE_URL}/devices/${this.selectedDevice.device_phy_id}/charge`,
                     payload
@@ -184,7 +226,16 @@ createApp({
 
                 if (response.data.code === 0) {
                     this.currentTestSessionId = response.data.data.test_session_id;
-                    this.showNotification('测试启动成功!', 'success');
+
+                    // 保存测试会话到sessionStorage，页面刷新时可恢复
+                    sessionStorage.setItem('currentTestSessionId', this.currentTestSessionId);
+                    sessionStorage.setItem('currentDeviceId', this.selectedDevice.device_phy_id);
+                    sessionStorage.setItem('currentScenarioId', this.selectedScenario.id);
+
+                    // 修复：保存测试参数
+                    this.saveTestParams();
+
+                    this.showNotification(`测试启动成功! 会话ID: ${this.currentTestSessionId}`, 'success');
 
                     // 5秒后自动开始轮询时间线
                     setTimeout(() => {
@@ -215,12 +266,96 @@ createApp({
 
                 if (response.data.code === 0) {
                     this.showNotification('停止充电指令已发送', 'success');
+
+                    // 清除测试会话（但不清除sessionStorage，保留以便查看时间线）
                 } else {
                     throw new Error(response.data.message);
                 }
             } catch (error) {
                 console.error('停止测试失败:', error);
                 this.showNotification('停止测试失败: ' + (error.response?.data?.message || error.message), 'error');
+            }
+        },
+
+        // 清除测试会话
+        clearTestSession() {
+            this.currentTestSessionId = null;
+            sessionStorage.removeItem('currentTestSessionId');
+            sessionStorage.removeItem('currentDeviceId');
+            sessionStorage.removeItem('currentScenarioId');
+            sessionStorage.removeItem('testParams'); // 修复：同时清除测试参数
+            this.stopPollingTimeline();
+            this.showNotification('测试会话已清除', 'info');
+        },
+
+        // 修复：保存测试参数到sessionStorage
+        saveTestParams() {
+            try {
+                sessionStorage.setItem('testParams', JSON.stringify(this.testParams));
+            } catch (error) {
+                console.error('保存测试参数失败:', error);
+            }
+        },
+
+        // 修复：从sessionStorage加载测试参数
+        loadTestParams() {
+            try {
+                const savedParams = sessionStorage.getItem('testParams');
+                if (savedParams) {
+                    Object.assign(this.testParams, JSON.parse(savedParams));
+                }
+            } catch (error) {
+                console.error('加载测试参数失败:', error);
+            }
+        },
+
+        // 修复：恢复测试会话（响应式，无固定延迟）
+        async restoreTestSession() {
+            const savedSessionId = sessionStorage.getItem('currentTestSessionId');
+            const savedDeviceId = sessionStorage.getItem('currentDeviceId');
+            const savedScenarioId = sessionStorage.getItem('currentScenarioId');
+
+            // 如果没有保存的会话，直接返回
+            if (!savedSessionId || !savedDeviceId) {
+                return;
+            }
+
+            console.log('检测到未完成的测试会话，正在恢复...', {
+                sessionId: savedSessionId,
+                deviceId: savedDeviceId,
+                scenarioId: savedScenarioId
+            });
+
+            this.currentTestSessionId = savedSessionId;
+
+            // 从设备列表中查找设备
+            const device = this.devices.find(d => d.device_phy_id === savedDeviceId);
+            if (!device) {
+                console.warn('未找到保存的设备:', savedDeviceId);
+                return;
+            }
+
+            // 选择设备（会自动加载场景列表）
+            await this.selectDevice(device);
+
+            // 恢复场景选择
+            if (savedScenarioId && this.scenarios.length > 0) {
+                const scenario = this.scenarios.find(s => s.id === savedScenarioId);
+                if (scenario) {
+                    this.selectedScenario = scenario;
+                    // 注意：不调用 selectScenario，因为它会应用模板
+                    // 我们只需要恢复 selectedScenario 对象即可
+                }
+            }
+
+            // 恢复测试参数
+            this.loadTestParams();
+
+            this.showNotification('已恢复测试会话: ' + savedSessionId.substring(0, 8) + '...', 'info');
+
+            // 启动轮询
+            if (this.pollingEnabled) {
+                this.startPollingTimeline();
             }
         },
 
@@ -537,8 +672,11 @@ createApp({
     },
     mounted() {
         // 页面加载时自动加载设备列表
-        this.loadDevices();
+        this.loadDevices(); // 修复：loadDevices 成功后会自动调用 restoreTestSession()
         this.loadScenarios();
+
+        // 修复：移除旧的恢复逻辑（使用固定延迟不可靠）
+        // 现在在 loadDevices 成功后自动调用 restoreTestSession()
 
         // 检查URL中是否有session_id参数
         const urlParams = new URLSearchParams(window.location.search);

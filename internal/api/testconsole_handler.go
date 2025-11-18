@@ -72,11 +72,11 @@ type TestDevicePort struct {
 
 // TestActiveOrder 活跃订单信息
 type TestActiveOrder struct {
-	OrderNo   string    `json:"order_no"`
-	PortNo    int       `json:"port_no"`
-	Status    int       `json:"status"`
-	StartTime time.Time `json:"start_time"`
-	Amount    int       `json:"amount"`
+	OrderNo   string     `json:"order_no"`
+	PortNo    int        `json:"port_no"`
+	Status    int        `json:"status"`
+	StartTime *time.Time `json:"start_time,omitempty"` // 修复：支持NULL值（pending订单没有start_time）
+	Amount    *int       `json:"amount,omitempty"`     // 修复：支持NULL值
 }
 
 // TestScenario 测试场景
@@ -105,8 +105,8 @@ type TestOrderDetail struct {
 	Status      int        `json:"status"`
 	StatusText  string     `json:"status_text"`
 	ChargeMode  int        `json:"charge_mode"`
-	AmountCent  int        `json:"amount_cent"`
-	Kwh0p01     int        `json:"kwh_0p01"`
+	AmountCent  *int       `json:"amount_cent,omitempty"` // 修复：支持NULL值
+	Kwh0p01     *int       `json:"kwh_0p01,omitempty"`    // 修复：支持NULL值
 	StartTime   *time.Time `json:"start_time,omitempty"`
 	EndTime     *time.Time `json:"end_time,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
