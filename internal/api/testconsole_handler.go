@@ -1,8 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -410,8 +413,7 @@ func (h *TestConsoleHandler) StartTestCharge(c *gin.Context) {
 	c.Set("test_session_id", testSessionID)
 
 	// 构造StartChargeRequest并调用第三方API逻辑
-	// TODO: 实际集成ThirdPartyHandler.StartCharge
-	_ = StartChargeRequest{
+	chargeReq := StartChargeRequest{
 		PortNo:          req.PortNo,
 		ChargeMode:      req.ChargeMode,
 		Amount:          req.Amount,
@@ -422,29 +424,24 @@ func (h *TestConsoleHandler) StartTestCharge(c *gin.Context) {
 		ServiceFee:      req.ServiceFee,
 	}
 
-	// 创建新的context副本用于传递给第三方handler
-	newCtx := context.WithValue(ctx, "test_session_id", testSessionID)
-	c.Request = c.Request.WithContext(newCtx)
+	// 将请求体重新设置为 StartChargeRequest 格式
+	c.Request = c.Request.Clone(context.WithValue(ctx, "test_session_id", testSessionID))
 
-	// 临时修改param来让thirdPartyHandler使用
-	c.Params = append(c.Params, gin.Param{Key: "device_id", Value: devicePhyID})
+	// 保存原始的响应写入器，用于捕获第三方API的响应
+	// 直接调用ThirdPartyHandler的StartCharge方法
+	// 注意：需要确保已经设置了device_id参数
+	originalParams := c.Params
+	c.Params = gin.Params{{Key: "device_id", Value: devicePhyID}}
 
-	// 调用第三方API逻辑（这里需要修改thirdPartyHandler以支持test_session_id）
-	// 暂时先返回test_session_id，后续需要集成
+	// 保存原始请求体，准备替换
+	bodyBytes, _ := json.Marshal(chargeReq)
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-	c.JSON(http.StatusOK, StandardResponse{
-		Code:    0,
-		Message: "test charge session created",
-		Data: map[string]interface{}{
-			"test_session_id": testSessionID,
-			"device_phy_id":   devicePhyID,
-			"port_no":         req.PortNo,
-			"scenario_id":     req.ScenarioID,
-			"next_step":       "monitor timeline at /internal/test/sessions/" + testSessionID,
-		},
-		RequestID: requestID,
-		Timestamp: time.Now().Unix(),
-	})
+	// 调用第三方API的充电逻辑
+	h.thirdPartyH.StartCharge(c)
+
+	// 恢复原始参数
+	c.Params = originalParams
 }
 
 // StopTestCharge 停止测试充电
