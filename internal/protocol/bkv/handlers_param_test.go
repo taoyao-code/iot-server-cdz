@@ -35,6 +35,11 @@ func (f *fakeRepoParam) UpsertPortState(ctx context.Context, deviceID int64, por
 	return nil
 }
 
+// P1-4修复: 新增端口查询方法（测试mock）
+func (f *fakeRepoParam) ListPortsByPhyID(ctx context.Context, phyID string) ([]pgstorage.Port, error) {
+	return []pgstorage.Port{}, nil
+}
+
 func (f *fakeRepoParam) UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, status int, powerW01 *int) error {
 	return nil
 }

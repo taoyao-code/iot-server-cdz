@@ -24,7 +24,9 @@
       "Bash(ssh -i ~/.ssh/id_rsa root@182.43.177.92 \"docker exec iot-server-prod ls -la /app/configs/\")",
       "Bash(ssh:*)",
       "Bash(scp:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(go test:*)",
+      "Bash(grep -E 'int.*`json:')"
     ],
     "deny": [],
     "ask": []

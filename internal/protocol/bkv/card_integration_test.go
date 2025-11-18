@@ -442,6 +442,11 @@ func (m *MockRepo) UpsertPortState(ctx context.Context, deviceID int64, portNo i
 	return nil
 }
 
+// P1-4修复: 新增端口查询方法（测试mock）
+func (m *MockRepo) ListPortsByPhyID(ctx context.Context, phyID string) ([]pgstorage.Port, error) {
+	return []pgstorage.Port{}, nil
+}
+
 func (m *MockRepo) UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, status int, powerW01 *int) error {
 	return nil
 }

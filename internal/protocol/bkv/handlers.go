@@ -20,6 +20,7 @@ type repoAPI interface {
 	UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, status int, powerW01 *int) error
 	SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, reason int) error
 	AckOutboundByMsgID(ctx context.Context, deviceID int64, msgID int, ok bool, errCode *int) error
+	ListPortsByPhyID(ctx context.Context, phyID string) ([]pgstorage.Port, error) // P1-4修复: 查询设备端口
 
 	// P0修复: 参数持久化方法（数据库存储）
 	StoreParamWrite(ctx context.Context, deviceID int64, paramID int, value []byte, msgID int) error
@@ -109,6 +110,24 @@ func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
 
 	// 刷新数据库中的最近心跳时间（与 Redis 会话一致）
 	_ = h.Repo.TouchDeviceLastSeen(ctx, devicePhyID, time.Now())
+
+	// P1-4修复: 初始化默认端口（仅在端口不存在时）
+	// BKV设备可能只发送心跳不发送状态报告，导致ports表为空
+	// 在此处确保设备至少有默认的2个端口（A/B），避免API返回空数组
+	ports, err := h.Repo.ListPortsByPhyID(ctx, devicePhyID)
+	if err == nil && len(ports) == 0 {
+		// 创建默认端口A (port_no=0, status=0-空闲)
+		if err := h.Repo.UpsertPortState(ctx, devID, 0, 0, nil); err != nil {
+			// 端口初始化失败不应中断心跳处理，仅记录错误
+			_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0xFFFF, 0,
+				[]byte(fmt.Sprintf("failed to init port 0: %v", err)), false)
+		}
+		// 创建默认端口B (port_no=1, status=0-空闲)
+		if err := h.Repo.UpsertPortState(ctx, devID, 1, 0, nil); err != nil {
+			_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0xFFFF, 0,
+				[]byte(fmt.Sprintf("failed to init port 1: %v", err)), false)
+		}
+	}
 
 	// v2.1.3: 新设备注册时推送设备注册事件
 	// 注意：这里简化处理，实际应该在首次注册时才推送

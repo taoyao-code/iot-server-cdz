@@ -359,7 +359,7 @@ func (h *TestConsoleHandler) ListTestScenarios(c *gin.Context) {
 
 // StartTestChargeRequest 启动测试充电请求
 type StartTestChargeRequest struct {
-	PortNo          int    `json:"port_no" binding:"required,min=0"` // 端口号：0=A端口, 1=B端口
+	PortNo          int    `json:"port_no" binding:"min=0"` // 端口号：0=A端口, 1=B端口, ...（移除required，因为0是有效值）
 	ChargeMode      int    `json:"charge_mode" binding:"required,min=1,max=4"`
 	Amount          int    `json:"amount" binding:"required,min=1"`
 	DurationMinutes int    `json:"duration_minutes"`
