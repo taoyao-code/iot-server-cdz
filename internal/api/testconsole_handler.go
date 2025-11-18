@@ -143,8 +143,8 @@ func (h *TestConsoleHandler) ListTestDevices(c *gin.Context) {
 		return
 	}
 
-	// 构建测试设备列表
-	var testDevices []TestDevice
+	// 构建测试设备列表（初始化为空数组，避免JSON序列化为null）
+	testDevices := []TestDevice{}
 	for _, dev := range devices {
 		// 查询设备端口
 		ports, err := h.repo.ListPortsByPhyID(ctx, dev.PhyID)
@@ -158,8 +158,8 @@ func (h *TestConsoleHandler) ListTestDevices(c *gin.Context) {
 		// 检查在线状态
 		isOnline := h.sess.IsOnline(dev.PhyID, time.Now())
 
-		// 构建端口列表
-		var testPorts []TestDevicePort
+		// 构建端口列表（初始化为空数组）
+		testPorts := []TestDevicePort{}
 		for _, port := range ports {
 			powerW := 0
 			if port.PowerW != nil {
@@ -246,8 +246,8 @@ func (h *TestConsoleHandler) GetTestDevice(c *gin.Context) {
 	// 检查在线状态
 	isOnline := h.sess.IsOnline(devicePhyID, time.Now())
 
-	// 构建端口列表
-	var testPorts []TestDevicePort
+	// 构建端口列表（初始化为空数组）
+	testPorts := []TestDevicePort{}
 	for _, port := range ports {
 		powerW := 0
 		if port.PowerW != nil {
@@ -359,7 +359,7 @@ func (h *TestConsoleHandler) ListTestScenarios(c *gin.Context) {
 
 // StartTestChargeRequest 启动测试充电请求
 type StartTestChargeRequest struct {
-	PortNo          int    `json:"port_no" binding:"required,min=1"`
+	PortNo          int    `json:"port_no" binding:"required,min=0"` // 端口号：0=A端口, 1=B端口
 	ChargeMode      int    `json:"charge_mode" binding:"required,min=1,max=4"`
 	Amount          int    `json:"amount" binding:"required,min=1"`
 	DurationMinutes int    `json:"duration_minutes"`
@@ -535,7 +535,8 @@ func (h *TestConsoleHandler) getActiveOrders(ctx context.Context, deviceID int64
 	}
 	defer rows.Close()
 
-	var orders []TestActiveOrder
+	// 初始化为空数组，避免JSON序列化为null
+	orders := []TestActiveOrder{}
 	for rows.Next() {
 		var order TestActiveOrder
 		if err := rows.Scan(&order.OrderNo, &order.PortNo, &order.Status, &order.StartTime, &order.Amount); err != nil {
@@ -607,7 +608,8 @@ func (h *TestConsoleHandler) ListTestOrders(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	var orders []TestOrderDetail
+	// 初始化为空数组，避免JSON序列化为null
+	orders := []TestOrderDetail{}
 	for rows.Next() {
 		var order TestOrderDetail
 		err := rows.Scan(

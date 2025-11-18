@@ -511,16 +511,16 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 					subCmd, socketNo, portNo, result, businessNo)
 				_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), []byte(ackLog), result == 0x01)
 
-				// 🔥 关键修复: BKV插孔号需要+1转换为API端口号
-				// BKV: 插座1插孔0/1 → API: port_no=1/2
-				apiPortNo := int(portNo) + 1
+				// 直接使用协议端口号（0=A孔, 1=B孔）查询订单
+				// 数据库统一使用协议端口号，无需转换
+				protocolPortNo := int(portNo)
 
 				// 如果结果=01(成功)，根据当前订单状态判断是启动还是停止
 				if result == 0x01 {
 					// 先检查是否有charging订单（停止充电）
-					chargingOrder, chargingErr := h.Repo.GetChargingOrderByPort(ctx, devID, apiPortNo)
+					chargingOrder, chargingErr := h.Repo.GetChargingOrderByPort(ctx, devID, protocolPortNo)
 					if chargingErr != nil && chargingErr.Error() != "no rows in result set" {
-						errorLog := fmt.Sprintf("❌查询charging订单失败: port=%d err=%v", apiPortNo, chargingErr)
+						errorLog := fmt.Sprintf("❌查询charging订单失败: port=%d err=%v", protocolPortNo, chargingErr)
 						_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(errorLog), false)
 					}
 
@@ -528,12 +528,12 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 						// 🔥 Bug#4修复: 停止充电ACK - 完成订单
 						endTime := time.Now()
 						endReason := 1 // 用户主动停止
-						if err := h.Repo.CompleteOrderByPort(ctx, devID, apiPortNo, endTime, endReason); err == nil {
-							completeLog := fmt.Sprintf("✅订单已完成: %s (BKV插孔%d=API端口%d, 原因:用户主动停止)", chargingOrder.OrderNo, portNo, apiPortNo)
+						if err := h.Repo.CompleteOrderByPort(ctx, devID, protocolPortNo, endTime, endReason); err == nil {
+							completeLog := fmt.Sprintf("✅订单已完成: %s (插孔%d, 原因:用户主动停止)", chargingOrder.OrderNo, portNo)
 							_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(completeLog), true)
 
 							if h.EventQueue != nil {
-								h.pushChargingCompletedEvent(ctx, devicePhyID, chargingOrder.OrderNo, apiPortNo, endReason, nil)
+								h.pushChargingCompletedEvent(ctx, devicePhyID, chargingOrder.OrderNo, protocolPortNo, endReason, nil)
 							}
 						} else {
 							errorLog := fmt.Sprintf("❌完成订单失败: %s err=%v", chargingOrder.OrderNo, err)
@@ -541,19 +541,19 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 						}
 					} else {
 						// 检查是否有pending订单（启动充电）
-						pendingOrder, err := h.Repo.GetPendingOrderByPort(ctx, devID, apiPortNo)
+						pendingOrder, err := h.Repo.GetPendingOrderByPort(ctx, devID, protocolPortNo)
 						if err != nil {
-							errorLog := fmt.Sprintf("❌查询pending订单失败: port=%d err=%v", apiPortNo, err)
+							errorLog := fmt.Sprintf("❌查询pending订单失败: port=%d err=%v", protocolPortNo, err)
 							_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(errorLog), false)
 						} else if pendingOrder != nil {
 							startTime := time.Now()
 							updateErr := h.Repo.UpdateOrderToCharging(ctx, pendingOrder.OrderNo, startTime)
 							if updateErr == nil {
-								updateLog := fmt.Sprintf("✅订单状态已更新: %s -> charging (BKV插孔%d=API端口%d, start_time=%d)", pendingOrder.OrderNo, portNo, apiPortNo, startTime.Unix())
+								updateLog := fmt.Sprintf("✅订单状态已更新: %s -> charging (插孔%d, start_time=%d)", pendingOrder.OrderNo, portNo, startTime.Unix())
 								_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(updateLog), true)
 
 								if h.EventQueue != nil {
-									h.pushChargingStartedEvent(ctx, devicePhyID, pendingOrder.OrderNo, apiPortNo, nil)
+									h.pushChargingStartedEvent(ctx, devicePhyID, pendingOrder.OrderNo, protocolPortNo, nil)
 								}
 							} else {
 								errorLog := fmt.Sprintf("❌更新订单状态失败: %s err=%v", pendingOrder.OrderNo, updateErr)
@@ -561,7 +561,7 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 							}
 						} else {
 							// 无pending/charging订单，可能是重复ACK或异常
-							warnLog := fmt.Sprintf("⚠️收到控制成功ACK但无订单: BKV插孔%d=API端口%d, device_id=%d", portNo, apiPortNo, devID)
+							warnLog := fmt.Sprintf("⚠️收到控制成功ACK但无订单: 插孔%d, device_id=%d", portNo, devID)
 							_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(warnLog), false)
 						}
 					}
@@ -570,12 +570,12 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 					failLog := fmt.Sprintf("❌设备拒绝充电: 插座=%d 插孔=%d 原因=未知", socketNo, portNo)
 					_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(failLog), false)
 
-					if err := h.Repo.CancelOrderByPort(ctx, devID, apiPortNo); err != nil {
+					if err := h.Repo.CancelOrderByPort(ctx, devID, protocolPortNo); err != nil {
 						_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()),
-							[]byte(fmt.Sprintf("❌取消订单失败: port=%d err=%v", apiPortNo, err)), false)
+							[]byte(fmt.Sprintf("❌取消订单失败: port=%d err=%v", protocolPortNo, err)), false)
 					} else {
 						_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()),
-							[]byte(fmt.Sprintf("✅已自动取消pending订单: BKV插孔%d=API端口%d", portNo, apiPortNo)), true)
+							[]byte(fmt.Sprintf("✅已自动取消pending订单: 插孔%d", portNo)), true)
 					}
 				}
 			}

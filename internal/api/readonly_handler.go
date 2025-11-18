@@ -122,7 +122,8 @@ func (h *ReadOnlyHandler) GetDeviceParams(c *gin.Context) {
 		ErrorMsg    *string    `json:"error_msg,omitempty"`
 	}
 
-	var response []paramResponse
+	// 初始化为空数组，避免JSON序列化为null
+	response := []paramResponse{}
 	for _, p := range params {
 		status := "pending"
 		switch p.Status {

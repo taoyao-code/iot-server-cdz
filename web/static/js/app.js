@@ -88,19 +88,6 @@ createApp({
             }
 
             return filtered;
-        },
-
-        // 获取有效端口列表（过滤掉port_no < 1的无效端口）
-        validPorts() {
-            if (!this.selectedDevice || !this.selectedDevice.ports) {
-                return [];
-            }
-            return this.selectedDevice.ports.filter(p => p.port_no >= 1);
-        },
-
-        // 检查是否有有效端口
-        hasValidPorts() {
-            return this.validPorts.length > 0;
         }
     },
     methods: {
@@ -110,7 +97,8 @@ createApp({
             try {
                 const response = await axios.get(`${API_BASE_URL}/devices`);
                 if (response.data.code === 0) {
-                    this.devices = response.data.data;
+                    // 防御性编程：确保data是数组
+                    this.devices = response.data.data || [];
                     this.lastUpdate = new Date();
                     this.showNotification('设备列表加载成功', 'success');
 
@@ -134,7 +122,8 @@ createApp({
             try {
                 const response = await axios.get(`${API_BASE_URL}/scenarios`);
                 if (response.data.code === 0) {
-                    this.scenarios = response.data.data;
+                    // 防御性编程：确保data是数组
+                    this.scenarios = response.data.data || [];
                 }
             } catch (error) {
                 console.error('加载测试场景失败:', error);
@@ -153,13 +142,9 @@ createApp({
                 this.startPollingDeviceDetail();
             }
 
-            // 自动选择第一个有效端口（port_no >= 1）
-            const validPorts = (device.ports || []).filter(p => p.port_no >= 1);
-            if (validPorts.length > 0) {
-                this.testParams.port_no = validPorts[0].port_no;
-            } else {
-                // 没有有效端口时，设置为1作为默认值（会在UI上显示警告）
-                this.testParams.port_no = 1;
+            // 自动选择第一个端口
+            if (device.ports && device.ports.length > 0) {
+                this.testParams.port_no = device.ports[0].port_no;
             }
 
             // 如果还没有加载场景，加载它们
@@ -357,7 +342,8 @@ createApp({
                 try {
                     const response = await axios.get(`${API_BASE_URL}/devices`);
                     if (response.data.code === 0) {
-                        this.devices = response.data.data;
+                        // 防御性编程：确保data是数组
+                        this.devices = response.data.data || [];
                         this.lastUpdate = new Date();
                     }
                 } catch (error) {
@@ -496,6 +482,13 @@ createApp({
                 2: '故障'
             };
             return texts[status] || '未知';
+        },
+
+        // 将port_no转换为端口名称 (0→A, 1→B, 2→C...)
+        getPortName(portNo) {
+            // 协议端口号：0=A孔, 1=B孔
+            const letter = String.fromCharCode(65 + portNo); // 0→A, 1→B
+            return `${letter}端口`;
         },
 
         // 获取订单状态文本

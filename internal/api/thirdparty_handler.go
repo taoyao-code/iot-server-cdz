@@ -65,7 +65,7 @@ type StandardResponse struct {
 
 // StartChargeRequest 启动充电请求
 type StartChargeRequest struct {
-	PortNo          int `json:"port_no" binding:"required,min=1"`           // 端口号
+	PortNo          int `json:"port_no" binding:"required,min=0"`           // 端口号：0=A端口, 1=B端口
 	ChargeMode      int `json:"charge_mode" binding:"required,min=1,max=4"` // 充电模式：1=按时长,2=按电量,3=按功率,4=充满自停
 	Amount          int `json:"amount" binding:"required,min=1"`            // 金额（分）
 	DurationMinutes int `json:"duration_minutes"`                           // 时长（分钟）- 推荐使用
@@ -495,7 +495,7 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 
 // StopChargeRequest 停止充电请求
 type StopChargeRequest struct {
-	PortNo int `json:"port_no" binding:"required,min=1"` // 端口号
+	PortNo int `json:"port_no" binding:"required,min=0"` // 端口号：0=A端口, 1=B端口
 }
 
 // StopCharge 停止充电
