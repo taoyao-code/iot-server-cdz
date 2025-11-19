@@ -535,6 +535,28 @@ func (h *TestConsoleHandler) StartTestCharge(c *gin.Context) {
 				zap.String("mock_order", mockOrderNo))
 		}
 
+		// 查询真实的端口状态
+		var actualPortStatus int
+		portStatusQuery := `SELECT status FROM ports WHERE device_id = $1 AND port_no = $2`
+		portStatusErr := h.repo.Pool.QueryRow(ctx, portStatusQuery, device.ID, req.PortNo).Scan(&actualPortStatus)
+
+		portStatusText := "unknown"
+		if portStatusErr == nil {
+			// 转换端口状态为可读文本
+			switch actualPortStatus {
+			case 0:
+				portStatusText = "free"
+			case 1:
+				portStatusText = "occupied"
+			case 2:
+				portStatusText = "charging"
+			case 3:
+				portStatusText = "fault"
+			default:
+				portStatusText = fmt.Sprintf("unknown(%d)", actualPortStatus)
+			}
+		}
+
 		// 返回端口占用错误
 		c.JSON(http.StatusConflict, StandardResponse{
 			Code:    409,
@@ -542,7 +564,7 @@ func (h *TestConsoleHandler) StartTestCharge(c *gin.Context) {
 			Data: map[string]interface{}{
 				"test_session_id": testSessionID,
 				"current_order":   existingOrder,
-				"port_status":     "charging",
+				"port_status":     portStatusText,
 				"scenario":        "port-busy",
 			},
 			RequestID: requestID,

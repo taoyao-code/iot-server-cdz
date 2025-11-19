@@ -243,19 +243,42 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 	// 检查是否有活跃订单
 	if rows.Next() {
 		if err := rows.Scan(&existingOrderNo); err == nil {
-			// 端口已被占用
+			// 端口已被占用，查询真实的端口状态
+			var actualPortStatus int
+			portStatusQuery := `SELECT status FROM ports WHERE device_id = $1 AND port_no = $2`
+			portStatusErr := h.repo.Pool.QueryRow(ctx, portStatusQuery, devID, req.PortNo).Scan(&actualPortStatus)
+
+			portStatusText := "unknown"
+			if portStatusErr == nil {
+				// 转换端口状态为可读文本
+				switch actualPortStatus {
+				case 0:
+					portStatusText = "free"
+				case 1:
+					portStatusText = "occupied"
+				case 2:
+					portStatusText = "charging"
+				case 3:
+					portStatusText = "fault"
+				default:
+					portStatusText = fmt.Sprintf("unknown(%d)", actualPortStatus)
+				}
+			}
+
 			tx.Rollback(ctx)
 			h.logger.Warn("port already in use",
 				zap.String("device_phy_id", devicePhyID),
 				zap.Int("port_no", req.PortNo),
-				zap.String("existing_order", existingOrderNo))
+				zap.String("existing_order", existingOrderNo),
+				zap.Int("actual_port_status", actualPortStatus),
+				zap.String("port_status_text", portStatusText))
 			c.JSON(http.StatusConflict, StandardResponse{
 				Code: 409,
 				// EN: port is busy
 				Message: "端口正在使用中",
 				Data: map[string]interface{}{
 					"current_order": existingOrderNo,
-					"port_status":   "charging",
+					"port_status":   portStatusText,
 				},
 				RequestID: requestID,
 				Timestamp: time.Now().Unix(),
