@@ -86,6 +86,10 @@ func (s *PortStatusSyncer) syncAllDevices(ctx context.Context) {
 	// 1. 检查charging订单与端口状态一致性（基于数据库）
 	s.checkChargingOrdersConsistency(ctx)
 
+	// 1.5 检查“端口显示充电但无任何活跃订单”的不一致场景
+	// 典型场景：设备长时间离线，ports.status 保持0x81 (charging)，但 orders 中已无active订单
+	s.fixLonelyChargingPorts(ctx)
+
 	// 2. 定期查询在线设备的端口状态（可选，需要设备支持）
 	// 注意：由于BKV协议的0x1D查询命令需要设备响应，
 	// 而当前系统是异步处理，不适合在同步任务中等待响应。
@@ -173,6 +177,109 @@ func (s *PortStatusSyncer) queryDevicePort(ctx context.Context, deviceID int64, 
 	}
 
 	return nil
+}
+
+// fixLonelyChargingPorts 修复“端口处于充电状态但无任何活跃订单”的不一致状态
+// 场景: ports.status 含有充电标志(bit7=0x80)，但 orders 中不存在该 device/port 的活跃订单
+// 为避免误判，仅在端口状态长时间未更新且设备会话离线的情况下，自动将端口收敛为空闲(0x09)
+func (s *PortStatusSyncer) fixLonelyChargingPorts(ctx context.Context) {
+	const q = `
+		SELECT 
+			p.device_id,
+			d.phy_id,
+			p.port_no,
+			p.status,
+			p.updated_at,
+			d.last_seen_at
+		FROM ports p
+		JOIN devices d ON p.device_id = d.id
+		LEFT JOIN LATERAL (
+			SELECT 1
+			FROM orders o
+			WHERE o.device_id = p.device_id
+			  AND o.port_no = p.port_no
+			  AND o.status IN (0,1,2,8,9,10) -- pending/confirmed/charging/cancelling/stopping/interrupted
+			LIMIT 1
+		) ao(is_active) ON TRUE
+		WHERE (p.status & 0x80) != 0      -- BKV bit7: 端口显示充电
+		  AND ao.is_active IS NULL        -- 无任何活跃订单
+		ORDER BY p.updated_at ASC
+		LIMIT 100
+	`
+
+	rows, err := s.repo.Pool.Query(ctx, q)
+	if err != nil {
+		s.logger.Error("P1-4: failed to query lonely charging ports", zap.Error(err))
+		return
+	}
+	defer rows.Close()
+
+	now := time.Now()
+	fixedCount := 0
+
+	for rows.Next() {
+		var (
+			deviceID  int64
+			phyID     string
+			portNo    int
+			status    int
+			updatedAt time.Time
+			lastSeen  time.Time
+		)
+
+		if err := rows.Scan(&deviceID, &phyID, &portNo, &status, &updatedAt, &lastSeen); err != nil {
+			s.logger.Error("P1-4: failed to scan lonely port row", zap.Error(err))
+			continue
+		}
+
+		// 使用 SessionManager 判断设备是否在线
+		online := s.sess.IsOnline(phyID, now)
+		age := now.Sub(updatedAt)
+
+		// 仅在设备离线且端口状态至少15分钟未更新时收敛，避免误伤正常充电
+		if online || age < 15*time.Minute {
+			s.logger.Debug("P1-4: skip lonely charging port (conditions not met)",
+				zap.Int64("device_id", deviceID),
+				zap.String("phy_id", phyID),
+				zap.Int("port_no", portNo),
+				zap.Int("status", status),
+				zap.Bool("online", online),
+				zap.Duration("age", age))
+			continue
+		}
+
+		s.logger.Warn("P1-4: lonely charging port detected, auto-fixing",
+			zap.Int64("device_id", deviceID),
+			zap.String("phy_id", phyID),
+			zap.Int("port_no", portNo),
+			zap.Int("status", status),
+			zap.Bool("online", online),
+			zap.Time("updated_at", updatedAt),
+			zap.Time("last_seen_at", lastSeen),
+			zap.Duration("age", age))
+
+		// 收敛端口状态为空闲 (0x09 = bit0在线 + bit3空载)
+		const idleStatus = 0x09
+		if _, err := s.repo.Pool.Exec(ctx,
+			`UPDATE ports SET status=$1, updated_at=NOW() WHERE device_id=$2 AND port_no=$3`,
+			idleStatus, deviceID, portNo,
+		); err != nil {
+			s.logger.Error("P1-4: failed to auto-fix lonely charging port",
+				zap.Int64("device_id", deviceID),
+				zap.String("phy_id", phyID),
+				zap.Int("port_no", portNo),
+				zap.Error(err))
+			continue
+		}
+
+		fixedCount++
+	}
+
+	if fixedCount > 0 {
+		s.statsAutoFixed += int64(fixedCount)
+		s.logger.Info("P1-4: lonely charging ports auto-fixed",
+			zap.Int("count", fixedCount))
+	}
 }
 
 // checkChargingOrdersConsistency 检查charging订单与端口状态的一致性

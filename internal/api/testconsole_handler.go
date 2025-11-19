@@ -56,6 +56,9 @@ type TestDevice struct {
 	DevicePhyID   string            `json:"device_phy_id"`
 	DeviceID      int               `json:"device_id"`
 	IsOnline      bool              `json:"is_online"`
+	Status        string            `json:"status"`             // offline/idle/charging
+	Consistency   string            `json:"consistency_status"` // ok/inconsistent
+	Inconsistency string            `json:"inconsistency_reason,omitempty"`
 	LastHeartbeat *time.Time        `json:"last_heartbeat,omitempty"`
 	Ports         []TestDevicePort  `json:"ports"`
 	ActiveOrders  []TestActiveOrder `json:"active_orders,omitempty"`
@@ -239,13 +242,19 @@ func (h *TestConsoleHandler) ListTestDevices(c *gin.Context) {
 			})
 		}
 
+		// 设备级一致性视图（仅用于测试控制台）
+		consistencyStatus, inconsistencyReason := h.thirdPartyH.evaluateDeviceConsistency(ctx, dev.ID, dev.PhyID, isOnline, nil)
+
 		testDevices = append(testDevices, TestDevice{
-			DevicePhyID:  dev.PhyID,
-			DeviceID:     int(dev.ID),
-			IsOnline:     isOnline,
-			Ports:        testPorts,
-			ActiveOrders: activeOrders,
-			RegisteredAt: time.Now(), // 使用当前时间作为占位符
+			DevicePhyID:   dev.PhyID,
+			DeviceID:      int(dev.ID),
+			IsOnline:      isOnline,
+			Status:        getDeviceStatus(isOnline, nil),
+			Consistency:   consistencyStatus,
+			Inconsistency: inconsistencyReason,
+			Ports:         testPorts,
+			ActiveOrders:  activeOrders,
+			RegisteredAt:  time.Now(), // 使用当前时间作为占位符
 		})
 	}
 
@@ -341,13 +350,19 @@ func (h *TestConsoleHandler) GetTestDevice(c *gin.Context) {
 		})
 	}
 
+	// 设备级一致性视图（仅用于测试控制台）
+	consistencyStatus, inconsistencyReason := h.thirdPartyH.evaluateDeviceConsistency(ctx, device.ID, device.PhyID, isOnline, nil)
+
 	testDevice := TestDevice{
-		DevicePhyID:  device.PhyID,
-		DeviceID:     int(device.ID),
-		IsOnline:     isOnline,
-		Ports:        testPorts,
-		ActiveOrders: activeOrders,
-		RegisteredAt: time.Now(), // 使用当前时间作为占位符
+		DevicePhyID:   device.PhyID,
+		DeviceID:      int(device.ID),
+		IsOnline:      isOnline,
+		Status:        getDeviceStatus(isOnline, nil),
+		Consistency:   consistencyStatus,
+		Inconsistency: inconsistencyReason,
+		Ports:         testPorts,
+		ActiveOrders:  activeOrders,
+		RegisteredAt:  time.Now(), // 使用当前时间作为占位符
 	}
 
 	c.JSON(http.StatusOK, StandardResponse{
@@ -419,6 +434,18 @@ func (h *TestConsoleHandler) ListTestScenarios(c *gin.Context) {
 				ServiceFee:      100,
 			},
 		},
+		{
+			ID:          "fallback-stop",
+			Name:        "端口在充电但无订单的强制停止",
+			Description: "模拟端口状态为充电但无任何活跃订单，调用停止接口验证fallback异常订单与端口自愈逻辑",
+			Template: TestScenarioTemplate{
+				ChargeMode:      1,
+				Amount:          100,
+				DurationMinutes: 5,
+				PricePerKwh:     100,
+				ServiceFee:      100,
+			},
+		},
 	}
 
 	c.JSON(http.StatusOK, StandardResponse{
@@ -484,6 +511,25 @@ func (h *TestConsoleHandler) StartTestCharge(c *gin.Context) {
 
 	// 根据测试场景执行对应逻辑
 	switch req.ScenarioID {
+	case "fallback-stop":
+		// 场景：不直接启动充电，而是引导用户使用 StopTestCharge 配合手动构造端口状态
+		// 这里只返回场景说明与新建的test_session_id，后续停止操作会记录完整时间线
+		h.logger.Info("scenario: fallback-stop - session initialized",
+			zap.String("test_session_id", testSessionID))
+		c.JSON(http.StatusOK, StandardResponse{
+			Code:    0,
+			Message: "fallback-stop 场景已初始化，请根据需要手动设置端口状态后调用停止接口",
+			Data: map[string]interface{}{
+				"test_session_id": testSessionID,
+				"device_id":       devicePhyID,
+				"scenario":        "fallback-stop",
+				"note":            "本场景主要用于观察 Stop 接口的 fallback 异常订单与端口自愈行为",
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+
 	case "device-offline":
 		// 场景：设备离线拒绝 - 直接返回503错误，不调用充电API
 		h.logger.Info("scenario: device-offline - returning 503",

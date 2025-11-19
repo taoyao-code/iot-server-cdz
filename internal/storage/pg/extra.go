@@ -212,6 +212,87 @@ func (r *Repository) FailOrder(ctx context.Context, orderNo, reason string) erro
 	return err
 }
 
+// InsertFallbackOrder 插入fallback异常订单记录，用于审计“端口在充电但无订单”的场景
+// 使用status=4(failed)并设置failure_reason，避免被视为正常业务订单
+func (r *Repository) InsertFallbackOrder(ctx context.Context, deviceID int64, portNo int, orderNo, failureReason string, testSessionID *string) error {
+	const q = `
+		INSERT INTO orders (
+			device_id, port_no, order_no, status, failure_reason, test_session_id, created_at, updated_at
+		) VALUES ($1, $2, $3, 4, $4, $5, NOW(), NOW())
+	`
+	var session interface{}
+	if testSessionID != nil && *testSessionID != "" {
+		session = *testSessionID
+	} else {
+		session = nil
+	}
+	_, err := r.Pool.Exec(ctx, q, deviceID, portNo, orderNo, failureReason, session)
+	return err
+}
+
+// FinalizeOrderAndPort 收敛订单终态并同步端口状态（CAS 防止并发覆盖）
+// newStatus: 订单终态（如 completed/stopped/failed）
+// portStatus: 端口应收敛到的状态（如 BKV idle=0x09 或故障位图）
+// failureReason: 可选的失败原因（仅在非空且终态为失败时写入）
+func (r *Repository) FinalizeOrderAndPort(ctx context.Context, orderNo string, oldStatus, newStatus int, portStatus int, failureReason *string) error {
+	// 1. 查出 device_id 和 port_no，并锁定订单行
+	const qSel = `
+		SELECT device_id, port_no
+		FROM orders
+		WHERE order_no = $1 AND status = $2
+		FOR UPDATE`
+
+	var deviceID int64
+	var portNo int
+
+	tx, err := r.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := tx.QueryRow(ctx, qSel, orderNo, oldStatus).Scan(&deviceID, &portNo); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// 订单不存在或状态已变化，视为幂等返回
+			return nil
+		}
+		return err
+	}
+
+	// 2. 更新订单终态（仅在状态仍为 oldStatus 时更新）
+	const qUpd = `
+		UPDATE orders
+		SET status = $1,
+		    end_time = COALESCE(end_time, NOW()),
+		    updated_at = NOW(),
+		    failure_reason = CASE
+				WHEN $4 IS NOT NULL AND $1 = 6 THEN $4
+				ELSE failure_reason
+			END
+		WHERE order_no = $2 AND status = $3`
+
+	tag, err := tx.Exec(ctx, qUpd, newStatus, orderNo, oldStatus, failureReason)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		// 状态已被其他路径修改，避免重复更新端口
+		return nil
+	}
+
+	// 3. 更新端口状态（收敛为指定位图）
+	const qPort = `
+		UPDATE ports
+		SET status = $1, updated_at = NOW()
+		WHERE device_id = $2 AND port_no = $3`
+
+	if _, err := tx.Exec(ctx, qPort, portStatus, deviceID, portNo); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
 // ===== 参数写入回读：数据库持久化（C修复） =====
 
 // StoreParamWrite C修复: 存储参数写入记录到device_params表

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -522,6 +523,13 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	ctx := c.Request.Context()
 	devicePhyID := c.Param("device_id")
 	requestID := c.GetString("request_id")
+	// 尝试从上下文中获取test_session_id（内部测试控制台会注入）
+	var testSessionID *string
+	if v := ctx.Value("test_session_id"); v != nil {
+		if s, ok := v.(string); ok && s != "" {
+			testSessionID = &s
+		}
+	}
 
 	// 解析请求体
 	var req StopChargeRequest
@@ -619,10 +627,19 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 			zap.Int("port_no", *req.PortNo),
 			zap.Int("port_status", portStatus))
 
-		// 生成临时订单号用于日志追踪
+		// 生成临时订单号用于日志追踪和异常记录
 		orderNo = fmt.Sprintf("FALLBACK_%d_%d", time.Now().Unix(), *req.PortNo)
 		businessNo = 0 // 无业务单号
 		isFallbackMode = true
+
+		// 写入异常订单记录用于审计（不影响设备停止逻辑）
+		failureReason := "fallback_stop_without_order"
+		if err := h.repo.InsertFallbackOrder(ctx, devID, *req.PortNo, orderNo, failureReason, testSessionID); err != nil {
+			h.logger.Error("failed to insert fallback order",
+				zap.String("order_no", orderNo),
+				zap.Error(err))
+			// 不阻断后续停止指令发送
+		}
 
 		// 发送停止指令（复用后面的逻辑）
 		// 注意：不更新订单状态（因为订单不存在），直接发送硬件指令
@@ -911,7 +928,7 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 	var activePortNo *int
 	queryActiveOrderSQL := `
 		SELECT order_no, port_no FROM orders 
-		WHERE device_id = $1 AND status IN (0, 1)
+		WHERE device_id = $1 AND status IN (0, 1, 2, 8, 9, 10)
 		ORDER BY created_at DESC LIMIT 1
 	`
 	err = h.repo.Pool.QueryRow(ctx, queryActiveOrderSQL, devID).Scan(&activeOrderNo, &activePortNo)
@@ -934,6 +951,15 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 		deviceData["active_order"] = map[string]interface{}{
 			"order_no": *activeOrderNo,
 			"port_no":  *activePortNo,
+		}
+	}
+
+	// 一致性视图: 设备在线状态 / 活跃订单 / 端口状态之间是否一致
+	consistencyStatus, inconsistencyReason := h.evaluateDeviceConsistency(ctx, devID, devicePhyID, isOnline, activeOrderNo)
+	if consistencyStatus != "" {
+		deviceData["consistency_status"] = consistencyStatus
+		if inconsistencyReason != "" {
+			deviceData["inconsistency_reason"] = inconsistencyReason
 		}
 	}
 
@@ -1018,6 +1044,15 @@ func (h *ThirdPartyHandler) GetOrder(c *gin.Context) {
 		orderData["energy_kwh"] = float64(*kwh) / 100.0 // 转换为kWh
 	}
 
+	// 一致性视图: 检查订单状态与端口/会话是否一致
+	consistencyStatus, inconsistencyReason := h.evaluateOrderConsistency(ctx, deviceID, portNo, status)
+	if consistencyStatus != "" {
+		orderData["consistency_status"] = consistencyStatus
+		if inconsistencyReason != "" {
+			orderData["inconsistency_reason"] = inconsistencyReason
+		}
+	}
+
 	c.JSON(http.StatusOK, StandardResponse{
 		Code: 0,
 		// EN: success
@@ -1048,7 +1083,7 @@ func (h *ThirdPartyHandler) ListOrders(c *gin.Context) {
 
 	// 解析查询参数
 	devicePhyID := c.Query("device_id")
-	status := c.Query("status")
+	statusParam := strings.TrimSpace(c.Query("status"))
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 
@@ -1059,9 +1094,27 @@ func (h *ThirdPartyHandler) ListOrders(c *gin.Context) {
 		pageSize = 20
 	}
 
+	var statusCodes []int
+	if statusParam != "" {
+		codes, err := parseOrderStatusFilter(statusParam)
+		if err != nil {
+			h.logger.Warn("invalid status filter",
+				zap.String("status", statusParam),
+				zap.Error(err))
+			c.JSON(http.StatusBadRequest, StandardResponse{
+				Code:      400,
+				Message:   fmt.Sprintf("invalid status filter: %s", statusParam),
+				RequestID: requestID,
+				Timestamp: time.Now().Unix(),
+			})
+			return
+		}
+		statusCodes = codes
+	}
+
 	h.logger.Info("list orders requested",
 		zap.String("device_id", devicePhyID),
-		zap.String("status", status),
+		zap.String("status", statusParam),
 		zap.Int("page", page),
 		zap.Int("page_size", pageSize))
 
@@ -1080,10 +1133,20 @@ func (h *ThirdPartyHandler) ListOrders(c *gin.Context) {
 		}
 	}
 
-	if status != "" {
-		whereClauses = append(whereClauses, fmt.Sprintf("status = $%d", argIdx))
-		args = append(args, status)
-		argIdx++
+	if len(statusCodes) > 0 {
+		if len(statusCodes) == 1 {
+			whereClauses = append(whereClauses, fmt.Sprintf("status = $%d", argIdx))
+			args = append(args, statusCodes[0])
+			argIdx++
+		} else {
+			placeholders := make([]string, 0, len(statusCodes))
+			for _, code := range statusCodes {
+				placeholders = append(placeholders, fmt.Sprintf("$%d", argIdx))
+				args = append(args, code)
+				argIdx++
+			}
+			whereClauses = append(whereClauses, fmt.Sprintf("status IN (%s)", strings.Join(placeholders, ",")))
+		}
 	}
 
 	whereSQL := ""
@@ -1515,14 +1578,194 @@ func getOrderStatusString(status int) string {
 	case 0:
 		return "pending"
 	case 1:
-		return "charging"
+		return "confirmed"
 	case 2:
-		return "completed"
+		return "charging"
 	case 3:
+		return "completed"
+	case 4:
+		return "failed"
+	case 5:
 		return "cancelled"
+	case 6:
+		return "refunded"
+	case 7:
+		return "settled"
+	case 8:
+		return "cancelling"
+	case 9:
+		return "stopping"
+	case 10:
+		return "interrupted"
 	default:
 		return "unknown"
 	}
+}
+
+// parseOrderStatusFilter 将查询参数中的订单状态过滤值解析为内部状态码切片
+// 支持两种形式：
+// 1) 纯数字: "0","1","2"... → 直接转换为对应状态码
+// 2) 文本枚举: "pending","charging","completed","failed","cancelled","refunded","settled","cancelling","stopping","interrupted"
+func parseOrderStatusFilter(s string) ([]int, error) {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return nil, nil
+	}
+
+	// 数字形式: 直接解析为单个状态码
+	if code, err := strconv.Atoi(s); err == nil {
+		return []int{code}, nil
+	}
+
+	switch s {
+	case "pending":
+		return []int{OrderStatusPending}, nil
+	case "confirmed":
+		return []int{OrderStatusConfirmed}, nil
+	case "charging":
+		return []int{OrderStatusCharging}, nil
+	case "completed":
+		// 包含 completed(3) 和 settled(7)
+		return []int{OrderStatusCompleted, 7}, nil
+	case "failed":
+		// 包含 failed(4) 和 refunded(6)
+		return []int{4, 6}, nil
+	case "cancelled":
+		return []int{OrderStatusCancelled}, nil
+	case "refunded":
+		return []int{6}, nil
+	case "settled":
+		return []int{7}, nil
+	case "cancelling":
+		return []int{OrderStatusCancelling}, nil
+	case "stopping":
+		return []int{OrderStatusStopping}, nil
+	case "interrupted":
+		return []int{OrderStatusInterrupted}, nil
+	default:
+		return nil, fmt.Errorf("unsupported status value: %s", s)
+	}
+}
+
+// evaluateDeviceConsistency 评估设备的状态一致性（会话/订单/端口快照）
+// 返回: consistency_status("ok"/"inconsistent") 以及可选的不一致原因
+func (h *ThirdPartyHandler) evaluateDeviceConsistency(ctx context.Context, deviceID int64, devicePhyID string, isOnline bool, activeOrderNo *string) (string, string) {
+	// 读取端口快照
+	ports, err := h.repo.ListPortsByPhyID(ctx, devicePhyID)
+	if err != nil {
+		h.logger.Warn("failed to list ports for consistency check",
+			zap.String("device_phy_id", devicePhyID),
+			zap.Error(err))
+		// 查询失败时不强行给出不一致结论
+		return "", ""
+	}
+
+	// 查询活跃订单（pending/confirmed/charging/cancelling/stopping/interrupted）
+	const activeOrderSQL = `
+		SELECT order_no, status, port_no
+		FROM orders
+		WHERE device_id = $1 AND status IN (0,1,2,8,9,10)
+	`
+	rows, err := h.repo.Pool.Query(ctx, activeOrderSQL, deviceID)
+	if err != nil {
+		h.logger.Warn("failed to query active orders for consistency check",
+			zap.Int64("device_id", deviceID),
+			zap.Error(err))
+		return "", ""
+	}
+	defer rows.Close()
+
+	type ord struct {
+		no     string
+		status int
+		port   int
+	}
+	var activeOrders []ord
+	for rows.Next() {
+		var o ord
+		if err := rows.Scan(&o.no, &o.status, &o.port); err != nil {
+			continue
+		}
+		activeOrders = append(activeOrders, o)
+	}
+
+	// 构造端口充电视图
+	portCharging := false
+	for _, p := range ports {
+		if isBKVChargingStatus(p.Status) {
+			portCharging = true
+			break
+		}
+	}
+
+	hasActiveOrder := len(activeOrders) > 0
+
+	// 规则1: 设备离线但存在活跃订单
+	if !isOnline && hasActiveOrder {
+		return "inconsistent", "device_offline_but_active_order"
+	}
+
+	// 规则2: 设备在线且端口显示在充电，但没有任何活跃订单
+	if isOnline && portCharging && !hasActiveOrder {
+		return "inconsistent", "port_charging_without_active_order"
+	}
+
+	// 规则3: 设备在线且存在活跃订单，但所有端口都不在充电状态
+	if isOnline && hasActiveOrder && !portCharging {
+		return "inconsistent", "active_order_but_ports_not_charging"
+	}
+
+	return "ok", ""
+}
+
+// evaluateOrderConsistency 评估单个订单与端口/设备会话的状态一致性
+func (h *ThirdPartyHandler) evaluateOrderConsistency(ctx context.Context, deviceID int64, portNo int, status int) (string, string) {
+	// 获取设备phy_id
+	const devSQL = `SELECT phy_id FROM devices WHERE id=$1`
+	var phyID string
+	if err := h.repo.Pool.QueryRow(ctx, devSQL, deviceID).Scan(&phyID); err != nil || phyID == "" {
+		return "", ""
+	}
+
+	// 会话在线状态
+	isOnline := h.sess.IsOnline(phyID, time.Now())
+
+	// 端口快照
+	const portSQL = `SELECT status FROM ports WHERE device_id=$1 AND port_no=$2`
+	var portStatus int
+	if err := h.repo.Pool.QueryRow(ctx, portSQL, deviceID, portNo).Scan(&portStatus); err != nil {
+		// 端口不存在时，不做一致性判断
+		return "", ""
+	}
+
+	isPortCharging := isBKVChargingStatus(portStatus)
+	isOrderActive := status == OrderStatusCharging || status == OrderStatusPending ||
+		status == OrderStatusConfirmed || status == OrderStatusCancelling ||
+		status == OrderStatusStopping || status == OrderStatusInterrupted
+	isOrderFinal := status == OrderStatusCompleted || status == OrderStatusCancelled ||
+		status == OrderStatusFailed || status == 7 // settled
+
+	// 规则1: 订单仍处于活跃/中间态，但设备已离线
+	if isOrderActive && !isOnline {
+		return "inconsistent", "order_active_but_device_offline"
+	}
+
+	// 规则2: 订单活跃/中间态，但端口并不处于充电状态
+	if isOrderActive && !isPortCharging {
+		return "inconsistent", "order_active_but_port_not_charging"
+	}
+
+	// 规则3: 订单已终态，但端口仍处于充电状态
+	if isOrderFinal && isPortCharging {
+		return "inconsistent", "order_final_but_port_charging"
+	}
+
+	return "ok", ""
+}
+
+// isBKVChargingStatus 判断端口状态位图是否表示充电中（BKV: bit7=0x80）
+func isBKVChargingStatus(status int) bool {
+	return status&0x80 != 0
 }
 
 // ===== P1-4修复: 端口状态同步验证 =====

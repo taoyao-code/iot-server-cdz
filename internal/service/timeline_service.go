@@ -71,8 +71,29 @@ func (s *TimelineService) GetTimeline(ctx context.Context, testSessionID string)
 			zap.String("test_session_id", testSessionID),
 			zap.Error(err))
 	} else {
+		// 累积订单相关事件
 		timeline.Events = append(timeline.Events, orderEvents...)
 		timeline.Summary.OrdersCreated = countEventsByType(orderEvents, "db_operation")
+
+		// 统计异常订单（例如fallback_stop_without_order）
+		anomalyCount := 0
+		fallbackAnomalyCount := 0
+		for _, ev := range orderEvents {
+			if data := ev.Data; data != nil {
+				if v, ok := data["is_anomaly"].(bool); ok && v {
+					anomalyCount++
+					if reason, ok := data["failure_reason"].(*string); ok && reason != nil && *reason == "fallback_stop_without_order" {
+						fallbackAnomalyCount++
+					}
+				}
+			}
+		}
+		if anomalyCount > 0 {
+			timeline.Summary.Details["anomaly_orders"] = anomalyCount
+		}
+		if fallbackAnomalyCount > 0 {
+			timeline.Summary.Details["fallback_stop_anomalies"] = fallbackAnomalyCount
+		}
 	}
 
 	// 2. 查询出站命令
@@ -137,7 +158,7 @@ func (s *TimelineService) GetTimeline(ctx context.Context, testSessionID string)
 func (s *TimelineService) getOrderEvents(ctx context.Context, testSessionID string) ([]TimelineEvent, error) {
 	query := `
 		SELECT
-			order_no, device_id, port_no, status,
+			order_no, device_id, port_no, status, failure_reason,
 			start_time, end_time, amount_cent, kwh_0p01,
 			created_at, updated_at
 		FROM orders
@@ -154,22 +175,30 @@ func (s *TimelineService) getOrderEvents(ctx context.Context, testSessionID stri
 	var events []TimelineEvent
 	for rows.Next() {
 		var (
-			orderNo    string
-			deviceID   int
-			portNo     int
-			status     int
-			startTime  *time.Time
-			endTime    *time.Time
-			amountCent int
-			kwh0p01    int
-			createdAt  time.Time
-			updatedAt  time.Time
+			orderNo       string
+			deviceID      int
+			portNo        int
+			status        int
+			failureReason *string
+			startTime     *time.Time
+			endTime       *time.Time
+			amountCent    int
+			kwh0p01       int
+			createdAt     time.Time
+			updatedAt     time.Time
 		)
 
-		if err := rows.Scan(&orderNo, &deviceID, &portNo, &status,
+		if err := rows.Scan(&orderNo, &deviceID, &portNo, &status, &failureReason,
 			&startTime, &endTime, &amountCent, &kwh0p01,
 			&createdAt, &updatedAt); err != nil {
 			return nil, err
+		}
+
+		statusText := getOrderStatusText(status)
+		isAnomaly := status == 4 && failureReason != nil && *failureReason != ""
+		description := "订单创建"
+		if isAnomaly {
+			description = "异常订单创建"
 		}
 
 		// 订单创建事件
@@ -177,30 +206,39 @@ func (s *TimelineService) getOrderEvents(ctx context.Context, testSessionID stri
 			Timestamp:   createdAt,
 			Type:        "db_operation",
 			Source:      "orders",
-			Description: "订单创建",
+			Description: description,
 			Data: map[string]interface{}{
-				"order_no":    orderNo,
-				"device_id":   deviceID,
-				"port_no":     portNo,
-				"status":      status,
-				"status_text": getOrderStatusText(status),
-				"amount_cent": amountCent,
+				"order_no":       orderNo,
+				"device_id":      deviceID,
+				"port_no":        portNo,
+				"status":         status,
+				"status_text":    statusText,
+				"amount_cent":    amountCent,
+				"is_anomaly":     isAnomaly,
+				"failure_reason": failureReason,
 			},
 		})
 
 		// 如果订单有更新，添加更新事件
 		if !updatedAt.Equal(createdAt) {
+			updateDesc := "订单状态更新"
+			if isAnomaly {
+				updateDesc = "异常订单状态更新"
+			}
+
 			events = append(events, TimelineEvent{
 				Timestamp:   updatedAt,
 				Type:        "db_operation",
 				Source:      "orders",
-				Description: "订单状态更新",
+				Description: updateDesc,
 				Data: map[string]interface{}{
-					"order_no":    orderNo,
-					"status":      status,
-					"status_text": getOrderStatusText(status),
-					"kwh_0p01":    kwh0p01,
-					"amount_cent": amountCent,
+					"order_no":       orderNo,
+					"status":         status,
+					"status_text":    statusText,
+					"kwh_0p01":       kwh0p01,
+					"amount_cent":    amountCent,
+					"is_anomaly":     isAnomaly,
+					"failure_reason": failureReason,
 				},
 			})
 		}

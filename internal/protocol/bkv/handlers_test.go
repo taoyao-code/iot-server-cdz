@@ -287,9 +287,9 @@ func TestHandlers_Control_StopCharging(t *testing.T) {
 		t.Fatalf("expected 1 port upsert, got %d", fr.upserts)
 	}
 
-	// 检查端口状态为空闲
-	if fr.lastStatus != 0 {
-		t.Fatalf("expected status 0 (idle), got %d", fr.lastStatus)
+	// 检查端口状态为空闲（BKV idle=0x09 = 在线+空载）
+	if fr.lastStatus != 0x09 {
+		t.Fatalf("expected status 0x09 (idle), got %d", fr.lastStatus)
 	}
 }
 
@@ -337,9 +337,9 @@ func TestHandlers_ChargingEnd_Basic(t *testing.T) {
 		t.Fatalf("expected 1 port upsert, got %d", fr.upserts)
 	}
 
-	// 检查端口状态为空闲
-	if fr.lastStatus != 0 {
-		t.Fatalf("expected status 0 (idle), got %d", fr.lastStatus)
+	// 检查端口状态为空闲（BKV idle=0x09）
+	if fr.lastStatus != 0x09 {
+		t.Fatalf("expected status 0x09 (idle), got %d", fr.lastStatus)
 	}
 }
 

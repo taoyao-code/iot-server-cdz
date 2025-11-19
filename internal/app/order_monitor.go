@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/taoyao-code/iot-server/internal/api"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"go.uber.org/zap"
 )
@@ -195,20 +196,40 @@ func (m *OrderMonitor) checkLongChargingOrders(ctx context.Context) {
 // cleanupCancellingOrders P0修复: 自动清理超时的cancelling订单
 // cancelling订单超过30秒未收到设备ACK,自动变为cancelled
 func (m *OrderMonitor) cleanupCancellingOrders(ctx context.Context) {
-	q := `UPDATE orders 
-	      SET status = 5, updated_at = NOW()
-	      WHERE status = 8 
-	        AND updated_at < NOW() - INTERVAL '30 seconds'`
+	const q = `SELECT order_no 
+	           FROM orders 
+	           WHERE status = 8 
+	             AND updated_at < NOW() - INTERVAL '30 seconds'
+	           LIMIT 100`
 
-	result, err := m.repo.Pool.Exec(ctx, q)
+	rows, err := m.repo.Pool.Query(ctx, q)
 	if err != nil {
 		m.logger.Error("cleanup cancelling orders failed", zap.Error(err))
 		return
 	}
+	defer rows.Close()
 
-	if result.RowsAffected() > 0 {
+	var processed int64
+	for rows.Next() {
+		var orderNo string
+		if err := rows.Scan(&orderNo); err != nil {
+			m.logger.Error("cleanup cancelling orders: scan failed", zap.Error(err))
+			continue
+		}
+
+		// 5 = cancelled，0x09 = BKV idle (在线+空载)
+		if err := m.repo.FinalizeOrderAndPort(ctx, orderNo, api.OrderStatusCancelling, api.OrderStatusCancelled, 0x09, nil); err != nil {
+			m.logger.Error("cleanup cancelling orders: finalize failed",
+				zap.String("order_no", orderNo),
+				zap.Error(err))
+			continue
+		}
+		processed++
+	}
+
+	if processed > 0 {
 		m.logger.Info("✅ auto cancelled timeout orders",
-			zap.Int64("count", result.RowsAffected()),
+			zap.Int64("count", processed),
 			zap.String("reason", "cancelling超时30秒"))
 	}
 }
@@ -216,20 +237,40 @@ func (m *OrderMonitor) cleanupCancellingOrders(ctx context.Context) {
 // cleanupStoppingOrders P0修复: 自动清理超时的stopping订单
 // stopping订单超过30秒未收到设备ACK,自动变为stopped
 func (m *OrderMonitor) cleanupStoppingOrders(ctx context.Context) {
-	q := `UPDATE orders 
-	      SET status = 7, updated_at = NOW()
-	      WHERE status = 9 
-	        AND updated_at < NOW() - INTERVAL '30 seconds'`
+	const q = `SELECT order_no 
+	           FROM orders 
+	           WHERE status = 9 
+	             AND updated_at < NOW() - INTERVAL '30 seconds'
+	           LIMIT 100`
 
-	result, err := m.repo.Pool.Exec(ctx, q)
+	rows, err := m.repo.Pool.Query(ctx, q)
 	if err != nil {
 		m.logger.Error("cleanup stopping orders failed", zap.Error(err))
 		return
 	}
+	defer rows.Close()
 
-	if result.RowsAffected() > 0 {
+	var processed int64
+	for rows.Next() {
+		var orderNo string
+		if err := rows.Scan(&orderNo); err != nil {
+			m.logger.Error("cleanup stopping orders: scan failed", zap.Error(err))
+			continue
+		}
+
+		// 7 = stopped/settled，0x09 = BKV idle
+		if err := m.repo.FinalizeOrderAndPort(ctx, orderNo, api.OrderStatusStopping, 7, 0x09, nil); err != nil {
+			m.logger.Error("cleanup stopping orders: finalize failed",
+				zap.String("order_no", orderNo),
+				zap.Error(err))
+			continue
+		}
+		processed++
+	}
+
+	if processed > 0 {
 		m.logger.Info("✅ auto stopped timeout orders",
-			zap.Int64("count", result.RowsAffected()),
+			zap.Int64("count", processed),
 			zap.String("reason", "stopping超时30秒"))
 	}
 }
@@ -237,20 +278,41 @@ func (m *OrderMonitor) cleanupStoppingOrders(ctx context.Context) {
 // cleanupInterruptedOrders P0修复: 自动清理超时的interrupted订单
 // interrupted订单超过60秒设备未恢复,自动变为failed
 func (m *OrderMonitor) cleanupInterruptedOrders(ctx context.Context) {
-	q := `UPDATE orders 
-	      SET status = 6, failure_reason = 'device offline timeout', updated_at = NOW()
-	      WHERE status = 10 
-	        AND updated_at < NOW() - INTERVAL '60 seconds'`
+	const q = `SELECT order_no 
+	           FROM orders 
+	           WHERE status = 10 
+	             AND updated_at < NOW() - INTERVAL '60 seconds'
+	           LIMIT 100`
 
-	result, err := m.repo.Pool.Exec(ctx, q)
+	rows, err := m.repo.Pool.Query(ctx, q)
 	if err != nil {
 		m.logger.Error("cleanup interrupted orders failed", zap.Error(err))
 		return
 	}
+	defer rows.Close()
 
-	if result.RowsAffected() > 0 {
+	var processed int64
+	reason := "device offline timeout"
+	for rows.Next() {
+		var orderNo string
+		if err := rows.Scan(&orderNo); err != nil {
+			m.logger.Error("cleanup interrupted orders: scan failed", zap.Error(err))
+			continue
+		}
+
+		// 6 = failed，端口收敛为 idle（0x09）；failure_reason 写入一次
+		if err := m.repo.FinalizeOrderAndPort(ctx, orderNo, api.OrderStatusInterrupted, api.OrderStatusFailed, 0x09, &reason); err != nil {
+			m.logger.Error("cleanup interrupted orders: finalize failed",
+				zap.String("order_no", orderNo),
+				zap.Error(err))
+			continue
+		}
+		processed++
+	}
+
+	if processed > 0 {
 		m.logger.Warn("⚠️ auto failed interrupted orders",
-			zap.Int64("count", result.RowsAffected()),
+			zap.Int64("count", processed),
 			zap.String("reason", "设备离线超过60秒未恢复"))
 	}
 }

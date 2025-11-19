@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -9,6 +10,19 @@ import (
 	"github.com/taoyao-code/iot-server/internal/session"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"go.uber.org/zap"
+)
+
+// 复用第三方 handler 中的订单状态常量，保持一致性语义
+const (
+	OrderStatusPending     = 0  // 待确认
+	OrderStatusConfirmed   = 1  // 已确认
+	OrderStatusCharging    = 2  // 充电中
+	OrderStatusCompleted   = 3  // 已完成
+	OrderStatusCancelled   = 5  // 已取消
+	OrderStatusFailed      = 6  // 失败/异常
+	OrderStatusCancelling  = 8  // 取消中
+	OrderStatusStopping    = 9  // 停止中
+	OrderStatusInterrupted = 10 // 中断
 )
 
 // ReadOnlyHandler 只读API处理器
@@ -77,12 +91,85 @@ func (h *ReadOnlyHandler) ListDevices(c *gin.Context) {
 // @Router /api/devices/{device_id}/ports [get]
 func (h *ReadOnlyHandler) ListDevicePorts(c *gin.Context) {
 	phy := c.Param("device_id")
-	ports, err := h.repo.ListPortsByPhyID(c.Request.Context(), phy)
+	ctx := c.Request.Context()
+
+	ports, err := h.repo.ListPortsByPhyID(ctx, phy)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"phyId": phy, "ports": ports})
+
+	// 一致性视图：基于 Session + orders + ports 标记是否存在明显不一致
+	now := time.Now()
+	online := h.sess.IsOnline(phy, now)
+
+	// 查询活跃订单（pending/confirmed/charging/cancelling/stopping/interrupted）
+	const activeOrderSQL = `
+		SELECT o.order_no, o.status, o.port_no
+		FROM orders o
+		JOIN devices d ON o.device_id = d.id
+		WHERE d.phy_id = $1 AND o.status IN (0,1,2,8,9,10)
+	`
+	rows, err := h.repo.Pool.Query(ctx, activeOrderSQL, phy)
+	if err != nil {
+		// 回退为简单视图
+		c.JSON(200, gin.H{"phyId": phy, "ports": ports})
+		return
+	}
+	defer rows.Close()
+
+	type ord struct {
+		status int
+		port   int
+	}
+	var activeOrders []ord
+	for rows.Next() {
+		var (
+			orderNo string
+			status  int
+			portNo  int
+		)
+		if err := rows.Scan(&orderNo, &status, &portNo); err != nil {
+			continue
+		}
+		activeOrders = append(activeOrders, ord{status: status, port: portNo})
+	}
+
+	// 端口是否有任何处于充电状态
+	portCharging := false
+	for _, p := range ports {
+		if isBKVChargingStatus(p.Status) {
+			portCharging = true
+			break
+		}
+	}
+	hasActiveOrder := len(activeOrders) > 0
+
+	consistencyStatus := "ok"
+	inconsistencyReason := ""
+
+	if !online && hasActiveOrder {
+		consistencyStatus = "inconsistent"
+		inconsistencyReason = "device_offline_but_active_order"
+	} else if online && portCharging && !hasActiveOrder {
+		consistencyStatus = "inconsistent"
+		inconsistencyReason = "port_charging_without_active_order"
+	} else if online && hasActiveOrder && !portCharging {
+		consistencyStatus = "inconsistent"
+		inconsistencyReason = "active_order_but_ports_not_charging"
+	}
+
+	resp := gin.H{
+		"phy_id":             phy,
+		"ports":              ports,
+		"online":             online,
+		"consistency_status": consistencyStatus,
+	}
+	if inconsistencyReason != "" {
+		resp["inconsistency_reason"] = inconsistencyReason
+	}
+
+	c.JSON(200, resp)
 }
 
 // GetDeviceParams 查询设备参数
@@ -192,7 +279,19 @@ func (h *ReadOnlyHandler) GetOrder(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "not found"})
 		return
 	}
-	c.JSON(200, gin.H{"order": ord})
+
+	// 一致性视图：评估订单与端口/会话的一致性
+	consistencyStatus, inconsistencyReason := h.evaluateOrderConsistency(c.Request.Context(), ord.DeviceID, ord.PortNo, ord.Status)
+
+	resp := gin.H{"order": ord}
+	if consistencyStatus != "" {
+		resp["consistency_status"] = consistencyStatus
+	}
+	if inconsistencyReason != "" {
+		resp["inconsistency_reason"] = inconsistencyReason
+	}
+
+	c.JSON(200, resp)
 }
 
 // ListDeviceOrders 查询设备订单
@@ -225,7 +324,33 @@ func (h *ReadOnlyHandler) ListDeviceOrders(c *gin.Context) {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"orders": list})
+
+	// 为每个订单附加一致性状态（轻量级，只使用 DB + Session）
+	ctx := c.Request.Context()
+	enriched := make([]map[string]interface{}, 0, len(list))
+	for _, ord := range list {
+		status, reason := h.evaluateOrderConsistency(ctx, ord.DeviceID, ord.PortNo, ord.Status)
+		item := map[string]interface{}{
+			"id":                 ord.ID,
+			"device_id":          ord.DeviceID,
+			"phy_id":             ord.PhyID,
+			"port_no":            ord.PortNo,
+			"order_no":           ord.OrderNo,
+			"status":             ord.Status,
+			"start_time":         ord.StartTime,
+			"end_time":           ord.EndTime,
+			"kwh_0p01":           ord.Kwh01,
+			"amount_cent":        ord.AmountCent,
+			"test_session":       ord.TestSessionID,
+			"consistency_status": status,
+		}
+		if reason != "" {
+			item["inconsistency_reason"] = reason
+		}
+		enriched = append(enriched, item)
+	}
+
+	c.JSON(200, gin.H{"orders": enriched})
 }
 
 // Ready 快速就绪检查
@@ -252,4 +377,49 @@ func (h *ReadOnlyHandler) Ready(c *gin.Context) {
 		"online_devices": h.sess.OnlineCount(time.Now()),
 		"time":           time.Now().Format(time.RFC3339),
 	})
+}
+
+// evaluateOrderConsistency 复用第三方读取中的一致性规则，对只读视图提供相同的一致性标记
+func (h *ReadOnlyHandler) evaluateOrderConsistency(ctx context.Context, deviceID int64, portNo int, status int) (string, string) {
+	// 获取设备phy_id
+	const devSQL = `SELECT phy_id FROM devices WHERE id=$1`
+	var phyID string
+	if err := h.repo.Pool.QueryRow(ctx, devSQL, deviceID).Scan(&phyID); err != nil || phyID == "" {
+		return "", ""
+	}
+
+	// 会话在线状态
+	isOnline := h.sess.IsOnline(phyID, time.Now())
+
+	// 端口快照
+	const portSQL = `SELECT status FROM ports WHERE device_id=$1 AND port_no=$2`
+	var portStatus int
+	if err := h.repo.Pool.QueryRow(ctx, portSQL, deviceID, portNo).Scan(&portStatus); err != nil {
+		// 端口不存在时，不做一致性判断
+		return "", ""
+	}
+
+	isPortCharging := isBKVChargingStatus(portStatus)
+	isOrderActive := status == OrderStatusCharging || status == OrderStatusPending ||
+		status == OrderStatusConfirmed || status == OrderStatusCancelling ||
+		status == OrderStatusStopping || status == OrderStatusInterrupted
+	isOrderFinal := status == OrderStatusCompleted || status == OrderStatusCancelled ||
+		status == OrderStatusFailed || status == 7 // settled
+
+	// 规则1: 订单仍处于活跃/中间态，但设备已离线
+	if isOrderActive && !isOnline {
+		return "inconsistent", "order_active_but_device_offline"
+	}
+
+	// 规则2: 订单活跃/中间态，但端口并不处于充电状态
+	if isOrderActive && !isPortCharging {
+		return "inconsistent", "order_active_but_port_not_charging"
+	}
+
+	// 规则3: 订单已终态，但端口仍处于充电状态
+	if isOrderFinal && isPortCharging {
+		return "inconsistent", "order_final_but_port_charging"
+	}
+
+	return "ok", ""
 }

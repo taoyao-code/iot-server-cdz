@@ -131,6 +131,28 @@ go test -v -run OrderSuite
 - ✅ 时间追踪
 - ✅ 电量追踪
 
+## 🔧 调试用命令行客户端
+
+在不通过 `go test` 的情况下，可以使用内置的调试客户端直接对接服务端，跑一遍完整的充电流程：
+
+```bash
+cd test/e2e
+
+# 依然复用 E2E_* 环境变量
+export E2E_SERVER_URL="http://182.43.177.92:7055"
+export E2E_API_KEY="your_api_key_here"
+export E2E_DEVICE_ID="82241218000382"
+
+# 跑一次完整充电流程：等待设备上线 → 启动充电 → 等待 charging → 停止充电 → 等待 completed
+go run ./cmd/chargeflow \
+  -device "$E2E_DEVICE_ID" \
+  -port 1 \
+  -amount 100 \
+  -mode 2
+```
+
+该命令行工具只用于验证服务端行为是否正确，不作为正式客户端使用。
+
 ## 📊 CI/CD 集成
 
 ### GitHub Actions 示例
