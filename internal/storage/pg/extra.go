@@ -146,10 +146,11 @@ func (r *Repository) GetOrderByBusinessNo(ctx context.Context, deviceID int64, b
 	return &ord, nil
 }
 
-// CompleteOrderByPort 完成端口上的充电订单（设置 end_time 并置状态为 completed=3）
+// CompleteOrderByPort 完成端口上的充电订单（设置 end_time 并置状态为 completed=3）,
+// 支持从 charging(2) 或 stopping(9) 终态化，避免 Stop 后状态卡在 9
 func (r *Repository) CompleteOrderByPort(ctx context.Context, deviceID int64, portNo int, endTime time.Time, reason int) error {
 	const q = `UPDATE orders SET end_time=COALESCE($3, NOW()), status=3, updated_at=NOW()
-		WHERE device_id=$1 AND port_no=$2 AND status=2`
+		WHERE device_id=$1 AND port_no=$2 AND status IN (2, 9)`
 	var et *time.Time
 	if !endTime.IsZero() {
 		et = &endTime
