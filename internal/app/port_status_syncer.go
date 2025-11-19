@@ -17,6 +17,7 @@ import (
 // 定期查询设备端口状态，确保与数据库一致
 type PortStatusSyncer struct {
 	repo      *pgstorage.Repository
+	sess      SessionManager // 会话管理器（用于实时在线判断）
 	outboundQ *redisstorage.OutboundQueue
 	metrics   *metrics.AppMetrics
 	logger    *zap.Logger
@@ -31,15 +32,22 @@ type PortStatusSyncer struct {
 	statsAutoFixed   int64
 }
 
+// SessionManager 会话管理器接口（避免循环依赖）
+type SessionManager interface {
+	IsOnline(phyID string, now time.Time) bool
+}
+
 // NewPortStatusSyncer 创建端口状态同步器
 func NewPortStatusSyncer(
 	repo *pgstorage.Repository,
+	sess SessionManager,
 	outboundQ *redisstorage.OutboundQueue,
 	metrics *metrics.AppMetrics,
 	logger *zap.Logger,
 ) *PortStatusSyncer {
 	return &PortStatusSyncer{
 		repo:          repo,
+		sess:          sess,
 		outboundQ:     outboundQ,
 		metrics:       metrics,
 		logger:        logger,
@@ -170,6 +178,7 @@ func (s *PortStatusSyncer) queryDevicePort(ctx context.Context, deviceID int64, 
 // checkChargingOrdersConsistency 检查charging订单与端口状态的一致性
 func (s *PortStatusSyncer) checkChargingOrdersConsistency(ctx context.Context) {
 	// P1-4完整实现：检查所有charging订单的端口状态一致性
+	// 修复：使用SessionManager实时判断online，不使用数据库old字段
 
 	// 场景1：订单charging，端口free → 订单可能已完成但未更新
 	// 场景2：订单charging，端口charging → 正常
@@ -184,7 +193,6 @@ func (s *PortStatusSyncer) checkChargingOrdersConsistency(ctx context.Context) {
 			o.updated_at as order_updated_at,
 			p.status as port_status,
 			d.phy_id,
-			d.online,
 			d.last_seen_at
 		FROM orders o
 		LEFT JOIN ports p ON o.device_id = p.device_id AND o.port_no = p.port_no
@@ -202,6 +210,8 @@ func (s *PortStatusSyncer) checkChargingOrdersConsistency(ctx context.Context) {
 	defer rows.Close()
 
 	inconsistentCount := 0
+	now := time.Now() // 用于实时在线判断
+
 	for rows.Next() {
 		var orderNo string
 		var deviceID int64
@@ -210,14 +220,16 @@ func (s *PortStatusSyncer) checkChargingOrdersConsistency(ctx context.Context) {
 		var orderUpdatedAt time.Time
 		var portStatus *int
 		var phyID string
-		var online bool
 		var lastSeenAt time.Time
 
 		if err := rows.Scan(&orderNo, &deviceID, &portNo, &orderStatus, &orderUpdatedAt,
-			&portStatus, &phyID, &online, &lastSeenAt); err != nil {
+			&portStatus, &phyID, &lastSeenAt); err != nil {
 			s.logger.Error("P1-4: failed to scan row", zap.Error(err))
 			continue
 		}
+
+		// 关键修复：使用SessionManager实时判断在线状态
+		online := s.sess.IsOnline(phyID, now)
 
 		// 检查一致性
 		mismatchType := ""
@@ -311,25 +323,26 @@ func (s *PortStatusSyncer) getExpectedPortStatus(orderStatus int) int {
 	}
 }
 
-// shouldAutoFix D修复: 判断是否应该自动修复（更精确的防护条件）
+// shouldAutoFix 修复: 判断是否应该自动修复（更精确的防护条件）
 func (s *PortStatusSyncer) shouldAutoFix(orderStatus int, portStatus *int, online bool, timeSinceUpdate time.Duration) bool {
-	// D修复: 自动修复条件增强：
-	// 1. 设备离线超过5分钟 且 订单是charging 且 订单更新时间>3分钟 → 标记订单为failed
+	// 修复: 自动修复条件增强：
+	// 1. 设备离线超过5分钟（至少5个心跳周期） 且 订单更新时间>5分钟 → 标记订单为failed
 	// 2. 端口是free 且 订单是charging 且 超过15分钟未更新 → 标记订单为completed
-	// 3. D修复: 订单interrupted状态 且 超过1小时 → 标记为failed
+	// 3. 修复: 订单interrupted状态 且 超过1小时 → 标记为failed
 
 	// 条件1: 设备长时间离线，订单还在charging
-	// D修复: 增加订单更新时间限制，避免误修复刚刚更新的订单
-	if !online && timeSinceUpdate > 3*time.Minute && orderStatus == 2 {
+	// 修复: 离线超过5分钟（避免误判心跳间隔），且订单更新超过5分钟
+	// 设备心跳周期1分钟，5分钟=至少错过5次心跳，确保真正离线
+	if !online && timeSinceUpdate > 5*time.Minute && orderStatus == 2 {
 		return true
 	}
 
 	// 条件2: 端口已free但订单还是charging，可能是充电结束事件丢失
-	if portStatus != nil && *portStatus == 0 && orderStatus == 2 && timeSinceUpdate > 15*time.Minute {
+	if portStatus != nil && *portStatus == 0x09 && orderStatus == 2 && timeSinceUpdate > 15*time.Minute {
 		return true
 	}
 
-	// 条件3: D修复 - interrupted订单长期未恢复，自动标记失败
+	// 条件3: 修复 - interrupted订单长期未恢复，自动标记失败
 	if orderStatus == 10 && timeSinceUpdate > 1*time.Hour {
 		return true
 	}

@@ -186,7 +186,8 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 		zap.Duration("charging_threshold", 2*time.Hour))
 
 	// ========== 阶段7.7: P1-4启动端口状态同步器(检测端口状态不一致)==========
-	portSyncer := app.NewPortStatusSyncer(repo, redisQueue, appm, log)
+	// 修复：注入SessionManager用于实时在线判断
+	portSyncer := app.NewPortStatusSyncer(repo, sess, redisQueue, appm, log)
 	go portSyncer.Start(ctx)
 	log.Info("P1-4: port status syncer started",
 		zap.Duration("check_interval", 5*time.Minute))
