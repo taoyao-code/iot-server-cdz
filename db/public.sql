@@ -368,6 +368,7 @@ CREATE TABLE "public"."orders" (
   "device_id" int8 NOT NULL,
   "port_no" int4 NOT NULL,
   "order_no" text COLLATE "pg_catalog"."default" NOT NULL,
+  "business_no" int4 NOT NULL DEFAULT 0,
   "start_time" timestamptz(6),
   "end_time" timestamptz(6),
   "kwh_0p01" int8,
@@ -971,6 +972,10 @@ CREATE INDEX "idx_orders_charging_by_device" ON "public"."orders" USING btree (
 CREATE INDEX "idx_orders_device_port" ON "public"."orders" USING btree (
   "device_id" "pg_catalog"."int8_ops" ASC NULLS LAST,
   "port_no" "pg_catalog"."int4_ops" ASC NULLS LAST
+);
+CREATE INDEX "idx_orders_business_no" ON "public"."orders" USING btree (
+  "device_id" "pg_catalog"."int8_ops" ASC NULLS LAST,
+  "business_no" "pg_catalog"."int4_ops" ASC NULLS LAST
 );
 CREATE INDEX "idx_orders_interrupted" ON "public"."orders" USING btree (
   "device_id" "pg_catalog"."int8_ops" ASC NULLS LAST,

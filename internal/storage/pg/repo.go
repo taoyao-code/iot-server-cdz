@@ -107,6 +107,7 @@ type Order struct {
 	PhyID         string
 	PortNo        int
 	OrderNo       string
+	BusinessNo    *int64
 	ChargeMode    int // 充电模式: 1=按时长, 2=按电量, 3=按功率, 4=充满自停
 	StartTime     *time.Time
 	EndTime       *time.Time

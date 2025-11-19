@@ -30,7 +30,8 @@ func TestEncodeStartControlPayload(t *testing.T) {
 	// [6] 0xF0 - 时长低字节
 	// [7] 0x00 - 电量高字节
 	// [8] 0x00 - 电量低字节
-	expected := []byte{0x07, 0x02, 0x00, 0x01, 0x01, 0x00, 0xF0, 0x00, 0x00}
+	// [9-10] 业务号 (0x0068)
+	expected := []byte{0x07, 0x02, 0x00, 0x01, 0x01, 0x00, 0xF0, 0x00, 0x00, 0x00, 0x68}
 
 	if len(payload) != len(expected) {
 		t.Errorf("payload长度错误: got %d, want %d", len(payload), len(expected))
@@ -75,7 +76,8 @@ func TestEncodeStopControlPayload(t *testing.T) {
 	// [3] 0x00 - 开关=0 (关)
 	// [4] 0x01 - 模式=1 (停止时无意义)
 	// [5-8] 0x00 - 其余全0
-	expected := []byte{0x07, 0x02, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00}
+	// [9-10] 业务号 (0x0068)
+	expected := []byte{0x07, 0x02, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x68}
 
 	if len(payload) != len(expected) {
 		t.Errorf("payload长度错误: got %d, want %d", len(payload), len(expected))
@@ -110,14 +112,14 @@ func TestRealWorldExample(t *testing.T) {
 	// 07 02 00 01 01 00F0 0000
 	// 但我们的是：插座1，60分钟，所以应该是：
 	// 07 01 00 01 01 003C 0000
-	expected := []byte{0x07, 0x01, 0x00, 0x01, 0x01, 0x00, 0x3C, 0x00, 0x00}
+	expected := []byte{0x07, 0x01, 0x00, 0x01, 0x01, 0x00, 0x3C, 0x00, 0x00, 0x00, 0x00}
 
 	t.Logf("真实测试用例: 插座1, A孔, 按时长60分钟")
 	t.Logf("实际payload: %s", hex.EncodeToString(payload))
 	t.Logf("期望payload: %s", hex.EncodeToString(expected))
 
-	if len(payload) != 9 {
-		t.Fatalf("❌ payload长度错误: got %d, want 9", len(payload))
+	if len(payload) != 11 {
+		t.Fatalf("❌ payload长度错误: got %d, want 11", len(payload))
 	}
 
 	if payload[0] != 0x07 {

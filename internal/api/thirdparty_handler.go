@@ -324,15 +324,16 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		return
 	}
 
-	// 5. 生成订单号
+	// 5. 生成订单号并派生业务号（BKV要求）
 	orderNo := fmt.Sprintf("THD%d%03d", time.Now().Unix(), req.PortNo)
+	businessNo := deriveBusinessNo(orderNo)
 
 	// 6. 在同一事务中创建订单记录
 	insertOrderSQL := `
-		INSERT INTO orders (device_id, order_no, amount_cent, status, port_no, charge_mode, created_at)
-		VALUES ($1, $2, $3, 0, $4, $5, NOW())
+		INSERT INTO orders (device_id, order_no, business_no, amount_cent, status, port_no, charge_mode, created_at)
+		VALUES ($1, $2, $3, $4, 0, $5, $6, NOW())
 	`
-	_, err = tx.Exec(ctx, insertOrderSQL, devID, orderNo, req.Amount, req.PortNo, req.ChargeMode)
+	_, err = tx.Exec(ctx, insertOrderSQL, devID, orderNo, businessNo, req.Amount, req.PortNo, req.ChargeMode)
 	if err != nil {
 		tx.Rollback(ctx)
 		h.logger.Error("failed to create order", zap.Error(err))
@@ -390,7 +391,7 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 	if h.outboundQ != nil {
 		msgID := uint32(time.Now().Unix() % 65536)
 		mapped := uint8(mapPort(req.PortNo))
-		biz := deriveBusinessNo(orderNo)
+		biz := businessNo
 		// 🔧 修复：使用 GetDuration() 获取时长参数
 		durationMin := uint16(req.GetDuration())
 
@@ -485,11 +486,12 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		// EN: charge command sent successfully
 		Message: "充电指令发送成功",
 		Data: map[string]interface{}{
-			"device_id": devicePhyID,
-			"order_no":  orderNo,
-			"port_no":   req.PortNo,
-			"amount":    req.Amount,
-			"online":    isOnline,
+			"device_id":   devicePhyID,
+			"order_no":    orderNo,
+			"business_no": int(businessNo),
+			"port_no":     req.PortNo,
+			"amount":      req.Amount,
+			"online":      isOnline,
 		},
 		RequestID: requestID,
 		Timestamp: time.Now().Unix(),
@@ -553,14 +555,15 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 
 	// 2. 查询当前活动的订单 - P1-5修复: 支持charging状态
 	var orderNo string
+	var businessNo int64
 	var orderStatus int
 	queryOrderSQL := `
-		SELECT order_no, status FROM orders 
+		SELECT order_no, business_no, status FROM orders 
 		WHERE device_id = $1 AND port_no = $2 AND status IN ($3, $4, $5)
 		ORDER BY created_at DESC LIMIT 1
 	`
 	err = h.repo.Pool.QueryRow(ctx, queryOrderSQL, devID, req.PortNo,
-		OrderStatusPending, OrderStatusConfirmed, OrderStatusCharging).Scan(&orderNo, &orderStatus)
+		OrderStatusPending, OrderStatusConfirmed, OrderStatusCharging).Scan(&orderNo, &businessNo, &orderStatus)
 	if err != nil {
 		h.logger.Warn("no active order found", zap.Error(err))
 		c.JSON(http.StatusNotFound, StandardResponse{
@@ -605,11 +608,15 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		return
 	}
 
+	biz := uint16(businessNo)
+	if biz == 0 {
+		biz = deriveBusinessNo(orderNo)
+	}
+
 	// 3. 下发停止充电指令（BKV 0x0015控制设备）
 	if h.outboundQ != nil {
 		msgID := uint32(time.Now().Unix() % 65536)
 		// 构造停止充电控制负载：socketNo=0, port 映射, switch=0
-		biz := deriveBusinessNo(orderNo)
 		innerStopData := h.encodeStopControlPayload(uint8(0), uint8(mapPort(req.PortNo)), biz)
 
 		// 【关键修复】长度=参数字节数（不含0x07）
@@ -643,11 +650,12 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		// EN: stop command sent, order will be stopped in 30 seconds
 		Message: "停止指令已发送，订单将在30秒内停止",
 		Data: map[string]interface{}{
-			"device_id": devicePhyID,
-			"order_no":  orderNo,
-			"port_no":   req.PortNo,
-			"status":    "stopping",
-			"note":      "订单将在30秒后自动变为stopped,或收到设备ACK后立即停止",
+			"device_id":   devicePhyID,
+			"order_no":    orderNo,
+			"business_no": int(biz),
+			"port_no":     req.PortNo,
+			"status":      "stopping",
+			"note":        "订单将在30秒后自动变为stopped,或收到设备ACK后立即停止",
 		},
 		RequestID: requestID,
 		Timestamp: time.Now().Unix(),
@@ -1368,10 +1376,10 @@ func (h *ThirdPartyHandler) encodeChargeCommand(orderNo string, chargeMode uint8
 
 // mapPort 将业务端口号(1/2)映射为协议端口(0=A,1=B)
 func mapPort(port int) int {
-	if port <= 1 {
+	if port < 0 {
 		return 0
 	}
-	return 1
+	return port
 }
 
 // encodeStartControlPayload 构造0x0015开始充电控制负载
@@ -1379,8 +1387,8 @@ func mapPort(port int) int {
 // [socketNo(1)][port(1)][switch(1)][mode(1)][duration(2)][energy(2可0)][金额/档位等可选]
 func (h *ThirdPartyHandler) encodeStartControlPayload(socketNo uint8, port uint8, mode uint8, durationMin uint16, businessNo uint16) []byte {
 	// 0x0015控制命令：按协议2.2.8格式
-	// 格式：BKV子命令0x07(1) + 插座号(1) + 插孔号(1) + 开关(1) + 模式(1) + 时长(2) + 电量(2)
-	buf := make([]byte, 9)
+	// 格式：BKV子命令0x07(1) + 插座号(1) + 插孔号(1) + 开关(1) + 模式(1) + 时长(2) + 电量(2) + 业务号(2)
+	buf := make([]byte, 11)
 	buf[0] = 0x07                   // BKV子命令：0x07=控制命令
 	buf[1] = socketNo               // 插座号
 	buf[2] = port                   // 插孔号 (0=A孔, 1=B孔)
@@ -1390,14 +1398,16 @@ func (h *ThirdPartyHandler) encodeStartControlPayload(socketNo uint8, port uint8
 	buf[6] = byte(durationMin)      // 时长低字节
 	buf[7] = 0x00                   // 电量高字节（按时长模式为0）
 	buf[8] = 0x00                   // 电量低字节（按时长模式为0）
+	buf[9] = byte(businessNo >> 8)  // 业务号高字节
+	buf[10] = byte(businessNo)      // 业务号低字节
 	return buf
 }
 
 // encodeStopControlPayload 构造0x0015停止充电控制负载
 func (h *ThirdPartyHandler) encodeStopControlPayload(socketNo uint8, port uint8, businessNo uint16) []byte {
 	// 0x0015停止命令：开关=0表示关闭
-	// 格式：BKV子命令0x07(1) + 插座号(1) + 插孔号(1) + 开关(1) + 模式(1) + 时长(2) + 电量(2)
-	buf := make([]byte, 9)
+	// 格式：BKV子命令0x07(1) + 插座号(1) + 插孔号(1) + 开关(1) + 模式(1) + 时长(2) + 电量(2) + 业务号(2)
+	buf := make([]byte, 11)
 	buf[0] = 0x07     // BKV子命令：0x07=控制命令
 	buf[1] = socketNo // 插座号
 	buf[2] = port     // 插孔号
@@ -1407,6 +1417,8 @@ func (h *ThirdPartyHandler) encodeStopControlPayload(socketNo uint8, port uint8,
 	buf[6] = 0x00     // 时长低字节
 	buf[7] = 0x00     // 电量高字节
 	buf[8] = 0x00     // 电量低字节
+	buf[9] = byte(businessNo >> 8)
+	buf[10] = byte(businessNo)
 	return buf
 }
 

@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IoT Charging Station System Test Dashboard</title>
+    <title>IoT 充电桩系统测试控制台</title>
 
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -114,22 +114,21 @@
                         <i class="fas fa-bolt text-white text-xl"></i>
                     </div>
                     <div>
-                        <h1 class="font-bold text-lg tracking-tight text-white">IoT Test Center</h1>
+                        <h1 class="font-bold text-lg tracking-tight text-white">IoT 测试中心</h1>
                         <div class="flex items-center space-x-2">
                             <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                            <span class="text-xs text-gray-400">System Online</span>
+                            <span class="text-xs text-gray-400">系统在线</span>
                         </div>
                     </div>
                 </div>
 
-                <!-- Simulation Toggle -->
+                <!-- API Status -->
                 <div class="flex items-center justify-between bg-gray-800 p-3 rounded-lg border border-gray-700">
-                    <span class="text-sm font-medium text-gray-300">Simulation Mode</span>
-                    <button @click="toggleSimulationMode" :class="simulationMode ? 'bg-blue-600' : 'bg-gray-600'"
-                        class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-900">
-                        <span :class="simulationMode ? 'translate-x-6' : 'translate-x-1'"
-                            class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"></span>
-                    </button>
+                    <span class="text-sm font-medium text-gray-300">API 连接状态</span>
+                    <div class="flex items-center space-x-2">
+                        <span :class="apiConnected ? 'bg-green-500' : 'bg-red-500'" class="w-2 h-2 rounded-full"></span>
+                        <span class="text-xs text-gray-400">{{ apiConnected ? '已连接' : '未连接' }}</span>
+                    </div>
                 </div>
             </div>
 
@@ -137,7 +136,7 @@
             <div class="p-3 bg-gray-900 border-b border-gray-800">
                 <div class="relative">
                     <i class="fas fa-search absolute left-3 top-3 text-gray-500 text-sm"></i>
-                    <input v-model="searchQuery" type="text" placeholder="Search Device ID..."
+                    <input v-model="searchQuery" type="text" placeholder="搜索设备 ID..."
                         class="w-full bg-gray-800 text-gray-200 text-sm rounded-md pl-9 pr-3 py-2 border border-gray-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all">
                 </div>
             </div>
@@ -155,26 +154,21 @@
                             device.id }}</span>
                         <span :class="[
                                 'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border',
-                                device.isOnline 
-                                    ? 'bg-green-900/30 text-green-400 border-green-900/50' 
+                                device.isOnline
+                                    ? 'bg-green-900/30 text-green-400 border-green-900/50'
                                     : 'bg-red-900/30 text-red-400 border-red-900/50'
                             ]">
-                            {{ device.isOnline ? 'ONLINE' : 'OFFLINE' }}
+                            {{ device.isOnline ? '在线' : '离线' }}
                         </span>
                     </div>
                     <div class="flex justify-between items-center text-xs text-gray-400">
                         <div class="flex items-center space-x-2">
                             <i class="fas fa-plug text-[10px]"></i>
-                            <span>{{ device.status }}</span>
+                            <span>{{ getDeviceStatusText(device) }}</span>
                         </div>
-                        <div v-if="device.status === 'Charging'" class="text-blue-400 font-mono">
-                            {{ device.power.toFixed(1) }} kW
+                        <div v-if="device.activeOrdersCount > 0" class="text-blue-400 font-mono">
+                            {{ device.activeOrdersCount }} 订单
                         </div>
-                    </div>
-                    <!-- Mini Progress Bar for Charging -->
-                    <div v-if="device.status === 'Charging'"
-                        class="mt-2 h-1 w-full bg-gray-700 rounded-full overflow-hidden">
-                        <div class="h-full bg-blue-500 animate-pulse" :style="{ width: device.soc + '%' }"></div>
                     </div>
                 </div>
             </div>
@@ -188,11 +182,11 @@
                 class="h-16 bg-gray-900/80 backdrop-blur border-b border-gray-800 flex items-center justify-between px-6 z-10">
                 <div class="flex items-center space-x-4">
                     <h2 class="text-xl font-semibold text-white">
-                        <span v-if="selectedDevice">Device Monitor: <span class="font-mono text-blue-400">{{
-                                selectedDevice.id }}</span></span>
-                        <span v-else class="text-gray-500">Select a device to monitor</span>
+                        <span v-if="selectedDevice">设备监控: <span class="font-mono text-blue-400">{{
+                                selectedDevice.device_phy_id }}</span></span>
+                        <span v-else class="text-gray-500">请选择一个设备进行监控</span>
                     </h2>
-                    <span v-if="selectedDevice && selectedDevice.isOnline" class="flex h-3 w-3">
+                    <span v-if="selectedDevice && selectedDevice.is_online" class="flex h-3 w-3">
                         <span
                             class="animate-ping absolute inline-flex h-3 w-3 rounded-full bg-green-400 opacity-75"></span>
                         <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
@@ -201,14 +195,11 @@
 
                 <div class="flex items-center space-x-4">
                     <div class="text-right mr-4">
-                        <div class="text-xs text-gray-400">System Time</div>
+                        <div class="text-xs text-gray-400">系统时间</div>
                         <div class="font-mono text-sm text-gray-200">{{ currentTime }}</div>
                     </div>
-                    <button class="p-2 text-gray-400 hover:text-white transition-colors">
-                        <i class="fas fa-cog"></i>
-                    </button>
-                    <button class="p-2 text-gray-400 hover:text-white transition-colors">
-                        <i class="fas fa-bell"></i>
+                    <button @click="refreshData" class="p-2 text-gray-400 hover:text-white transition-colors" title="刷新">
+                        <i class="fas fa-sync-alt" :class="{ 'animate-spin': loading }"></i>
                     </button>
                 </div>
             </header>
@@ -218,75 +209,63 @@
 
                 <!-- Status Cards Row -->
                 <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
-                    <!-- Voltage -->
+                    <!-- Device Info Card -->
                     <div
                         class="bg-gray-900 rounded-xl p-5 border border-gray-800 shadow-lg relative overflow-hidden group">
                         <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                            <i class="fas fa-bolt text-6xl text-yellow-500"></i>
+                            <i class="fas fa-microchip text-6xl text-blue-500"></i>
                         </div>
-                        <div class="text-gray-400 text-sm font-medium uppercase tracking-wider mb-1">Voltage</div>
+                        <div class="text-gray-400 text-sm font-medium uppercase tracking-wider mb-1">设备 ID</div>
                         <div class="flex items-baseline space-x-2">
-                            <span class="text-3xl font-mono font-bold text-white">{{ selectedDevice.voltage.toFixed(1)
-                                }}</span>
-                            <span class="text-sm text-gray-500 font-mono">V</span>
+                            <span class="text-xl font-mono font-bold text-white">{{ selectedDevice.device_id }}</span>
                         </div>
-                        <div class="mt-4 h-1.5 w-full bg-gray-800 rounded-full overflow-hidden">
-                            <div class="h-full bg-yellow-500 transition-all duration-500"
-                                :style="{ width: (selectedDevice.voltage / 250 * 100) + '%' }"></div>
+                        <div class="mt-2 text-xs text-gray-500">
+                            物理 ID: {{ selectedDevice.device_phy_id }}
                         </div>
                     </div>
 
-                    <!-- Current -->
+                    <!-- Online Status -->
                     <div
                         class="bg-gray-900 rounded-xl p-5 border border-gray-800 shadow-lg relative overflow-hidden group">
                         <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                            <i class="fas fa-wave-square text-6xl text-blue-500"></i>
+                            <i class="fas fa-wifi text-6xl text-green-500"></i>
                         </div>
-                        <div class="text-gray-400 text-sm font-medium uppercase tracking-wider mb-1">Current</div>
+                        <div class="text-gray-400 text-sm font-medium uppercase tracking-wider mb-1">在线状态</div>
                         <div class="flex items-baseline space-x-2">
-                            <span class="text-3xl font-mono font-bold text-white">{{ selectedDevice.current.toFixed(2)
-                                }}</span>
-                            <span class="text-sm text-gray-500 font-mono">A</span>
+                            <span class="text-3xl font-mono font-bold" :class="selectedDevice.is_online ? 'text-green-400' : 'text-red-400'">
+                                {{ selectedDevice.is_online ? '在线' : '离线' }}
+                            </span>
                         </div>
-                        <div class="mt-4 h-1.5 w-full bg-gray-800 rounded-full overflow-hidden">
-                            <div class="h-full bg-blue-500 transition-all duration-500"
-                                :style="{ width: (selectedDevice.current / 32 * 100) + '%' }"></div>
+                        <div class="mt-2 text-xs text-gray-500" v-if="selectedDevice.last_heartbeat">
+                            最后心跳: {{ formatTime(selectedDevice.last_heartbeat) }}
                         </div>
                     </div>
 
-                    <!-- Power -->
+                    <!-- Ports Count -->
                     <div
                         class="bg-gray-900 rounded-xl p-5 border border-gray-800 shadow-lg relative overflow-hidden group">
                         <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                            <i class="fas fa-tachometer-alt text-6xl text-green-500"></i>
+                            <i class="fas fa-plug text-6xl text-purple-500"></i>
                         </div>
-                        <div class="text-gray-400 text-sm font-medium uppercase tracking-wider mb-1">Power</div>
+                        <div class="text-gray-400 text-sm font-medium uppercase tracking-wider mb-1">端口数量</div>
                         <div class="flex items-baseline space-x-2">
-                            <span class="text-3xl font-mono font-bold text-white">{{ selectedDevice.power.toFixed(2)
-                                }}</span>
-                            <span class="text-sm text-gray-500 font-mono">kW</span>
+                            <span class="text-3xl font-mono font-bold text-white">{{ selectedDevice.ports?.length || 0 }}</span>
+                            <span class="text-sm text-gray-500 font-mono">个</span>
                         </div>
-                        <div class="mt-4 h-1.5 w-full bg-gray-800 rounded-full overflow-hidden">
-                            <div class="h-full bg-green-500 transition-all duration-500"
-                                :style="{ width: (selectedDevice.power / 7.5 * 100) + '%' }"></div>
+                        <div class="mt-2 text-xs text-gray-500">
+                            活跃订单: {{ selectedDevice.active_orders?.length || 0 }}
                         </div>
                     </div>
 
-                    <!-- Energy Delivered -->
+                    <!-- Registration Time -->
                     <div
                         class="bg-gray-900 rounded-xl p-5 border border-gray-800 shadow-lg relative overflow-hidden group">
                         <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                            <i class="fas fa-battery-three-quarters text-6xl text-purple-500"></i>
+                            <i class="fas fa-clock text-6xl text-yellow-500"></i>
                         </div>
-                        <div class="text-gray-400 text-sm font-medium uppercase tracking-wider mb-1">Energy</div>
+                        <div class="text-gray-400 text-sm font-medium uppercase tracking-wider mb-1">注册时间</div>
                         <div class="flex items-baseline space-x-2">
-                            <span class="text-3xl font-mono font-bold text-white">{{ selectedDevice.energy.toFixed(3)
-                                }}</span>
-                            <span class="text-sm text-gray-500 font-mono">kWh</span>
-                        </div>
-                        <div class="mt-4 flex items-center space-x-2 text-xs text-gray-500">
-                            <i class="fas fa-clock"></i>
-                            <span>{{ formatDuration(selectedDevice.duration) }}</span>
+                            <span class="text-sm font-mono text-white">{{ formatTime(selectedDevice.registered_at) }}</span>
                         </div>
                     </div>
                 </div>
@@ -298,96 +277,101 @@
                     <div class="lg:col-span-1 bg-gray-900 rounded-xl border border-gray-800 shadow-lg flex flex-col">
                         <div class="p-4 border-b border-gray-800 flex justify-between items-center">
                             <h3 class="font-semibold text-white flex items-center">
-                                <i class="fas fa-gamepad mr-2 text-blue-500"></i> Control Panel
+                                <i class="fas fa-gamepad mr-2 text-blue-500"></i> 控制面板
                             </h3>
-                            <span
-                                class="text-xs px-2 py-1 rounded bg-gray-800 text-gray-400 border border-gray-700 font-mono">
-                                {{ selectedDevice.status }}
-                            </span>
                         </div>
 
                         <div class="p-5 space-y-4 flex-1">
-                            <!-- Connection Toggle -->
-                            <div
-                                class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
-                                <div class="flex items-center space-x-3">
-                                    <div :class="selectedDevice.isOnline ? 'bg-green-500/20 text-green-500' : 'bg-red-500/20 text-red-500'"
-                                        class="p-2 rounded-lg">
-                                        <i class="fas fa-wifi"></i>
-                                    </div>
-                                    <div>
-                                        <div class="text-sm font-medium text-gray-200">Network Status</div>
-                                        <div class="text-xs text-gray-500">{{ selectedDevice.isOnline ? 'Connected' :
-                                            'Disconnected' }}</div>
-                                    </div>
-                                </div>
-                                <button @click="toggleDeviceConnection"
-                                    :class="selectedDevice.isOnline ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'"
-                                    class="px-3 py-1.5 rounded text-xs font-medium text-white transition-colors">
-                                    {{ selectedDevice.isOnline ? 'Disconnect' : 'Connect' }}
-                                </button>
+                            <!-- Port Selection -->
+                            <div class="space-y-2">
+                                <label class="text-sm font-medium text-gray-300">选择端口</label>
+                                <select v-model="selectedPort" class="w-full bg-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 border border-gray-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none">
+                                    <option :value="null" disabled>请选择端口</option>
+                                    <option v-for="port in selectedDevice.ports" :key="port.port_no" :value="port.port_no">
+                                        端口 {{ port.port_no }} - {{ getPortStatusText(port.status) }}
+                                    </option>
+                                </select>
+                            </div>
+
+                            <!-- Charge Mode Selection -->
+                            <div class="space-y-2">
+                                <label class="text-sm font-medium text-gray-300">充电模式</label>
+                                <select v-model="chargeParams.charge_mode" class="w-full bg-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 border border-gray-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none">
+                                    <option :value="1">按时长</option>
+                                    <option :value="2">按电量</option>
+                                    <option :value="3">按功率</option>
+                                    <option :value="4">充满自停</option>
+                                </select>
+                            </div>
+
+                            <!-- Amount Input -->
+                            <div class="space-y-2">
+                                <label class="text-sm font-medium text-gray-300">金额（分）</label>
+                                <input v-model.number="chargeParams.amount" type="number" min="1" placeholder="例如: 100" class="w-full bg-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 border border-gray-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none">
+                            </div>
+
+                            <!-- Duration Input (conditional) -->
+                            <div class="space-y-2" v-if="chargeParams.charge_mode === 1">
+                                <label class="text-sm font-medium text-gray-300">时长（分钟）</label>
+                                <input v-model.number="chargeParams.duration_minutes" type="number" min="1" placeholder="例如: 60" class="w-full bg-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 border border-gray-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none">
                             </div>
 
                             <!-- Action Buttons -->
-                            <div class="grid grid-cols-2 gap-3">
+                            <div class="grid grid-cols-2 gap-3 pt-4">
                                 <button @click="startCharging"
-                                    :disabled="!selectedDevice.isOnline || selectedDevice.status === 'Charging'"
+                                    :disabled="!selectedDevice.is_online || selectedPort === null || loading"
                                     class="p-3 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white font-medium text-sm transition-all flex flex-col items-center justify-center space-y-1 border border-transparent disabled:border-gray-700">
                                     <i class="fas fa-play"></i>
-                                    <span>Start Charge</span>
+                                    <span>启动充电</span>
                                 </button>
 
                                 <button @click="stopCharging"
-                                    :disabled="!selectedDevice.isOnline || selectedDevice.status !== 'Charging'"
+                                    :disabled="!selectedDevice.is_online || selectedPort === null || loading"
                                     class="p-3 rounded-lg bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white font-medium text-sm transition-all flex flex-col items-center justify-center space-y-1 border border-gray-600 disabled:border-gray-700">
                                     <i class="fas fa-stop"></i>
-                                    <span>Stop Charge</span>
-                                </button>
-                            </div>
-
-                            <div class="grid grid-cols-2 gap-3">
-                                <button @click="simulatePlugUnplug" :disabled="!selectedDevice.isOnline"
-                                    class="p-3 rounded-lg bg-orange-900/30 hover:bg-orange-900/50 border border-orange-800/50 text-orange-400 hover:text-orange-300 text-xs font-medium transition-all flex items-center justify-center space-x-2">
-                                    <i class="fas fa-plug-circle-xmark"></i>
-                                    <span>Unplug Event</span>
-                                </button>
-
-                                <button @click="simulateAutoStop"
-                                    :disabled="!selectedDevice.isOnline || selectedDevice.status !== 'Charging'"
-                                    class="p-3 rounded-lg bg-purple-900/30 hover:bg-purple-900/50 border border-purple-800/50 text-purple-400 hover:text-purple-300 text-xs font-medium transition-all flex items-center justify-center space-x-2">
-                                    <i class="fas fa-battery-full"></i>
-                                    <span>Full Battery</span>
+                                    <span>停止充电</span>
                                 </button>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Real-time Graph Placeholder (Visual only for this demo) -->
+                    <!-- Ports Status List -->
                     <div
-                        class="lg:col-span-2 bg-gray-900 rounded-xl border border-gray-800 shadow-lg flex flex-col relative overflow-hidden">
-                        <div class="p-4 border-b border-gray-800 flex justify-between items-center z-10 bg-gray-900">
+                        class="lg:col-span-2 bg-gray-900 rounded-xl border border-gray-800 shadow-lg flex flex-col">
+                        <div class="p-4 border-b border-gray-800">
                             <h3 class="font-semibold text-white flex items-center">
-                                <i class="fas fa-chart-line mr-2 text-green-500"></i> Power Curve
+                                <i class="fas fa-list mr-2 text-green-500"></i> 端口状态列表
                             </h3>
-                            <div class="flex space-x-2">
-                                <span class="w-2 h-2 rounded-full bg-blue-500"></span>
-                                <span class="text-xs text-gray-400">Current (A)</span>
-                                <span class="w-2 h-2 rounded-full bg-yellow-500 ml-2"></span>
-                                <span class="text-xs text-gray-400">Voltage (V)</span>
-                            </div>
                         </div>
-                        <div class="flex-1 relative bg-gray-900/50 p-4 flex items-end justify-between space-x-1">
-                            <!-- Simulated Bars -->
-                            <div v-for="(bar, i) in powerHistory" :key="i"
-                                class="w-full bg-blue-500/20 rounded-t hover:bg-blue-500/40 transition-colors relative group"
-                                :style="{ height: bar + '%' }">
-                                <div class="absolute bottom-0 w-full bg-blue-500/50"
-                                    :style="{ height: (bar * 0.6) + '%' }"></div>
+                        <div class="flex-1 overflow-y-auto p-4">
+                            <div v-if="selectedDevice.ports && selectedDevice.ports.length > 0" class="space-y-3">
+                                <div v-for="port in selectedDevice.ports" :key="port.port_no"
+                                    class="bg-gray-800/50 rounded-lg p-4 border border-gray-700 hover:border-gray-600 transition-all">
+                                    <div class="flex justify-between items-start mb-2">
+                                        <div>
+                                            <div class="font-mono text-lg font-bold text-white">端口 {{ port.port_no }}</div>
+                                            <div class="text-xs text-gray-400 mt-1">
+                                                状态: <span :class="{
+                                                    'text-green-400': port.status === 0,
+                                                    'text-blue-400': port.status === 1,
+                                                    'text-red-400': port.status === 2
+                                                }">{{ getPortStatusText(port.status) }}</span>
+                                            </div>
+                                        </div>
+                                        <div class="text-right">
+                                            <div v-if="port.power" class="text-sm text-gray-300">
+                                                功率: <span class="font-mono">{{ port.power }}W</span>
+                                            </div>
+                                            <div v-if="port.order_no" class="text-xs text-gray-500 mt-1">
+                                                订单: {{ port.order_no }}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
-
-                            <!-- Overlay Grid -->
-                            <div class="absolute inset-0 pointer-events-none"
-                                style="background-image: linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px); background-size: 20px 20px;">
+                            <div v-else class="text-center text-gray-500 py-8">
+                                <i class="fas fa-inbox text-4xl mb-2"></i>
+                                <div>暂无端口信息</div>
                             </div>
                         </div>
                     </div>
@@ -400,22 +384,22 @@
                 <div class="w-24 h-24 rounded-full bg-gray-800 flex items-center justify-center mb-4 animate-pulse">
                     <i class="fas fa-charging-station text-4xl text-gray-600"></i>
                 </div>
-                <h3 class="text-xl font-medium text-gray-300">No Device Selected</h3>
-                <p class="text-sm mt-2">Select a charging station from the sidebar to monitor telemetry.</p>
+                <h3 class="text-xl font-medium text-gray-300">未选择设备</h3>
+                <p class="text-sm mt-2">从侧边栏选择一个充电桩进行监控</p>
             </div>
 
             <!-- Log Console (Bottom Panel) -->
             <div class="h-48 bg-gray-950 border-t border-gray-800 flex flex-col z-20">
                 <div class="px-4 py-2 bg-gray-900 border-b border-gray-800 flex justify-between items-center">
                     <h3 class="text-xs font-bold uppercase tracking-wider text-gray-400 flex items-center">
-                        <i class="fas fa-terminal mr-2"></i> System Logs & Webhooks
+                        <i class="fas fa-terminal mr-2"></i> 系统日志
                     </h3>
                     <div class="flex space-x-2">
                         <button @click="clearLogs"
-                            class="text-xs text-gray-500 hover:text-white transition-colors">Clear</button>
+                            class="text-xs text-gray-500 hover:text-white transition-colors">清空</button>
                         <span class="text-gray-700">|</span>
                         <button @click="toggleAutoScroll" :class="autoScroll ? 'text-blue-400' : 'text-gray-500'"
-                            class="text-xs hover:text-white transition-colors">Auto-scroll</button>
+                            class="text-xs hover:text-white transition-colors">自动滚动</button>
                     </div>
                 </div>
                 <div ref="logContainer"
@@ -423,11 +407,11 @@
                     <div v-for="(log, index) in logs" :key="index" class="flex space-x-2 hover:bg-gray-900 p-1 rounded">
                         <span class="text-gray-500">[{{ log.time }}]</span>
                         <span :class="{
-                            'text-blue-400': log.type === 'INFO',
-                            'text-green-400': log.type === 'SUCCESS',
-                            'text-yellow-400': log.type === 'WARN',
-                            'text-red-400': log.type === 'ERROR',
-                            'text-purple-400': log.type === 'WEBHOOK'
+                            'text-blue-400': log.type === '信息',
+                            'text-green-400': log.type === '成功',
+                            'text-yellow-400': log.type === '警告',
+                            'text-red-400': log.type === '错误',
+                            'text-purple-400': log.type === 'API'
                         }" class="font-bold w-16">{{ log.type }}</span>
                         <span class="text-gray-300 flex-1 break-all">
                             {{ log.message }}
@@ -436,7 +420,7 @@
                             </span>
                         </span>
                     </div>
-                    <div v-if="logs.length === 0" class="text-gray-600 italic p-2">Waiting for system events...</div>
+                    <div v-if="logs.length === 0" class="text-gray-600 italic p-2">等待系统事件...</div>
                 </div>
             </div>
 
@@ -444,200 +428,60 @@
     </div>
 
     <script>
-        const { createApp, ref, computed, onMounted, onUnmounted, watch, reactive } = Vue;
+        const { createApp, ref, computed, onMounted, onUnmounted, watch } = Vue;
 
-        // --- Simulation Engine ---
-        class SimulationEngine {
-            constructor(eventCallback) {
-                this.devices = new Map();
-                this.eventCallback = eventCallback;
-                this.intervalId = null;
+        // API 基础路径
+        const API_BASE = '';  // 相对路径，自动使用当前域名
 
-                // Initialize mock devices
-                this.initDevices();
-                this.startEngine();
-            }
+        // API 认证配置
+        const API_KEY = 'sk_test_admin_key_for_testing_12345678'; // 生产环境 API Key
 
-            initDevices() {
-                const mockIds = ['CP-001-A', 'CP-001-B', 'CP-002-A', 'CP-003-X', 'CP-TEST-01'];
-                mockIds.forEach(id => {
-                    this.devices.set(id, {
-                        id: id,
-                        isOnline: true,
-                        status: 'Idle', // Idle, Prepared, Charging, Fault, Finishing
-                        voltage: 220.0,
-                        current: 0.0,
-                        power: 0.0,
-                        energy: 0.0,
-                        duration: 0,
-                        soc: 0, // State of Charge simulation
-                        startTime: null
-                    });
-                });
-            }
-
-            startEngine() {
-                this.intervalId = setInterval(() => {
-                    this.tick();
-                }, 1000);
-            }
-
-            stopEngine() {
-                if (this.intervalId) clearInterval(this.intervalId);
-            }
-
-            tick() {
-                this.devices.forEach(device => {
-                    if (!device.isOnline) return;
-
-                    // Voltage fluctuation (220V +/- 5V)
-                    const noise = (Math.random() - 0.5) * 2; // -1 to 1
-                    device.voltage = 220 + (noise * 2);
-
-                    if (device.status === 'Charging') {
-                        // Current fluctuation (Target 32A or 16A)
-                        const targetCurrent = 32.0;
-                        const currentNoise = (Math.random() - 0.5) * 0.5;
-
-                        // Ramp up current if just started
-                        if (device.current < targetCurrent) {
-                            device.current += 2.0; // Ramp up
-                        } else {
-                            device.current = targetCurrent + currentNoise;
-                        }
-
-                        // Calculate Power (kW) = V * A / 1000
-                        device.power = (device.voltage * device.current) / 1000;
-
-                        // Accumulate Energy (kWh) - simplified for 1 sec tick
-                        // Power (kW) * (1/3600) hours
-                        device.energy += device.power / 3600;
-
-                        // Duration
-                        device.duration += 1;
-
-                        // SOC Simulation
-                        if (device.soc < 100) {
-                            device.soc += 0.1; // Slow charge
-                        } else {
-                            // Auto stop at 100%
-                            this.stopCharging(device.id, 'Auto-Stop (Full Battery)');
-                        }
-                    } else {
-                        device.current = 0;
-                        device.power = 0;
-                    }
-                });
-
-                // Emit update
-                this.eventCallback('tick', Array.from(this.devices.values()));
-            }
-
-            // Actions
-            startCharging(deviceId) {
-                const device = this.devices.get(deviceId);
-                if (device && device.isOnline && device.status !== 'Charging') {
-                    device.status = 'Charging';
-                    device.startTime = Date.now();
-                    device.soc = Math.floor(Math.random() * 50); // Random start SOC
-                    this.eventCallback('webhook', {
-                        event: 'charge_start',
-                        device_id: deviceId,
-                        timestamp: new Date().toISOString(),
-                        data: { status: 'Charging' }
-                    });
-                    return true;
-                }
-                return false;
-            }
-
-            stopCharging(deviceId, reason = 'User Request') {
-                const device = this.devices.get(deviceId);
-                if (device && device.status === 'Charging') {
-                    device.status = 'Finishing';
-                    setTimeout(() => {
-                        device.status = 'Idle';
-                        device.current = 0;
-                        device.power = 0;
-                        this.eventCallback('webhook', {
-                            event: 'charge_stop',
-                            device_id: deviceId,
-                            timestamp: new Date().toISOString(),
-                            data: {
-                                reason: reason,
-                                total_energy: device.energy.toFixed(3),
-                                duration: device.duration
-                            }
-                        });
-                    }, 2000); // Simulate teardown time
-                    return true;
-                }
-                return false;
-            }
-
-            toggleConnection(deviceId) {
-                const device = this.devices.get(deviceId);
-                if (device) {
-                    device.isOnline = !device.isOnline;
-                    if (!device.isOnline) {
-                        device.status = 'Offline';
-                        device.current = 0;
-                        device.power = 0;
-                        device.voltage = 0;
-                    } else {
-                        device.status = 'Idle';
-                    }
-                    this.eventCallback('webhook', {
-                        event: device.isOnline ? 'device_online' : 'device_offline',
-                        device_id: deviceId,
-                        timestamp: new Date().toISOString()
-                    });
-                }
-            }
-
-            fault(deviceId) {
-                const device = this.devices.get(deviceId);
-                if (device) {
-                    device.status = 'Fault';
-                    device.current = 0;
-                    device.power = 0;
-                    this.eventCallback('webhook', {
-                        event: 'device_fault',
-                        device_id: deviceId,
-                        timestamp: new Date().toISOString(),
-                        data: { error_code: 'E_PLUG_UNEXPECTED' }
-                    });
-                }
-            }
-        }
+        // 配置 axios 默认请求头
+        axios.defaults.headers.common['X-Internal-API-Key'] = API_KEY;
+        axios.defaults.headers.common['Content-Type'] = 'application/json';
 
         // --- Vue App ---
         createApp({
             setup() {
                 // State
-                const simulationMode = ref(true);
+                const apiConnected = ref(false);
                 const devices = ref([]);
                 const selectedDevice = ref(null);
+                const selectedPort = ref(null);
                 const logs = ref([]);
                 const currentTime = ref('');
                 const logContainer = ref(null);
                 const autoScroll = ref(true);
-                const powerHistory = ref(new Array(40).fill(0)); // For graph
+                const loading = ref(false);
+                const searchQuery = ref('');
 
-                let engine = null;
+                // Charge Parameters
+                const chargeParams = ref({
+                    charge_mode: 1,  // 默认按时长
+                    amount: 100,     // 默认100分
+                    duration_minutes: 60,  // 默认60分钟
+                    port_no: 0
+                });
+
+                let refreshInterval = null;
                 let timeInterval = null;
 
                 // Computed
                 const filteredDevices = computed(() => {
                     if (!searchQuery.value) return devices.value;
-                    return devices.value.filter(d => d.id.toLowerCase().includes(searchQuery.value.toLowerCase()));
+                    return devices.value.filter(d =>
+                        d.device_phy_id.toLowerCase().includes(searchQuery.value.toLowerCase())
+                    );
                 });
-                const searchQuery = ref('');
 
                 // Methods
                 const addLog = (type, message, payload = null) => {
-                    const time = new Date().toLocaleTimeString('en-GB', { hour12: false });
+                    const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
                     logs.value.push({ time, type, message, payload });
+
+                    if (logs.value.length > 100) {
+                        logs.value.shift();
+                    }
 
                     if (autoScroll.value && logContainer.value) {
                         setTimeout(() => {
@@ -650,147 +494,220 @@
                 const toggleAutoScroll = () => autoScroll.value = !autoScroll.value;
 
                 const updateTime = () => {
-                    currentTime.value = new Date().toLocaleString('en-GB');
+                    currentTime.value = new Date().toLocaleString('zh-CN');
                 };
 
-                const formatDuration = (seconds) => {
-                    const h = Math.floor(seconds / 3600);
-                    const m = Math.floor((seconds % 3600) / 60);
-                    const s = seconds % 60;
-                    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-                };
-
-                // Engine Callback
-                const handleEngineEvent = (type, data) => {
-                    if (type === 'tick') {
-                        // Update device list
-                        // We merge data to preserve object references if possible, or just replace
-                        // For simplicity in Vue, replacing the array is fine, but we want to keep selection
-                        devices.value = data;
-
-                        // Update selected device ref if it exists
-                        if (selectedDevice.value) {
-                            const updated = data.find(d => d.id === selectedDevice.value.id);
-                            if (updated) {
-                                selectedDevice.value = updated;
-                                // Update graph data
-                                if (updated.status === 'Charging') {
-                                    powerHistory.value.push(Math.min(100, (updated.power / 8) * 100));
-                                } else {
-                                    powerHistory.value.push(0);
-                                }
-                                powerHistory.value.shift();
-                            }
-                        }
-                    } else if (type === 'webhook') {
-                        addLog('WEBHOOK', `Event: ${data.event}`, data);
+                const formatTime = (timeStr) => {
+                    if (!timeStr) return 'N/A';
+                    try {
+                        return new Date(timeStr).toLocaleString('zh-CN');
+                    } catch (e) {
+                        return timeStr;
                     }
                 };
 
-                // Actions
-                const selectDevice = (device) => {
-                    selectedDevice.value = device;
-                    powerHistory.value = new Array(40).fill(0); // Reset graph
+                const getPortStatusText = (status) => {
+                    const statusMap = {
+                        0: '空闲',
+                        1: '占用',
+                        2: '故障'
+                    };
+                    return statusMap[status] || '未知';
                 };
 
-                const toggleSimulationMode = () => {
-                    simulationMode.value = !simulationMode.value;
-                    addLog('INFO', `Simulation Mode: ${simulationMode.value ? 'ON' : 'OFF'}`);
-                    if (simulationMode.value) {
-                        if (!engine) engine = new SimulationEngine(handleEngineEvent);
-                    } else {
-                        if (engine) {
-                            engine.stopEngine();
-                            engine = null;
+                const getDeviceStatusText = (device) => {
+                    if (!device.is_online) return '离线';
+                    if (device.active_orders && device.active_orders.length > 0) {
+                        return '充电中';
+                    }
+                    return '空闲';
+                };
+
+                // API Calls
+                const fetchDevices = async () => {
+                    try {
+                        const response = await axios.get(`${API_BASE}/internal/test/devices`);
+                        if (response.data.code === 0) {
+                            apiConnected.value = true;
+                            const devicesData = response.data.data || [];
+
+                            // 计算每个设备的 activeOrdersCount
+                            devices.value = devicesData.map(device => ({
+                                ...device,
+                                id: device.device_phy_id,  // 兼容模板中的 device.id
+                                isOnline: device.is_online,  // 兼容模板中的 device.isOnline
+                                activeOrdersCount: device.active_orders ? device.active_orders.length : 0
+                            }));
+
+                            // Update selected device if exists
+                            if (selectedDevice.value) {
+                                const updated = devices.value.find(d => d.device_phy_id === selectedDevice.value.device_phy_id);
+                                if (updated) {
+                                    selectedDevice.value = updated;
+                                }
+                            }
+                        } else {
+                            addLog('错误', `获取设备列表失败: ${response.data.message}`);
                         }
-                        addLog('WARN', 'Real backend connection not implemented in this demo view.');
+                    } catch (error) {
+                        apiConnected.value = false;
+                        console.error('Failed to fetch devices:', error);
+                        addLog('错误', `API 调用失败: ${error.message}`);
+                    }
+                };
+
+                const fetchDeviceDetail = async (devicePhyId) => {
+                    try {
+                        const response = await axios.get(`${API_BASE}/internal/test/devices/${devicePhyId}`);
+                        if (response.data.code === 0) {
+                            const deviceData = response.data.data;
+                            return {
+                                ...deviceData,
+                                id: deviceData.device_phy_id,
+                                isOnline: deviceData.is_online,
+                                activeOrdersCount: deviceData.active_orders ? deviceData.active_orders.length : 0
+                            };
+                        }
+                    } catch (error) {
+                        console.error('Failed to fetch device detail:', error);
+                        addLog('错误', `获取设备详情失败: ${error.message}`);
+                    }
+                    return null;
+                };
+
+                const refreshData = async () => {
+                    loading.value = true;
+                    await fetchDevices();
+                    if (selectedDevice.value) {
+                        const detail = await fetchDeviceDetail(selectedDevice.value.device_phy_id);
+                        if (detail) {
+                            selectedDevice.value = detail;
+                        }
+                    }
+                    loading.value = false;
+                };
+
+                // Actions
+                const selectDevice = async (device) => {
+                    addLog('信息', `选择设备: ${device.device_phy_id}`);
+                    const detail = await fetchDeviceDetail(device.device_phy_id);
+                    if (detail) {
+                        selectedDevice.value = detail;
+                        selectedPort.value = detail.ports && detail.ports.length > 0 ? detail.ports[0].port_no : null;
                     }
                 };
 
                 const startCharging = async () => {
-                    if (!selectedDevice.value) return;
-                    addLog('INFO', `Initiating Charge for ${selectedDevice.value.id}...`);
+                    if (!selectedDevice.value || selectedPort.value === null) {
+                        addLog('警告', '请先选择设备和端口');
+                        return;
+                    }
 
-                    if (simulationMode.value && engine) {
-                        const success = engine.startCharging(selectedDevice.value.id);
-                        if (success) addLog('SUCCESS', 'Charge Started (Simulated)');
-                        else addLog('ERROR', 'Failed to start charge (Device busy or offline)');
-                    } else {
-                        // Real API call would go here
-                        // await axios.post(...)
+                    loading.value = true;
+                    addLog('信息', `正在启动充电: ${selectedDevice.value.device_phy_id} 端口 ${selectedPort.value}`);
+
+                    try {
+                        const requestBody = {
+                            port_no: selectedPort.value,
+                            charge_mode: chargeParams.value.charge_mode,
+                            amount: chargeParams.value.amount
+                        };
+
+                        // 按时长模式需要传 duration_minutes
+                        if (chargeParams.value.charge_mode === 1) {
+                            requestBody.duration_minutes = chargeParams.value.duration_minutes;
+                        }
+
+                        const response = await axios.post(
+                            `${API_BASE}/internal/test/devices/${selectedDevice.value.device_phy_id}/charge`,
+                            requestBody
+                        );
+
+                        if (response.data.code === 0) {
+                            addLog('成功', '充电启动成功', response.data.data);
+                            // 刷新设备信息
+                            await refreshData();
+                        } else {
+                            addLog('错误', `启动充电失败: ${response.data.message}`);
+                        }
+                    } catch (error) {
+                        console.error('Failed to start charging:', error);
+                        addLog('错误', `启动充电失败: ${error.response?.data?.message || error.message}`);
+                    } finally {
+                        loading.value = false;
                     }
                 };
 
                 const stopCharging = async () => {
-                    if (!selectedDevice.value) return;
-                    addLog('INFO', `Stopping Charge for ${selectedDevice.value.id}...`);
-
-                    if (simulationMode.value && engine) {
-                        engine.stopCharging(selectedDevice.value.id);
-                        addLog('SUCCESS', 'Stop Command Sent');
+                    if (!selectedDevice.value || selectedPort.value === null) {
+                        addLog('警告', '请先选择设备和端口');
+                        return;
                     }
-                };
 
-                const toggleDeviceConnection = () => {
-                    if (!selectedDevice.value) return;
-                    if (simulationMode.value && engine) {
-                        engine.toggleConnection(selectedDevice.value.id);
-                    }
-                };
+                    loading.value = true;
+                    addLog('信息', `正在停止充电: ${selectedDevice.value.device_phy_id} 端口 ${selectedPort.value}`);
 
-                const simulatePlugUnplug = () => {
-                    if (!selectedDevice.value) return;
-                    if (simulationMode.value && engine) {
-                        engine.fault(selectedDevice.value.id);
-                        addLog('WARN', 'Plug Unplugged unexpectedly!');
-                    }
-                };
+                    try {
+                        const response = await axios.post(
+                            `${API_BASE}/internal/test/devices/${selectedDevice.value.device_phy_id}/stop?port_no=${selectedPort.value}`
+                        );
 
-                const simulateAutoStop = () => {
-                    if (!selectedDevice.value) return;
-                    if (simulationMode.value && engine) {
-                        engine.stopCharging(selectedDevice.value.id, 'Auto-Stop (Full)');
+                        if (response.data.code === 0) {
+                            addLog('成功', '充电已停止');
+                            // 刷新设备信息
+                            await refreshData();
+                        } else {
+                            addLog('错误', `停止充电失败: ${response.data.message}`);
+                        }
+                    } catch (error) {
+                        console.error('Failed to stop charging:', error);
+                        addLog('错误', `停止充电失败: ${error.response?.data?.message || error.message}`);
+                    } finally {
+                        loading.value = false;
                     }
                 };
 
                 // Lifecycle
                 onMounted(() => {
-                    addLog('INFO', 'System Initialized');
+                    addLog('信息', '系统初始化完成');
                     updateTime();
                     timeInterval = setInterval(updateTime, 1000);
 
-                    // Start Simulation by default
-                    engine = new SimulationEngine(handleEngineEvent);
-                    devices.value = Array.from(engine.devices.values());
+                    // 初始化获取设备列表
+                    fetchDevices();
+
+                    // 每5秒刷新一次设备列表
+                    refreshInterval = setInterval(refreshData, 5000);
                 });
 
                 onUnmounted(() => {
                     if (timeInterval) clearInterval(timeInterval);
-                    if (engine) engine.stopEngine();
+                    if (refreshInterval) clearInterval(refreshInterval);
                 });
 
                 return {
-                    simulationMode,
+                    apiConnected,
                     devices,
                     filteredDevices,
                     searchQuery,
                     selectedDevice,
+                    selectedPort,
                     logs,
                     currentTime,
                     logContainer,
                     autoScroll,
-                    powerHistory,
+                    loading,
+                    chargeParams,
 
                     selectDevice,
-                    toggleSimulationMode,
                     startCharging,
                     stopCharging,
-                    toggleDeviceConnection,
-                    simulatePlugUnplug,
-                    simulateAutoStop,
+                    refreshData,
                     clearLogs,
                     toggleAutoScroll,
-                    formatDuration
+                    formatTime,
+                    getPortStatusText,
+                    getDeviceStatusText
                 };
             }
         }).mount('#app');

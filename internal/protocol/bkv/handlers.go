@@ -2,6 +2,7 @@ package bkv
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"time"
 
@@ -45,6 +46,7 @@ type repoAPI interface {
 	UpdateOrderToCharging(ctx context.Context, orderNo string, startTime time.Time) error
 	CancelOrderByPort(ctx context.Context, deviceID int64, portNo int) error
 	GetChargingOrderByPort(ctx context.Context, deviceID int64, portNo int) (*pgstorage.Order, error)
+	GetOrderByBusinessNo(ctx context.Context, deviceID int64, businessNo uint16) (*pgstorage.Order, error)
 	CompleteOrderByPort(ctx context.Context, deviceID int64, portNo int, endTime time.Time, reason int) error
 
 	// P0-2修复: interrupted订单恢复方法
@@ -79,6 +81,13 @@ type MetricsAPI interface {
 	GetChargeReportEnergyTotal() *prometheus.CounterVec
 	GetPortStatusQueryResponseTotal() *prometheus.CounterVec // P1-4新增
 }
+
+const (
+	orderStatusPending   = 0
+	orderStatusConfirmed = 1
+	orderStatusCharging  = 2
+	orderStatusStopping  = 9
+)
 
 // Handlers BKV 协议处理器集合
 type Handlers struct {
@@ -477,98 +486,92 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 		}
 	} else {
 		// 上行：设备回复
-		// 按协议2.2.8示例：内层长度0005，格式为[07][01][插座号][插孔号][业务号2字节]
-		if len(f.Data) >= 2 && len(f.Data) < 15 {
+		if len(f.Data) >= 2 && len(f.Data) < 64 {
 			innerLen := (int(f.Data[0]) << 8) | int(f.Data[1])
-
-			// 🔥 关键修复: 协议2.2.8控制回复格式: [07][结果][插座号][插孔号][业务号2字节]
-			// 参考协议文档line 273-283示例
-			if innerLen == 5 && len(f.Data) >= 7 {
-				inner := f.Data[2:7]
-
-				// 🔥 ACK数据字段映射（协议2.2.8标准格式）
-				//
-				// 【协议格式】设备对接指引-组网设备2024(1).txt 章节2.2.8：
-				// ACK应答：[长度2B][0x07][结果1B][插座号1B][插孔号1B][业务号2B]
-				//
-				// 【字段说明】
-				// inner[0] = 0x07          - 命令标识（控制命令）
-				// inner[1] = result        - 执行结果（01=成功，00=失败）
-				// inner[2] = socketNo      - 插座号（单机版=0，组网版=1-250）
-				// inner[3] = portNo        - 插孔号（0=A孔，1=B孔）
-				// inner[4] = businessNo    - 业务号低字节（关联订单）
-				//
-				// 【协议示例】
-				// 成功: 0005 07 01 00 00 01
-				//            ^^ ^^ ^^ ^^ ^^
-				//            |  |  |  |  └─ 业务号=0x01
-				//            |  |  |  └──── 插孔0(A孔)
-				//            |  |  └─────── 插座0(单机版)
-				//            |  └────────── 成功
-				//            └───────────── 控制命令
-				//
-				// 失败: 0005 07 00 02 00 00
-				//            ^^ ^^ ^^ ^^ ^^
-				//            |  |  |  |  └─ 业务号
-				//            |  |  |  └──── 插孔0
-				//            |  |  └─────── 插座2(设备不支持)
-				//            |  └────────── 失败
-				//            └───────────── 控制命令
-				//
-				// 【历史Bug】2025-10-30之前错误实现为：
-				//   inner[2] = portNo   ❌ 顺序错误
-				//   inner[3] = socketNo ❌ 顺序错误
-				// 导致端口映射混乱，已于2025-10-31修复
-				subCmd := inner[0]             // 0x07
-				result := inner[1]             // 01=成功, 00=失败
-				socketNo := inner[2]           // 插座号
-				portNo := inner[3]             // 插孔号 0=A孔,1=B孔
-				businessNo := uint16(inner[4]) // 业务号（1字节）
-
-				// 记录ACK详情
-				ackLog := fmt.Sprintf("0x0015控制回复: 子命令=0x%02X 插座=%d 插孔=%d 结果=%d(1=成功,0=失败) 业务号=0x%02X",
-					subCmd, socketNo, portNo, result, businessNo)
-				_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), []byte(ackLog), result == 0x01)
-
-				// 直接使用协议端口号（0=A孔, 1=B孔）查询订单
-				// 数据库统一使用协议端口号，无需转换
-				protocolPortNo := int(portNo)
-
-				// 如果结果=01(成功)，根据当前订单状态判断是启动还是停止
-				if result == 0x01 {
-					// 先检查是否有charging订单（停止充电）
-					chargingOrder, chargingErr := h.Repo.GetChargingOrderByPort(ctx, devID, protocolPortNo)
-					if chargingErr != nil && chargingErr.Error() != "no rows in result set" {
-						errorLog := fmt.Sprintf("❌查询charging订单失败: port=%d err=%v", protocolPortNo, chargingErr)
-						_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(errorLog), false)
+			totalLen := 2 + innerLen
+			if innerLen >= 5 && len(f.Data) >= totalLen {
+				inner := f.Data[2:totalLen]
+				if len(inner) >= 5 && inner[0] == 0x07 {
+					result := inner[1]
+					socketNo := inner[2]
+					portNo := inner[3]
+					var businessNo uint16
+					if len(inner) >= 6 {
+						businessNo = binary.BigEndian.Uint16(inner[4:6])
+					} else {
+						businessNo = uint16(inner[4])
 					}
 
-					if chargingOrder != nil {
-						// 🔥 Bug#4修复: 停止充电ACK - 完成订单
-						endTime := time.Now()
-						endReason := 1 // 用户主动停止
-						if err := h.Repo.CompleteOrderByPort(ctx, devID, protocolPortNo, endTime, endReason); err == nil {
-							completeLog := fmt.Sprintf("✅订单已完成: %s (插孔%d, 原因:用户主动停止)", chargingOrder.OrderNo, portNo)
-							_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(completeLog), true)
+					subCmd := inner[0]
+					ackLog := fmt.Sprintf("0x0015控制回复: 子命令=0x%02X 插座=%d 插孔=%d 结果=%d(1=成功,0=失败) 业务号=0x%04X 长度=%d",
+						subCmd, socketNo, portNo, result, businessNo, innerLen)
+					_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), []byte(ackLog), result == 0x01)
 
-							if h.EventQueue != nil {
-								h.pushChargingCompletedEvent(ctx, devicePhyID, chargingOrder.OrderNo, protocolPortNo, endReason, nil)
-							}
-						} else {
-							errorLog := fmt.Sprintf("❌完成订单失败: %s err=%v", chargingOrder.OrderNo, err)
-							_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(errorLog), false)
+					protocolPortNo := int(portNo)
+
+					var (
+						orderByBiz   *pgstorage.Order
+						bizLookupErr error
+					)
+					if businessNo != 0 {
+						orderByBiz, bizLookupErr = h.Repo.GetOrderByBusinessNo(ctx, devID, businessNo)
+						if bizLookupErr != nil {
+							warn := fmt.Sprintf("⚠️查询业务号订单失败: business_no=0x%04X err=%v", businessNo, bizLookupErr)
+							_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(warn), false)
 						}
-					} else {
-						// 检查是否有pending订单（启动充电）
-						pendingOrder, err := h.Repo.GetPendingOrderByPort(ctx, devID, protocolPortNo)
-						if err != nil {
-							errorLog := fmt.Sprintf("❌查询pending订单失败: port=%d err=%v", protocolPortNo, err)
+					}
+
+					var pendingOrder *pgstorage.Order
+					var chargingOrder *pgstorage.Order
+					if orderByBiz != nil {
+						if orderByBiz.PortNo != protocolPortNo {
+							mismatch := fmt.Sprintf("⚠️业务号端口不一致: business_no=0x%04X ack_port=%d order_port=%d", businessNo, protocolPortNo, orderByBiz.PortNo)
+							_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(mismatch), false)
+						}
+						switch orderByBiz.Status {
+						case orderStatusPending, orderStatusConfirmed:
+							pendingOrder = orderByBiz
+						case orderStatusCharging, orderStatusStopping:
+							chargingOrder = orderByBiz
+						}
+					}
+
+					if chargingOrder == nil {
+						if fallbackCharging, err := h.Repo.GetChargingOrderByPort(ctx, devID, protocolPortNo); err != nil {
+							errorLog := fmt.Sprintf("⚠️查询charging订单失败: port=%d err=%v", protocolPortNo, err)
 							_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(errorLog), false)
+						} else {
+							chargingOrder = fallbackCharging
+						}
+					}
+					if pendingOrder == nil {
+						if fallbackPending, err := h.Repo.GetPendingOrderByPort(ctx, devID, protocolPortNo); err != nil {
+							errorLog := fmt.Sprintf("⚠️查询pending订单失败: port=%d err=%v", protocolPortNo, err)
+							_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(errorLog), false)
+						} else {
+							pendingOrder = fallbackPending
+						}
+					}
+
+					if result == 0x01 {
+						if chargingOrder != nil {
+							endTime := time.Now()
+							endReason := 1 // 用户主动停止
+							if err := h.Repo.CompleteOrderByPort(ctx, devID, protocolPortNo, endTime, endReason); err == nil {
+								completeLog := fmt.Sprintf("✅订单已完成: %s (插孔%d, business_no=0x%04X)", chargingOrder.OrderNo, portNo, businessNo)
+								_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(completeLog), true)
+
+								if h.EventQueue != nil {
+									h.pushChargingCompletedEvent(ctx, devicePhyID, chargingOrder.OrderNo, protocolPortNo, endReason, nil)
+								}
+							} else {
+								errorLog := fmt.Sprintf("❌完成订单失败: %s err=%v", chargingOrder.OrderNo, err)
+								_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(errorLog), false)
+							}
 						} else if pendingOrder != nil {
 							startTime := time.Now()
-							updateErr := h.Repo.UpdateOrderToCharging(ctx, pendingOrder.OrderNo, startTime)
-							if updateErr == nil {
-								updateLog := fmt.Sprintf("✅订单状态已更新: %s -> charging (插孔%d, start_time=%d)", pendingOrder.OrderNo, portNo, startTime.Unix())
+							if updateErr := h.Repo.UpdateOrderToCharging(ctx, pendingOrder.OrderNo, startTime); updateErr == nil {
+								updateLog := fmt.Sprintf("✅订单状态已更新: %s -> charging (business_no=0x%04X)", pendingOrder.OrderNo, businessNo)
 								_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(updateLog), true)
 
 								if h.EventQueue != nil {
@@ -579,22 +582,22 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 								_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(errorLog), false)
 							}
 						} else {
-							// 无pending/charging订单，可能是重复ACK或异常
-							warnLog := fmt.Sprintf("⚠️收到控制成功ACK但无订单: 插孔%d, device_id=%d", portNo, devID)
+							warnLog := fmt.Sprintf("⚠️收到控制成功ACK但未找到订单: 插孔%d business_no=0x%04X", portNo, businessNo)
 							_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(warnLog), false)
 						}
-					}
-				} else {
-					// 设备拒绝了充电请求 - 需要取消对应的订单
-					failLog := fmt.Sprintf("❌设备拒绝充电: 插座=%d 插孔=%d 原因=未知", socketNo, portNo)
-					_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(failLog), false)
-
-					if err := h.Repo.CancelOrderByPort(ctx, devID, protocolPortNo); err != nil {
-						_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()),
-							[]byte(fmt.Sprintf("❌取消订单失败: port=%d err=%v", protocolPortNo, err)), false)
 					} else {
-						_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()),
-							[]byte(fmt.Sprintf("✅已自动取消pending订单: 插孔%d", portNo)), true)
+						failLog := fmt.Sprintf("❌设备拒绝充电: 插座=%d 插孔=%d 业务号=0x%04X", socketNo, portNo, businessNo)
+						_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(failLog), false)
+
+						if pendingOrder != nil && pendingOrder.Status == orderStatusPending {
+							if err := h.Repo.CancelOrderByPort(ctx, devID, protocolPortNo); err != nil {
+								_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()),
+									[]byte(fmt.Sprintf("❌取消订单失败: port=%d err=%v", protocolPortNo, err)), false)
+							} else {
+								_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()),
+									[]byte(fmt.Sprintf("✅已自动取消pending订单: business_no=0x%04X", businessNo)), true)
+							}
+						}
 					}
 				}
 			}
