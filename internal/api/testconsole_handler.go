@@ -62,12 +62,54 @@ type TestDevice struct {
 	RegisteredAt  time.Time         `json:"registered_at"`
 }
 
+// PortStatusMeta 端口状态元信息（用于调试和高级场景）
+type PortStatusMeta struct {
+	RawStatus  int  `json:"raw_status"`  // 协议��原始位图值
+	IsOnline   bool `json:"is_online"`   // bit0: 端口在线
+	IsCharging bool `json:"is_charging"` // bit7: 正在充电
+	IsIdle     bool `json:"is_idle"`     // bit3: 空载状态
+	HasFault   bool `json:"has_fault"`   // 是否存在故障
+}
+
 // TestDevicePort 测试设备端口信息
 type TestDevicePort struct {
-	PortNo  int    `json:"port_no"`
-	Status  int    `json:"status"` // 0=空闲, 1=占用, 2=故障
-	Power   int    `json:"power"`  // 功率（瓦）
-	OrderNo string `json:"order_no,omitempty"`
+	PortNo  int            `json:"port_no"`
+	Status  int            `json:"status"` // 业务枚举: 0=空闲, 1=充电中, 2=故障
+	Power   int            `json:"power"`  // 功率（瓦）
+	OrderNo string         `json:"order_no,omitempty"`
+	Meta    PortStatusMeta `json:"meta"` // 状态元信息
+}
+
+// decodeConsolePortStatus 将BKV协议层位图状态转换为业务枚举
+//
+// BKV协议状态位定义 (参考 internal/protocol/bkv/tlv.go:257-283):
+//   - bit0 (0x01): 在线标志
+//   - bit3 (0x08): 空载标志
+//   - bit7 (0x80): 充电中标志
+//
+// 转换规则（按优先级）:
+//  1. bit7=1 → 1 (充电中)
+//  2. !bit0  → 2 (故障/离线)
+//  3. 其他   → 0 (空闲)
+func decodeConsolePortStatus(raw int) (int, PortStatusMeta) {
+	statusByte := raw & 0xFF
+	meta := PortStatusMeta{
+		RawStatus:  raw,
+		IsOnline:   (statusByte & 0x01) != 0,
+		IsCharging: (statusByte & 0x80) != 0,
+		IsIdle:     (statusByte & 0x08) != 0,
+	}
+	meta.HasFault = !meta.IsOnline
+
+	// 状态优先级判断
+	switch {
+	case meta.IsCharging:
+		return 1, meta // 充电中
+	case !meta.IsOnline:
+		return 2, meta // 故障/离线
+	default:
+		return 0, meta // 空闲
+	}
 }
 
 // TestActiveOrder 活跃订单信息
@@ -161,6 +203,22 @@ func (h *TestConsoleHandler) ListTestDevices(c *gin.Context) {
 		// 检查在线状态
 		isOnline := h.sess.IsOnline(dev.PhyID, time.Now())
 
+		// 查询活跃订单
+		activeOrders, err := h.getActiveOrders(ctx, dev.ID)
+		if err != nil {
+			h.logger.Warn("failed to get active orders",
+				zap.String("device_phy_id", dev.PhyID),
+				zap.Error(err))
+		}
+
+		// 构建端口号到订单号的映射，用于填充 OrderNo 字段
+		orderNoByPort := make(map[int]string)
+		for _, order := range activeOrders {
+			if order.OrderNo != "" {
+				orderNoByPort[order.PortNo] = order.OrderNo
+			}
+		}
+
 		// 构建端口列表（初始化为空数组）
 		testPorts := []TestDevicePort{}
 		for _, port := range ports {
@@ -168,19 +226,17 @@ func (h *TestConsoleHandler) ListTestDevices(c *gin.Context) {
 			if port.PowerW != nil {
 				powerW = *port.PowerW
 			}
-			testPorts = append(testPorts, TestDevicePort{
-				PortNo: port.PortNo,
-				Status: port.Status,
-				Power:  powerW,
-			})
-		}
 
-		// 查询活跃订单
-		activeOrders, err := h.getActiveOrders(ctx, dev.ID)
-		if err != nil {
-			h.logger.Warn("failed to get active orders",
-				zap.String("device_phy_id", dev.PhyID),
-				zap.Error(err))
+			// 转换协议层状态为业务枚举
+			statusEnum, meta := decodeConsolePortStatus(port.Status)
+
+			testPorts = append(testPorts, TestDevicePort{
+				PortNo:  port.PortNo,
+				Status:  statusEnum,
+				Power:   powerW,
+				OrderNo: orderNoByPort[port.PortNo],
+				Meta:    meta,
+			})
 		}
 
 		testDevices = append(testDevices, TestDevice{
@@ -249,6 +305,22 @@ func (h *TestConsoleHandler) GetTestDevice(c *gin.Context) {
 	// 检查在线状态
 	isOnline := h.sess.IsOnline(devicePhyID, time.Now())
 
+	// 查询活跃订单
+	activeOrders, err := h.getActiveOrders(ctx, device.ID)
+	if err != nil {
+		h.logger.Warn("failed to get active orders",
+			zap.String("device_phy_id", devicePhyID),
+			zap.Error(err))
+	}
+
+	// 构建端口号到订单号的映射
+	orderNoByPort := make(map[int]string)
+	for _, order := range activeOrders {
+		if order.OrderNo != "" {
+			orderNoByPort[order.PortNo] = order.OrderNo
+		}
+	}
+
 	// 构建端口列表（初始化为空数组）
 	testPorts := []TestDevicePort{}
 	for _, port := range ports {
@@ -256,19 +328,17 @@ func (h *TestConsoleHandler) GetTestDevice(c *gin.Context) {
 		if port.PowerW != nil {
 			powerW = *port.PowerW
 		}
-		testPorts = append(testPorts, TestDevicePort{
-			PortNo: port.PortNo,
-			Status: port.Status,
-			Power:  powerW,
-		})
-	}
 
-	// 查询活跃订单
-	activeOrders, err := h.getActiveOrders(ctx, device.ID)
-	if err != nil {
-		h.logger.Warn("failed to get active orders",
-			zap.String("device_phy_id", devicePhyID),
-			zap.Error(err))
+		// 转换协议层状态为业务枚举
+		statusEnum, meta := decodeConsolePortStatus(port.Status)
+
+		testPorts = append(testPorts, TestDevicePort{
+			PortNo:  port.PortNo,
+			Status:  statusEnum,
+			Power:   powerW,
+			OrderNo: orderNoByPort[port.PortNo],
+			Meta:    meta,
+		})
 	}
 
 	testDevice := TestDevice{
@@ -535,11 +605,25 @@ func (h *TestConsoleHandler) StartTestCharge(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param device_id path string true "设备物理ID"
-// @Param port_no query int true "端口号"
+// @Param request body StopChargeRequest true "停止充电参数"
 // @Success 200 {object} StandardResponse
 // @Router /internal/test/devices/{device_id}/stop [post]
 func (h *TestConsoleHandler) StopTestCharge(c *gin.Context) {
+	ctx := c.Request.Context()
+	devicePhyID := c.Param("device_id")
 	requestID := c.GetString("request_id")
+
+	// 解析请求参数
+	var req StopChargeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, StandardResponse{
+			Code:      400,
+			Message:   fmt.Sprintf("invalid request: %v", err),
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
 
 	// 生成test_session_id用于追踪
 	testSessionID := uuid.New().String()
@@ -547,16 +631,80 @@ func (h *TestConsoleHandler) StopTestCharge(c *gin.Context) {
 
 	h.logger.Info("test stop charge requested",
 		zap.String("test_session_id", testSessionID),
-		zap.String("device_phy_id", c.Param("device_id")))
+		zap.String("device_phy_id", devicePhyID),
+		zap.Int("port_no", req.PortNo))
 
-	// TODO: 调用thirdPartyHandler.StopCharge
-	c.JSON(http.StatusOK, StandardResponse{
-		Code:      0,
-		Message:   "stop charge requested",
-		Data:      map[string]interface{}{"test_session_id": testSessionID},
-		RequestID: requestID,
-		Timestamp: time.Now().Unix(),
-	})
+	// 将test_session_id注入到context中，供时间线服务记录
+	c.Request = c.Request.Clone(context.WithValue(ctx, "test_session_id", testSessionID))
+
+	// 设置路径参数供thirdPartyHandler使用
+	originalParams := c.Params
+	c.Params = gin.Params{{Key: "device_id", Value: devicePhyID}}
+
+	// 重新构造请求体
+	bodyBytes, _ := json.Marshal(req)
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+	// 使用ResponseRecorder捕获第三方API的响应
+	recorder := &responseRecorder{
+		ResponseWriter: c.Writer,
+		body:           &bytes.Buffer{},
+		statusCode:     200,
+	}
+	c.Writer = recorder
+
+	// 调用第三方API的停止充电逻辑
+	h.thirdPartyH.StopCharge(c)
+
+	// 恢复原始参数
+	c.Params = originalParams
+
+	// 尝试修改响应，添加test_session_id
+	if recorder.statusCode >= 200 && recorder.statusCode < 300 {
+		var resp StandardResponse
+		if err := json.Unmarshal(recorder.body.Bytes(), &resp); err == nil {
+			// 成功解析，添加test_session_id到响应数据
+			if resp.Data == nil {
+				resp.Data = make(map[string]interface{})
+			}
+			if dataMap, ok := resp.Data.(map[string]interface{}); ok {
+				dataMap["test_session_id"] = testSessionID
+			} else {
+				// Data不是map，包装成新的map
+				resp.Data = map[string]interface{}{
+					"original":        resp.Data,
+					"test_session_id": testSessionID,
+				}
+			}
+			// 重新序列化并写入
+			newBody, _ := json.Marshal(resp)
+			c.Writer = recorder.ResponseWriter
+			c.Writer.WriteHeader(recorder.statusCode)
+			c.Writer.Write(newBody)
+			return
+		}
+	}
+
+	// 无法修改响应，直接写回原始内容
+	c.Writer = recorder.ResponseWriter
+	c.Writer.WriteHeader(recorder.statusCode)
+	c.Writer.Write(recorder.body.Bytes())
+}
+
+// responseRecorder 用于捕获响应内容的recorder
+type responseRecorder struct {
+	gin.ResponseWriter
+	body       *bytes.Buffer
+	statusCode int
+}
+
+func (r *responseRecorder) Write(data []byte) (int, error) {
+	r.body.Write(data)
+	return len(data), nil
+}
+
+func (r *responseRecorder) WriteHeader(statusCode int) {
+	r.statusCode = statusCode
 }
 
 // GetTestSession 获取测试会话时间线

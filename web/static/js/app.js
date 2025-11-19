@@ -89,6 +89,25 @@ createApp({
             }
 
             return filtered;
+        },
+
+        // 当前选中端口的状态（用于控制按钮显示）
+        selectedPortStatus() {
+            if (!this.selectedDevice || this.testParams.port_no == null) {
+                return null;
+            }
+            const port = this.selectedDevice.ports?.find(p => p.port_no === this.testParams.port_no);
+            return port ? port.status : null;
+        },
+
+        // 判断是否可以启动充电（端口空闲）
+        canStartCharge() {
+            return this.selectedPortStatus === 0 && this.selectedDevice?.is_online;
+        },
+
+        // 判断是否可以停止充电（端口充电中）
+        canStopCharge() {
+            return this.selectedPortStatus === 1;
         }
     },
     // 修复：监听测试参数变化，自动保存到sessionStorage
@@ -261,13 +280,19 @@ createApp({
             try {
                 const response = await axios.post(
                     `${API_BASE_URL}/devices/${this.selectedDevice.device_phy_id}/stop`,
-                    { port_no: this.testParams.port_no }
+                    { port_no: this.testParams.port_no }  // 从JSON body发送port_no
                 );
 
                 if (response.data.code === 0) {
                     this.showNotification('停止充电指令已发送', 'success');
 
-                    // 清除测试会话（但不清除sessionStorage，保留以便查看时间线）
+                    // 刷新设备状态
+                    setTimeout(async () => {
+                        const devResponse = await axios.get(`${API_BASE_URL}/devices/${this.selectedDevice.device_phy_id}`);
+                        if (devResponse.data.code === 0) {
+                            this.selectedDevice = devResponse.data.data;
+                        }
+                    }, 1000);
                 } else {
                     throw new Error(response.data.message);
                 }
@@ -613,7 +638,7 @@ createApp({
         getPortStatusText(status) {
             const texts = {
                 0: '空闲',
-                1: '占用',
+                1: '充电中',
                 2: '故障'
             };
             return texts[status] || '未知';

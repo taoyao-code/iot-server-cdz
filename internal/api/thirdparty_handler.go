@@ -500,7 +500,7 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 
 // StopChargeRequest 停止充电请求
 type StopChargeRequest struct {
-	PortNo int `json:"port_no" binding:"min=0"` // 端口号：0=A端口, 1=B端口, ...（移除required，因为0是有效值）
+	PortNo int `json:"port_no" binding:"required,min=0"` // 端口号：0=A端口, 1=B端口, ...（必填）
 }
 
 // StopCharge 停止充电

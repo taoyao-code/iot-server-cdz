@@ -318,19 +318,29 @@
 
                             <!-- Action Buttons -->
                             <div class="grid grid-cols-2 gap-3 pt-4">
-                                <button @click="startCharging"
-                                    :disabled="!selectedDevice.is_online || selectedPort === null || loading"
-                                    class="p-3 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white font-medium text-sm transition-all flex flex-col items-center justify-center space-y-1 border border-transparent disabled:border-gray-700">
+                                <!-- 启动充��按钮 - 仅在端口空闲时显示 -->
+                                <button v-if="canStartCharge"
+                                    @click="startCharging"
+                                    :disabled="loading"
+                                    class="col-span-2 p-3 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white font-medium text-sm transition-all flex flex-col items-center justify-center space-y-1 border border-transparent disabled:border-gray-700">
                                     <i class="fas fa-play"></i>
                                     <span>启动充电</span>
                                 </button>
 
-                                <button @click="stopCharging"
-                                    :disabled="!selectedDevice.is_online || selectedPort === null || loading"
-                                    class="p-3 rounded-lg bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white font-medium text-sm transition-all flex flex-col items-center justify-center space-y-1 border border-gray-600 disabled:border-gray-700">
+                                <!-- 停止充电按钮 - 仅在端口充电中时显示 -->
+                                <button v-if="canStopCharge"
+                                    @click="stopCharging"
+                                    :disabled="loading"
+                                    class="col-span-2 p-3 rounded-lg bg-red-600 hover:bg-red-700 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white font-medium text-sm transition-all flex flex-col items-center justify-center space-y-1 border border-transparent disabled:border-gray-700">
                                     <i class="fas fa-stop"></i>
                                     <span>停止充电</span>
                                 </button>
+
+                                <!-- 两个按钮都不显示时的占位提示 -->
+                                <div v-if="!canStartCharge && !canStopCharge"
+                                    class="col-span-2 p-3 rounded-lg bg-gray-800 text-gray-500 text-center text-sm border border-gray-700">
+                                    {{ selectedPort === null ? '请选择端口' : (selectedDevice?.is_online ? '端口状态未知' : '设备离线') }}
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -474,6 +484,25 @@
                     );
                 });
 
+                // 当前选中端口的状态（用于控制按钮显示）
+                const selectedPortStatus = computed(() => {
+                    if (!selectedDevice.value || selectedPort.value === null) {
+                        return null;
+                    }
+                    const port = selectedDevice.value.ports?.find(p => p.port_no === selectedPort.value);
+                    return port ? port.status : null;
+                });
+
+                // 判断是否可以启动充电
+                const canStartCharge = computed(() => {
+                    return selectedPortStatus.value === 0 && selectedDevice.value?.is_online;
+                });
+
+                // 判断是否可以停止充电
+                const canStopCharge = computed(() => {
+                    return selectedPortStatus.value === 1;
+                });
+
                 // Methods
                 const addLog = (type, message, payload = null) => {
                     const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
@@ -509,7 +538,7 @@
                 const getPortStatusText = (status) => {
                     const statusMap = {
                         0: '空闲',
-                        1: '占用',
+                        1: '充电中',
                         2: '故障'
                     };
                     return statusMap[status] || '未知';
@@ -649,7 +678,8 @@
 
                     try {
                         const response = await axios.post(
-                            `${API_BASE}/internal/test/devices/${selectedDevice.value.device_phy_id}/stop?port_no=${selectedPort.value}`
+                            `${API_BASE}/internal/test/devices/${selectedDevice.value.device_phy_id}/stop`,
+                            { port_no: selectedPort.value }  // 使用JSON body传递port_no
                         );
 
                         if (response.data.code === 0) {
@@ -689,6 +719,9 @@
                     apiConnected,
                     devices,
                     filteredDevices,
+                    selectedPortStatus,
+                    canStartCharge,
+                    canStopCharge,
                     searchQuery,
                     selectedDevice,
                     selectedPort,
