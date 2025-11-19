@@ -295,17 +295,19 @@ func (s *PortStatusSyncer) checkChargingOrdersConsistency(ctx context.Context) {
 	}
 }
 
-// getExpectedPortStatus 根据订单状态获取期望的端口状态
+// getExpectedPortStatus 根据订单状态获取期望的端口状态（BKV位图格式）
 func (s *PortStatusSyncer) getExpectedPortStatus(orderStatus int) int {
+	// 注意：这里返回的是BKV协议位图值，不是业务枚举！
+	// BKV位图: bit0=在线(0x01), bit3=空载(0x08), bit7=充电(0x80)
 	switch orderStatus {
 	case 2: // charging
-		return 2 // port应该是charging
+		return 0x81 // 0x81 = bit0(在线) + bit7(充电)
 	case 8, 9: // cancelling, stopping
-		return 2 // port可能还在charging，等待设备响应
+		return 0x81 // port可能还在charging，等待设备响应
 	case 10: // interrupted
-		return 2 // port可能还在charging或已offline
+		return 0x81 // port可能还在charging或已offline
 	default:
-		return 0 // free
+		return 0x09 // 0x09 = bit0(在线) + bit3(空载) = 空闲
 	}
 }
 
@@ -335,7 +337,7 @@ func (s *PortStatusSyncer) shouldAutoFix(orderStatus int, portStatus *int, onlin
 	return false
 }
 
-// autoFixInconsistency D修复: 自动修复不一致状态（增强interrupted支持）
+// autoFixInconsistency D修复: 自动修复不一致状态（增强interrupted支持 + 端口状态同步）
 func (s *PortStatusSyncer) autoFixInconsistency(ctx context.Context, orderNo string, deviceID int64, portNo int, orderStatus int, portStatus *int) error {
 	// 根据情况选择修复策略
 	var newStatus int
@@ -374,6 +376,24 @@ func (s *PortStatusSyncer) autoFixInconsistency(ctx context.Context, orderNo str
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
 		return fmt.Errorf("order status already changed by another process")
+	}
+
+	// 关键修复：同时更新端口状态为空闲 (0x09 = bit0在线 + bit3空载)
+	// 当订单被标记为completed/failed时，端口应该恢复为空闲状态
+	idleStatus := 0x09
+	updatePortQuery := `
+		UPDATE ports
+		SET status = $1, updated_at = NOW()
+		WHERE device_id = $2 AND port_no = $3
+	`
+	if _, err := s.repo.Pool.Exec(ctx, updatePortQuery, idleStatus, deviceID, portNo); err != nil {
+		// 端口状态更新失败不应阻止订单状态更新（订单状态已提交）
+		// 记录错误但不返回，让自动修复继续
+		s.logger.Warn("P1-4: failed to update port status during auto-fix",
+			zap.String("order_no", orderNo),
+			zap.Int64("device_id", deviceID),
+			zap.Int("port_no", portNo),
+			zap.Error(err))
 	}
 
 	s.logger.Info("P1-4: order status auto-fixed",
