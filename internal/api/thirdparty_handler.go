@@ -559,57 +559,111 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	var orderNo string
 	var businessNo int64
 	var orderStatus int
+	var isFallbackMode bool // 标记是否为降级模式（无订单但端口在充电）
+
 	queryOrderSQL := `
-		SELECT order_no, business_no, status FROM orders 
+		SELECT order_no, business_no, status FROM orders
 		WHERE device_id = $1 AND port_no = $2 AND status IN ($3, $4, $5)
 		ORDER BY created_at DESC LIMIT 1
 	`
 	err = h.repo.Pool.QueryRow(ctx, queryOrderSQL, devID, *req.PortNo,
 		OrderStatusPending, OrderStatusConfirmed, OrderStatusCharging).Scan(&orderNo, &businessNo, &orderStatus)
+
+	// 降级逻辑：找不到订单时，检查端口实际状态
 	if err != nil {
-		h.logger.Warn("no active order found", zap.Error(err))
-		c.JSON(http.StatusNotFound, StandardResponse{
-			Code: 404,
-			// EN: no active charging session found
-			Message:   "未找到活动的充电会话",
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
-		return
+		h.logger.Warn("no active order found, checking port status for fallback", zap.Error(err))
+
+		// 查询端口实际状态
+		var portStatus int
+		portQuery := `SELECT status FROM ports WHERE device_id = $1 AND port_no = $2`
+		portErr := h.repo.Pool.QueryRow(ctx, portQuery, devID, *req.PortNo).Scan(&portStatus)
+
+		if portErr != nil {
+			// 端口记录也不存在
+			h.logger.Error("port not found", zap.Error(portErr))
+			c.JSON(http.StatusNotFound, StandardResponse{
+				Code: 404,
+				// EN: no active charging session and port not found
+				Message:   "未找到活动的充电会话，且端口不存在",
+				RequestID: requestID,
+				Timestamp: time.Now().Unix(),
+			})
+			return
+		}
+
+		// 检查端口是否真的在充电（bit7=0x80）
+		isActuallyCharging := (portStatus & 0x80) != 0
+
+		if !isActuallyCharging {
+			// 端口未在充电，无需停止
+			h.logger.Info("port not charging, no action needed",
+				zap.Int("port_status", portStatus))
+			c.JSON(http.StatusNotFound, StandardResponse{
+				Code: 404,
+				// EN: no active charging session
+				Message: "未找到活动的充电会话",
+				Data: map[string]interface{}{
+					"port_status":     portStatus,
+					"is_charging":     false,
+					"fallback_reason": "port not in charging state",
+				},
+				RequestID: requestID,
+				Timestamp: time.Now().Unix(),
+			})
+			return
+		}
+
+		// 端口确实在充电，但无订单记录 → 强制停止（状态修复）
+		h.logger.Warn("port is charging but no order found, forcing stop",
+			zap.String("device_phy_id", devicePhyID),
+			zap.Int("port_no", *req.PortNo),
+			zap.Int("port_status", portStatus))
+
+		// 生成临时订单号用于日志追踪
+		orderNo = fmt.Sprintf("FALLBACK_%d_%d", time.Now().Unix(), *req.PortNo)
+		businessNo = 0 // 无业务单号
+		isFallbackMode = true
+
+		// 发送停止指令（复用后面的逻辑）
+		// 注意：不更新订单状态（因为订单不存在），直接发送硬件指令
+		goto sendStopCommand
 	}
 
 	// P1-5修复: 使用CAS更新为stopping中间态
-	updateOrderSQL := `
-		UPDATE orders 
-		SET status = $1, updated_at = NOW() 
-		WHERE order_no = $2 AND status IN ($3, $4, $5)
-	`
-	result, err := h.repo.Pool.Exec(ctx, updateOrderSQL, OrderStatusStopping, orderNo,
-		OrderStatusPending, OrderStatusConfirmed, OrderStatusCharging)
-	if err != nil {
-		h.logger.Error("failed to update order to stopping", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code: 500,
-			// EN: failed to stop order
-			Message:   "停止订单失败",
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
-		return
-	}
-	if result.RowsAffected() == 0 {
-		h.logger.Warn("order status changed, cannot stop",
-			zap.String("order_no", orderNo))
-		c.JSON(http.StatusConflict, StandardResponse{
-			Code: 409,
-			// EN: order status has changed, cannot stop
-			Message:   "订单状态已变更，无法停止",
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
-		return
+	{
+		updateOrderSQL := `
+			UPDATE orders
+			SET status = $1, updated_at = NOW()
+			WHERE order_no = $2 AND status IN ($3, $4, $5)
+		`
+		result, updateErr := h.repo.Pool.Exec(ctx, updateOrderSQL, OrderStatusStopping, orderNo,
+			OrderStatusPending, OrderStatusConfirmed, OrderStatusCharging)
+		if updateErr != nil {
+			h.logger.Error("failed to update order to stopping", zap.Error(updateErr))
+			c.JSON(http.StatusInternalServerError, StandardResponse{
+				Code: 500,
+				// EN: failed to stop order
+				Message:   "停止订单失败",
+				RequestID: requestID,
+				Timestamp: time.Now().Unix(),
+			})
+			return
+		}
+		if result.RowsAffected() == 0 {
+			h.logger.Warn("order status changed, cannot stop",
+				zap.String("order_no", orderNo))
+			c.JSON(http.StatusConflict, StandardResponse{
+				Code: 409,
+				// EN: order status has changed, cannot stop
+				Message:   "订单状态已变更，无法停止",
+				RequestID: requestID,
+				Timestamp: time.Now().Unix(),
+			})
+			return
+		}
 	}
 
+sendStopCommand:
 	biz := uint16(businessNo)
 	if biz == 0 {
 		biz = deriveBusinessNo(orderNo)
@@ -647,18 +701,31 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	}
 
 	// 4. 返回成功响应
+	responseData := map[string]interface{}{
+		"device_id":   devicePhyID,
+		"port_no":     req.PortNo,
+		"business_no": int(biz),
+	}
+
+	var message string
+	if isFallbackMode {
+		// 降级模式：无订单但强制停止
+		message = "检测到端口状态异常（充电中但无订单记录），已发送强制停止指令"
+		responseData["fallback_mode"] = true
+		responseData["fallback_order"] = orderNo
+		responseData["note"] = "这是状态修复操作，已向设备发送停止指令，端口将恢复空闲状态"
+	} else {
+		// 正常模式：有订单
+		message = "停止指令已发送，订单将在30秒内停止"
+		responseData["order_no"] = orderNo
+		responseData["status"] = "stopping"
+		responseData["note"] = "订单将在30秒后自动变为stopped,或收到设备ACK后立即停止"
+	}
+
 	c.JSON(http.StatusOK, StandardResponse{
-		Code: 0,
-		// EN: stop command sent, order will be stopped in 30 seconds
-		Message: "停止指令已发送，订单将在30秒内停止",
-		Data: map[string]interface{}{
-			"device_id":   devicePhyID,
-			"order_no":    orderNo,
-			"business_no": int(biz),
-			"port_no":     req.PortNo,
-			"status":      "stopping",
-			"note":        "订单将在30秒后自动变为stopped,或收到设备ACK后立即停止",
-		},
+		Code:      0,
+		Message:   message,
+		Data:      responseData,
 		RequestID: requestID,
 		Timestamp: time.Now().Unix(),
 	})
