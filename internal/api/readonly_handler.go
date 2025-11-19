@@ -12,19 +12,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// 复用第三方 handler 中的订单状态常量，保持一致性语义
-const (
-	OrderStatusPending     = 0  // 待确认
-	OrderStatusConfirmed   = 1  // 已确认
-	OrderStatusCharging    = 2  // 充电中
-	OrderStatusCompleted   = 3  // 已完成
-	OrderStatusCancelled   = 5  // 已取消
-	OrderStatusFailed      = 6  // 失败/异常
-	OrderStatusCancelling  = 8  // 取消中
-	OrderStatusStopping    = 9  // 停止中
-	OrderStatusInterrupted = 10 // 中断
-)
-
 // ReadOnlyHandler 只读API处理器
 type ReadOnlyHandler struct {
 	repo   *pgstorage.Repository

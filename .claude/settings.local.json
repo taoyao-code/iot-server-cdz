@@ -4,7 +4,9 @@
       "Bash(go test:*)",
       "Bash(openspec list:*)",
       "Bash(openspec validate:*)",
-      "Bash(go build:*)"
+      "Bash(go build:*)",
+      "Bash(CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build:*)",
+      "Bash(make auto-deploy:*)"
     ],
     "deny": [],
     "ask": []
