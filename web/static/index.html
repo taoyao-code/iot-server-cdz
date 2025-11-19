@@ -1,385 +1,800 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en" class="dark">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IOT 充电桩测试控制台</title>
-    <!-- Tailwind CSS CDN -->
+    <title>IoT Charging Station System Test Dashboard</title>
+
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Vue 3 CDN -->
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        gray: {
+                            750: '#2d3748',
+                            850: '#1a202c',
+                            950: '#0d1117',
+                        },
+                        industrial: {
+                            bg: '#111827',
+                            panel: '#1f2937',
+                            accent: '#3b82f6',
+                            success: '#10b981',
+                            warning: '#f59e0b',
+                            danger: '#ef4444',
+                            text: '#e5e7eb',
+                            muted: '#9ca3af'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+                    },
+                    animation: {
+                        'pulse-fast': 'pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'flash': 'flash 0.5s ease-in-out',
+                    },
+                    keyframes: {
+                        flash: {
+                            '0%, 100%': { opacity: '1' },
+                            '50%': { opacity: '0.5' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- Vue 3 -->
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <!-- Axios CDN -->
+
+    <!-- Axios -->
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
-    <!-- Font Awesome for icons -->
+
+    <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
     <style>
+        /* Custom Scrollbar for Logs */
+        .log-console::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .log-console::-webkit-scrollbar-track {
+            background: #1f2937;
+        }
+
+        .log-console::-webkit-scrollbar-thumb {
+            background: #4b5563;
+            border-radius: 4px;
+        }
+
+        .log-console::-webkit-scrollbar-thumb:hover {
+            background: #6b7280;
+        }
+
+        /* Gauge / Meter Styles */
+        .meter-bg {
+            background: conic-gradient(from 180deg at 50% 100%, #374151 0deg, #374151 180deg, transparent 180deg);
+            border-radius: 50% 50% 0 0;
+        }
+
+        .meter-fill {
+            transform-origin: bottom center;
+            transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            border-radius: 50% 50% 0 0;
+        }
+
         [v-cloak] {
             display: none;
         }
-        .pulse-dot {
-            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-        }
-        @keyframes pulse {
-            0%, 100% {
-                opacity: 1;
-            }
-            50% {
-                opacity: .5;
-            }
-        }
-        .status-online {
-            @apply bg-green-500;
-        }
-        .status-offline {
-            @apply bg-red-500;
+
+        body {
+            background-color: #0f172a;
+            /* slate-950 */
+            color: #e2e8f0;
+            /* slate-200 */
         }
     </style>
 </head>
-<body class="bg-gray-100">
-    <div id="app" v-cloak class="min-h-screen">
-        <!-- 顶部导航 -->
-        <nav class="bg-indigo-600 text-white shadow-lg">
-            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                <div class="flex justify-between h-16">
-                    <div class="flex items-center">
-                        <i class="fas fa-charging-station text-2xl mr-3"></i>
-                        <h1 class="text-xl font-bold">IOT 充电桩测试控制台</h1>
+
+<body class="h-screen overflow-hidden flex flex-col font-sans antialiased selection:bg-blue-500 selection:text-white">
+
+    <div id="app" v-cloak class="flex h-full">
+
+        <!-- Sidebar: Device List -->
+        <aside class="w-80 bg-gray-900 border-r border-gray-800 flex flex-col shadow-xl z-20">
+            <div class="p-4 border-b border-gray-800 bg-gray-900">
+                <div class="flex items-center space-x-3 mb-4">
+                    <div
+                        class="w-10 h-10 rounded bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-900/50">
+                        <i class="fas fa-bolt text-white text-xl"></i>
                     </div>
-                    <div class="flex items-center space-x-4">
-                        <button @click="currentView = 'devices'"
-                                :class="currentView === 'devices' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
-                                class="px-4 py-2 rounded-md transition">
-                            <i class="fas fa-list mr-2"></i>设备列表
-                        </button>
-                        <button @click="currentView = 'sessions'"
-                                :class="currentView === 'sessions' ? 'bg-indigo-700' : 'hover:bg-indigo-500'"
-                                class="px-4 py-2 rounded-md transition">
-                            <i class="fas fa-clock-rotate-left mr-2"></i>测试会话
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </nav>
-
-        <!-- 主内容区 -->
-        <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <!-- 设备列表视图 -->
-            <div v-if="currentView === 'devices'" class="space-y-6">
-                <!-- 搜索和过滤 -->
-                <div class="bg-white p-4 rounded-lg shadow">
-                    <div class="flex space-x-4">
-                        <input v-model="searchQuery"
-                               type="text"
-                               placeholder="搜索设备 ID..."
-                               class="flex-1 px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
-                        <select v-model="filterStatus"
-                                class="px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500">
-                            <option value="">全部状态</option>
-                            <option value="online">在线</option>
-                            <option value="offline">离线</option>
-                        </select>
-                        <button @click="loadDevices"
-                                class="px-6 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition">
-                            <i class="fas fa-refresh mr-2"></i>刷新
-                        </button>
-                    </div>
-                </div>
-
-                <!-- 设备卡片列表 -->
-                <div v-if="loading" class="text-center py-12">
-                    <i class="fas fa-spinner fa-spin text-4xl text-indigo-600"></i>
-                    <p class="mt-4 text-gray-600">加载中...</p>
-                </div>
-
-                <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    <div v-for="device in filteredDevices"
-                         :key="device.device_phy_id"
-                         class="bg-white rounded-lg shadow-md hover:shadow-xl transition-shadow cursor-pointer"
-                         @click="selectDevice(device)">
-                        <div class="p-6">
-                            <!-- 设备头部 -->
-                            <div class="flex justify-between items-start mb-4">
-                                <div>
-                                    <h3 class="text-lg font-semibold text-gray-900">{{ device.device_phy_id }}</h3>
-                                    <p class="text-sm text-gray-500">ID: {{ device.device_id }}</p>
-                                </div>
-                                <span :class="device.is_online ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'"
-                                      class="px-3 py-1 rounded-full text-xs font-medium flex items-center">
-                                    <span :class="device.is_online ? 'status-online' : 'status-offline'"
-                                          class="w-2 h-2 rounded-full mr-2 pulse-dot"></span>
-                                    {{ device.is_online ? '在线' : '离线' }}
-                                </span>
-                            </div>
-
-                            <!-- 端口状态 -->
-                            <div class="mb-4">
-                                <h4 class="text-sm font-medium text-gray-700 mb-2">端口状态</h4>
-                                <div class="flex space-x-2">
-                                    <div v-for="port in device.ports"
-                                         :key="port.port_no"
-                                         :class="getPortStatusClass(port.status)"
-                                         class="flex-1 py-2 px-3 rounded text-center text-xs">
-                                        <div class="font-semibold">{{ getPortName(port.port_no) }}</div>
-                                        <div class="mt-1">{{ getPortStatusText(port.status) }}</div>
-                                        <div v-if="port.power" class="mt-1 text-xs">{{ port.power }}W</div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- 活跃订单 -->
-                            <div v-if="device.active_orders && device.active_orders.length > 0"
-                                 class="border-t pt-4">
-                                <h4 class="text-sm font-medium text-gray-700 mb-2">活跃订单</h4>
-                                <div v-for="order in device.active_orders"
-                                     :key="order.order_no"
-                                     class="text-xs text-gray-600 mb-1">
-                                    <span class="font-mono">{{ order.order_no }}</span>
-                                    <span class="ml-2">{{ getPortName(order.port_no) }}</span>
-                                    <span class="ml-2">{{ getOrderStatusText(order.status) }}</span>
-                                </div>
-                            </div>
-
-                            <!-- 注册时间 -->
-                            <div class="mt-4 text-xs text-gray-500">
-                                注册时间: {{ formatDate(device.registered_at) }}
-                            </div>
+                    <div>
+                        <h1 class="font-bold text-lg tracking-tight text-white">IoT Test Center</h1>
+                        <div class="flex items-center space-x-2">
+                            <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                            <span class="text-xs text-gray-400">System Online</span>
                         </div>
                     </div>
                 </div>
 
-                <!-- 空状态 -->
-                <div v-if="!loading && filteredDevices.length === 0"
-                     class="text-center py-12 bg-white rounded-lg">
-                    <i class="fas fa-inbox text-6xl text-gray-300 mb-4"></i>
-                    <p class="text-gray-600">没有找到设备</p>
-                </div>
-            </div>
-
-            <!-- 设备详情和测试视图 -->
-            <div v-if="currentView === 'device-detail'" class="space-y-6">
-                <div class="bg-white p-6 rounded-lg shadow-md">
-                    <button @click="currentView = 'devices'"
-                            class="mb-4 text-indigo-600 hover:text-indigo-800">
-                        <i class="fas fa-arrow-left mr-2"></i>返回设备列表
+                <!-- Simulation Toggle -->
+                <div class="flex items-center justify-between bg-gray-800 p-3 rounded-lg border border-gray-700">
+                    <span class="text-sm font-medium text-gray-300">Simulation Mode</span>
+                    <button @click="toggleSimulationMode" :class="simulationMode ? 'bg-blue-600' : 'bg-gray-600'"
+                        class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-900">
+                        <span :class="simulationMode ? 'translate-x-6' : 'translate-x-1'"
+                            class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"></span>
                     </button>
-
-                    <h2 class="text-2xl font-bold mb-6">{{ selectedDevice.device_phy_id }}</h2>
-
-                    <!-- 测试场景选择 -->
-                    <div class="mb-6">
-                        <h3 class="text-lg font-semibold mb-4">选择测试场景</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div v-for="scenario in scenarios"
-                                 :key="scenario.id"
-                                 @click="selectScenario(scenario)"
-                                 :class="selectedScenario && selectedScenario.id === scenario.id ? 'border-indigo-600 bg-indigo-50' : 'border-gray-300'"
-                                 class="border-2 p-4 rounded-lg cursor-pointer hover:border-indigo-400 transition">
-                                <h4 class="font-semibold text-gray-900">{{ scenario.name }}</h4>
-                                <p class="text-sm text-gray-600 mt-2">{{ scenario.description }}</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 测试参数 -->
-                    <div v-if="selectedScenario" class="mb-6">
-                        <h3 class="text-lg font-semibold mb-4">测试参数</h3>
-                        <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-2">端口号</label>
-                                <select v-model.number="testParams.port_no"
-                                        class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500">
-                                    <option v-for="port in selectedDevice.ports"
-                                            :key="port.port_no"
-                                            :value="port.port_no">
-                                        {{ getPortName(port.port_no) }} ({{ getPortStatusText(port.status) }})
-                                    </option>
-                                </select>
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-2">充电模式</label>
-                                <select v-model="testParams.charge_mode"
-                                        class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500">
-                                    <option :value="1">按时长</option>
-                                    <option :value="2">按电量</option>
-                                    <option :value="3">按功率</option>
-                                    <option :value="4">充满自停</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-2">金额（分）</label>
-                                <input v-model.number="testParams.amount"
-                                       type="number"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500">
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-2">时长（分钟）</label>
-                                <input v-model.number="testParams.duration_minutes"
-                                       type="number"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500">
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 操作按钮 -->
-                    <div v-if="selectedScenario" class="flex space-x-4">
-                        <button @click="startTest"
-                                :disabled="testRunning"
-                                class="px-6 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition">
-                            <i class="fas fa-play mr-2"></i>
-                            {{ testRunning ? '测试进行中...' : '开始测试' }}
-                        </button>
-                        <button v-if="currentTestSessionId"
-                                @click="stopTest"
-                                class="px-6 py-3 bg-red-600 text-white rounded-md hover:bg-red-700 transition">
-                            <i class="fas fa-stop mr-2"></i>停止充电
-                        </button>
-                    </div>
-
-                    <!-- 当前测试会话 -->
-                    <div v-if="currentTestSessionId" class="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                        <div class="flex justify-between items-start mb-2">
-                            <h4 class="font-semibold text-blue-900">当前测试会话</h4>
-                            <button @click="clearTestSession"
-                                    class="text-sm text-red-600 hover:text-red-800">
-                                <i class="fas fa-times mr-1"></i>清除
-                            </button>
-                        </div>
-                        <p class="text-sm text-blue-800 font-mono mb-2">{{ currentTestSessionId }}</p>
-                        <div class="text-xs text-blue-700 mb-3">
-                            <i class="fas fa-info-circle mr-1"></i>
-                            页面刷新后会自动恢复此会话
-                        </div>
-                        <button @click="viewTimeline(currentTestSessionId)"
-                                class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm">
-                            <i class="fas fa-timeline mr-2"></i>查看时间线
-                        </button>
-                    </div>
                 </div>
             </div>
 
-            <!-- 测试会话时间线视图 -->
-            <div v-if="currentView === 'timeline'" class="space-y-6">
-                <div class="bg-white p-6 rounded-lg shadow-md">
-                    <div class="flex justify-between items-center mb-6">
-                        <div>
-                            <button @click="goBack" class="text-indigo-600 hover:text-indigo-800 mb-4">
-                                <i class="fas fa-arrow-left mr-2"></i>返回
-                            </button>
-                            <h2 class="text-2xl font-bold">测试会话时间线</h2>
-                            <p class="text-sm text-gray-600 font-mono mt-2">{{ currentTimelineSessionId }}</p>
+            <!-- Device Filter -->
+            <div class="p-3 bg-gray-900 border-b border-gray-800">
+                <div class="relative">
+                    <i class="fas fa-search absolute left-3 top-3 text-gray-500 text-sm"></i>
+                    <input v-model="searchQuery" type="text" placeholder="Search Device ID..."
+                        class="w-full bg-gray-800 text-gray-200 text-sm rounded-md pl-9 pr-3 py-2 border border-gray-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all">
+                </div>
+            </div>
+
+            <!-- Device List Items -->
+            <div class="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar">
+                <div v-for="device in filteredDevices" :key="device.id" @click="selectDevice(device)" :class="['p-3 rounded-lg cursor-pointer border transition-all duration-200 group', 
+                        selectedDevice?.id === device.id 
+                            ? 'bg-blue-900/20 border-blue-500/50 shadow-lg shadow-blue-900/20' 
+                            : 'bg-gray-800/50 border-gray-700 hover:bg-gray-800 hover:border-gray-600'
+                    ]">
+                    <div class="flex justify-between items-start mb-2">
+                        <span
+                            class="font-mono text-sm font-bold text-gray-200 group-hover:text-white transition-colors">{{
+                            device.id }}</span>
+                        <span :class="[
+                                'px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border',
+                                device.isOnline 
+                                    ? 'bg-green-900/30 text-green-400 border-green-900/50' 
+                                    : 'bg-red-900/30 text-red-400 border-red-900/50'
+                            ]">
+                            {{ device.isOnline ? 'ONLINE' : 'OFFLINE' }}
+                        </span>
+                    </div>
+                    <div class="flex justify-between items-center text-xs text-gray-400">
+                        <div class="flex items-center space-x-2">
+                            <i class="fas fa-plug text-[10px]"></i>
+                            <span>{{ device.status }}</span>
                         </div>
-                        <button @click="exportTimeline"
-                                class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700">
-                            <i class="fas fa-download mr-2"></i>导出数据
-                        </button>
+                        <div v-if="device.status === 'Charging'" class="text-blue-400 font-mono">
+                            {{ device.power.toFixed(1) }} kW
+                        </div>
+                    </div>
+                    <!-- Mini Progress Bar for Charging -->
+                    <div v-if="device.status === 'Charging'"
+                        class="mt-2 h-1 w-full bg-gray-700 rounded-full overflow-hidden">
+                        <div class="h-full bg-blue-500 animate-pulse" :style="{ width: device.soc + '%' }"></div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="flex-1 flex flex-col bg-gray-950 relative overflow-hidden">
+
+            <!-- Top Bar -->
+            <header
+                class="h-16 bg-gray-900/80 backdrop-blur border-b border-gray-800 flex items-center justify-between px-6 z-10">
+                <div class="flex items-center space-x-4">
+                    <h2 class="text-xl font-semibold text-white">
+                        <span v-if="selectedDevice">Device Monitor: <span class="font-mono text-blue-400">{{
+                                selectedDevice.id }}</span></span>
+                        <span v-else class="text-gray-500">Select a device to monitor</span>
+                    </h2>
+                    <span v-if="selectedDevice && selectedDevice.isOnline" class="flex h-3 w-3">
+                        <span
+                            class="animate-ping absolute inline-flex h-3 w-3 rounded-full bg-green-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                    </span>
+                </div>
+
+                <div class="flex items-center space-x-4">
+                    <div class="text-right mr-4">
+                        <div class="text-xs text-gray-400">System Time</div>
+                        <div class="font-mono text-sm text-gray-200">{{ currentTime }}</div>
+                    </div>
+                    <button class="p-2 text-gray-400 hover:text-white transition-colors">
+                        <i class="fas fa-cog"></i>
+                    </button>
+                    <button class="p-2 text-gray-400 hover:text-white transition-colors">
+                        <i class="fas fa-bell"></i>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Dashboard Content -->
+            <div v-if="selectedDevice" class="flex-1 overflow-y-auto p-6 space-y-6">
+
+                <!-- Status Cards Row -->
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+                    <!-- Voltage -->
+                    <div
+                        class="bg-gray-900 rounded-xl p-5 border border-gray-800 shadow-lg relative overflow-hidden group">
+                        <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                            <i class="fas fa-bolt text-6xl text-yellow-500"></i>
+                        </div>
+                        <div class="text-gray-400 text-sm font-medium uppercase tracking-wider mb-1">Voltage</div>
+                        <div class="flex items-baseline space-x-2">
+                            <span class="text-3xl font-mono font-bold text-white">{{ selectedDevice.voltage.toFixed(1)
+                                }}</span>
+                            <span class="text-sm text-gray-500 font-mono">V</span>
+                        </div>
+                        <div class="mt-4 h-1.5 w-full bg-gray-800 rounded-full overflow-hidden">
+                            <div class="h-full bg-yellow-500 transition-all duration-500"
+                                :style="{ width: (selectedDevice.voltage / 250 * 100) + '%' }"></div>
+                        </div>
                     </div>
 
-                    <!-- 时间线摘要 -->
-                    <div v-if="timeline" class="mb-6 grid grid-cols-4 gap-4">
-                        <div class="bg-gray-50 p-4 rounded-lg">
-                            <div class="text-2xl font-bold text-gray-900">{{ timeline.summary.total_events }}</div>
-                            <div class="text-sm text-gray-600">总事件数</div>
+                    <!-- Current -->
+                    <div
+                        class="bg-gray-900 rounded-xl p-5 border border-gray-800 shadow-lg relative overflow-hidden group">
+                        <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                            <i class="fas fa-wave-square text-6xl text-blue-500"></i>
                         </div>
-                        <div class="bg-green-50 p-4 rounded-lg">
-                            <div class="text-2xl font-bold text-green-900">{{ timeline.summary.orders_created }}</div>
-                            <div class="text-sm text-green-600">订单创建</div>
+                        <div class="text-gray-400 text-sm font-medium uppercase tracking-wider mb-1">Current</div>
+                        <div class="flex items-baseline space-x-2">
+                            <span class="text-3xl font-mono font-bold text-white">{{ selectedDevice.current.toFixed(2)
+                                }}</span>
+                            <span class="text-sm text-gray-500 font-mono">A</span>
                         </div>
-                        <div class="bg-blue-50 p-4 rounded-lg">
-                            <div class="text-2xl font-bold text-blue-900">{{ timeline.summary.commands_sent }}</div>
-                            <div class="text-sm text-blue-600">命令发送</div>
-                        </div>
-                        <div class="bg-purple-50 p-4 rounded-lg">
-                            <div class="text-2xl font-bold text-purple-900">{{ timeline.summary.events_pushed }}</div>
-                            <div class="text-sm text-purple-600">事件推送</div>
+                        <div class="mt-4 h-1.5 w-full bg-gray-800 rounded-full overflow-hidden">
+                            <div class="h-full bg-blue-500 transition-all duration-500"
+                                :style="{ width: (selectedDevice.current / 32 * 100) + '%' }"></div>
                         </div>
                     </div>
 
-                    <!-- 时间线事件列表 -->
-                    <div v-if="timeline && timeline.events.length > 0" class="space-y-4">
-                        <div v-for="(event, index) in timeline.events"
-                             :key="index"
-                             class="border-l-4 pl-4 py-3"
-                             :class="getEventBorderClass(event.type)">
-                            <div class="flex justify-between items-start">
-                                <div class="flex-1">
-                                    <div class="flex items-center space-x-2">
-                                        <i :class="getEventIcon(event.type)" class="text-gray-600"></i>
-                                        <span class="font-semibold text-gray-900">{{ event.description }}</span>
-                                        <span class="px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-700">
-                                            {{ event.type }}
-                                        </span>
+                    <!-- Power -->
+                    <div
+                        class="bg-gray-900 rounded-xl p-5 border border-gray-800 shadow-lg relative overflow-hidden group">
+                        <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                            <i class="fas fa-tachometer-alt text-6xl text-green-500"></i>
+                        </div>
+                        <div class="text-gray-400 text-sm font-medium uppercase tracking-wider mb-1">Power</div>
+                        <div class="flex items-baseline space-x-2">
+                            <span class="text-3xl font-mono font-bold text-white">{{ selectedDevice.power.toFixed(2)
+                                }}</span>
+                            <span class="text-sm text-gray-500 font-mono">kW</span>
+                        </div>
+                        <div class="mt-4 h-1.5 w-full bg-gray-800 rounded-full overflow-hidden">
+                            <div class="h-full bg-green-500 transition-all duration-500"
+                                :style="{ width: (selectedDevice.power / 7.5 * 100) + '%' }"></div>
+                        </div>
+                    </div>
+
+                    <!-- Energy Delivered -->
+                    <div
+                        class="bg-gray-900 rounded-xl p-5 border border-gray-800 shadow-lg relative overflow-hidden group">
+                        <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                            <i class="fas fa-battery-three-quarters text-6xl text-purple-500"></i>
+                        </div>
+                        <div class="text-gray-400 text-sm font-medium uppercase tracking-wider mb-1">Energy</div>
+                        <div class="flex items-baseline space-x-2">
+                            <span class="text-3xl font-mono font-bold text-white">{{ selectedDevice.energy.toFixed(3)
+                                }}</span>
+                            <span class="text-sm text-gray-500 font-mono">kWh</span>
+                        </div>
+                        <div class="mt-4 flex items-center space-x-2 text-xs text-gray-500">
+                            <i class="fas fa-clock"></i>
+                            <span>{{ formatDuration(selectedDevice.duration) }}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Control Panel & Visualization -->
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+                    <!-- Control Panel -->
+                    <div class="lg:col-span-1 bg-gray-900 rounded-xl border border-gray-800 shadow-lg flex flex-col">
+                        <div class="p-4 border-b border-gray-800 flex justify-between items-center">
+                            <h3 class="font-semibold text-white flex items-center">
+                                <i class="fas fa-gamepad mr-2 text-blue-500"></i> Control Panel
+                            </h3>
+                            <span
+                                class="text-xs px-2 py-1 rounded bg-gray-800 text-gray-400 border border-gray-700 font-mono">
+                                {{ selectedDevice.status }}
+                            </span>
+                        </div>
+
+                        <div class="p-5 space-y-4 flex-1">
+                            <!-- Connection Toggle -->
+                            <div
+                                class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                                <div class="flex items-center space-x-3">
+                                    <div :class="selectedDevice.isOnline ? 'bg-green-500/20 text-green-500' : 'bg-red-500/20 text-red-500'"
+                                        class="p-2 rounded-lg">
+                                        <i class="fas fa-wifi"></i>
                                     </div>
-                                    <div class="mt-2 text-sm text-gray-600">
-                                        来源: {{ event.source }}
-                                    </div>
-                                    <div class="mt-2">
-                                        <button @click="toggleEventData(index)"
-                                                class="text-xs text-indigo-600 hover:text-indigo-800">
-                                            <i :class="expandedEvents[index] ? 'fa-chevron-up' : 'fa-chevron-down'"
-                                               class="fas mr-1"></i>
-                                            {{ expandedEvents[index] ? '收起' : '展开' }}详情
-                                        </button>
-                                    </div>
-                                    <div v-if="expandedEvents[index]" class="mt-3 p-3 bg-gray-50 rounded text-xs font-mono">
-                                        <pre>{{ JSON.stringify(event.data, null, 2) }}</pre>
-                                        <div v-if="event.raw_payload" class="mt-2 pt-2 border-t">
-                                            <div class="font-semibold mb-1">原始负载:</div>
-                                            <div class="text-gray-600 break-all">{{ event.raw_payload }}</div>
-                                        </div>
+                                    <div>
+                                        <div class="text-sm font-medium text-gray-200">Network Status</div>
+                                        <div class="text-xs text-gray-500">{{ selectedDevice.isOnline ? 'Connected' :
+                                            'Disconnected' }}</div>
                                     </div>
                                 </div>
-                                <div class="text-xs text-gray-500 ml-4">
-                                    {{ formatDateTime(event.timestamp) }}
-                                </div>
+                                <button @click="toggleDeviceConnection"
+                                    :class="selectedDevice.isOnline ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'"
+                                    class="px-3 py-1.5 rounded text-xs font-medium text-white transition-colors">
+                                    {{ selectedDevice.isOnline ? 'Disconnect' : 'Connect' }}
+                                </button>
+                            </div>
+
+                            <!-- Action Buttons -->
+                            <div class="grid grid-cols-2 gap-3">
+                                <button @click="startCharging"
+                                    :disabled="!selectedDevice.isOnline || selectedDevice.status === 'Charging'"
+                                    class="p-3 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white font-medium text-sm transition-all flex flex-col items-center justify-center space-y-1 border border-transparent disabled:border-gray-700">
+                                    <i class="fas fa-play"></i>
+                                    <span>Start Charge</span>
+                                </button>
+
+                                <button @click="stopCharging"
+                                    :disabled="!selectedDevice.isOnline || selectedDevice.status !== 'Charging'"
+                                    class="p-3 rounded-lg bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white font-medium text-sm transition-all flex flex-col items-center justify-center space-y-1 border border-gray-600 disabled:border-gray-700">
+                                    <i class="fas fa-stop"></i>
+                                    <span>Stop Charge</span>
+                                </button>
+                            </div>
+
+                            <div class="grid grid-cols-2 gap-3">
+                                <button @click="simulatePlugUnplug" :disabled="!selectedDevice.isOnline"
+                                    class="p-3 rounded-lg bg-orange-900/30 hover:bg-orange-900/50 border border-orange-800/50 text-orange-400 hover:text-orange-300 text-xs font-medium transition-all flex items-center justify-center space-x-2">
+                                    <i class="fas fa-plug-circle-xmark"></i>
+                                    <span>Unplug Event</span>
+                                </button>
+
+                                <button @click="simulateAutoStop"
+                                    :disabled="!selectedDevice.isOnline || selectedDevice.status !== 'Charging'"
+                                    class="p-3 rounded-lg bg-purple-900/30 hover:bg-purple-900/50 border border-purple-800/50 text-purple-400 hover:text-purple-300 text-xs font-medium transition-all flex items-center justify-center space-x-2">
+                                    <i class="fas fa-battery-full"></i>
+                                    <span>Full Battery</span>
+                                </button>
                             </div>
                         </div>
                     </div>
 
-                    <!-- 空状态 -->
-                    <div v-else-if="!timelineLoading" class="text-center py-12">
-                        <i class="fas fa-inbox text-6xl text-gray-300 mb-4"></i>
-                        <p class="text-gray-600">暂无事件数据</p>
-                    </div>
+                    <!-- Real-time Graph Placeholder (Visual only for this demo) -->
+                    <div
+                        class="lg:col-span-2 bg-gray-900 rounded-xl border border-gray-800 shadow-lg flex flex-col relative overflow-hidden">
+                        <div class="p-4 border-b border-gray-800 flex justify-between items-center z-10 bg-gray-900">
+                            <h3 class="font-semibold text-white flex items-center">
+                                <i class="fas fa-chart-line mr-2 text-green-500"></i> Power Curve
+                            </h3>
+                            <div class="flex space-x-2">
+                                <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+                                <span class="text-xs text-gray-400">Current (A)</span>
+                                <span class="w-2 h-2 rounded-full bg-yellow-500 ml-2"></span>
+                                <span class="text-xs text-gray-400">Voltage (V)</span>
+                            </div>
+                        </div>
+                        <div class="flex-1 relative bg-gray-900/50 p-4 flex items-end justify-between space-x-1">
+                            <!-- Simulated Bars -->
+                            <div v-for="(bar, i) in powerHistory" :key="i"
+                                class="w-full bg-blue-500/20 rounded-t hover:bg-blue-500/40 transition-colors relative group"
+                                :style="{ height: bar + '%' }">
+                                <div class="absolute bottom-0 w-full bg-blue-500/50"
+                                    :style="{ height: (bar * 0.6) + '%' }"></div>
+                            </div>
 
-                    <!-- 加载中 -->
-                    <div v-if="timelineLoading" class="text-center py-12">
-                        <i class="fas fa-spinner fa-spin text-4xl text-indigo-600"></i>
-                        <p class="mt-4 text-gray-600">加载时间线数据...</p>
+                            <!-- Overlay Grid -->
+                            <div class="absolute inset-0 pointer-events-none"
+                                style="background-image: linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px); background-size: 20px 20px;">
+                            </div>
+                        </div>
                     </div>
+                </div>
+
+            </div>
+
+            <!-- Empty State -->
+            <div v-else class="flex-1 flex flex-col items-center justify-center text-gray-500">
+                <div class="w-24 h-24 rounded-full bg-gray-800 flex items-center justify-center mb-4 animate-pulse">
+                    <i class="fas fa-charging-station text-4xl text-gray-600"></i>
+                </div>
+                <h3 class="text-xl font-medium text-gray-300">No Device Selected</h3>
+                <p class="text-sm mt-2">Select a charging station from the sidebar to monitor telemetry.</p>
+            </div>
+
+            <!-- Log Console (Bottom Panel) -->
+            <div class="h-48 bg-gray-950 border-t border-gray-800 flex flex-col z-20">
+                <div class="px-4 py-2 bg-gray-900 border-b border-gray-800 flex justify-between items-center">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-gray-400 flex items-center">
+                        <i class="fas fa-terminal mr-2"></i> System Logs & Webhooks
+                    </h3>
+                    <div class="flex space-x-2">
+                        <button @click="clearLogs"
+                            class="text-xs text-gray-500 hover:text-white transition-colors">Clear</button>
+                        <span class="text-gray-700">|</span>
+                        <button @click="toggleAutoScroll" :class="autoScroll ? 'text-blue-400' : 'text-gray-500'"
+                            class="text-xs hover:text-white transition-colors">Auto-scroll</button>
+                    </div>
+                </div>
+                <div ref="logContainer"
+                    class="flex-1 overflow-y-auto p-2 font-mono text-xs space-y-1 log-console bg-black">
+                    <div v-for="(log, index) in logs" :key="index" class="flex space-x-2 hover:bg-gray-900 p-1 rounded">
+                        <span class="text-gray-500">[{{ log.time }}]</span>
+                        <span :class="{
+                            'text-blue-400': log.type === 'INFO',
+                            'text-green-400': log.type === 'SUCCESS',
+                            'text-yellow-400': log.type === 'WARN',
+                            'text-red-400': log.type === 'ERROR',
+                            'text-purple-400': log.type === 'WEBHOOK'
+                        }" class="font-bold w-16">{{ log.type }}</span>
+                        <span class="text-gray-300 flex-1 break-all">
+                            {{ log.message }}
+                            <span v-if="log.payload" class="block text-gray-500 mt-1 ml-4">
+                                {{ JSON.stringify(log.payload) }}
+                            </span>
+                        </span>
+                    </div>
+                    <div v-if="logs.length === 0" class="text-gray-600 italic p-2">Waiting for system events...</div>
                 </div>
             </div>
 
-            <!-- 测试会话列表视图 -->
-            <div v-if="currentView === 'sessions'" class="space-y-6">
-                <div class="bg-white p-6 rounded-lg shadow-md">
-                    <h2 class="text-2xl font-bold mb-6">测试会话历史</h2>
-                    <div class="mb-4">
-                        <input v-model="sessionSearchQuery"
-                               type="text"
-                               placeholder="输入测试会话ID查看时间线..."
-                               class="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500"
-                               @keyup.enter="viewSessionById">
-                        <button @click="viewSessionById"
-                                class="mt-3 px-6 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700">
-                            <i class="fas fa-search mr-2"></i>查看时间线
-                        </button>
-                    </div>
-                </div>
-            </div>
         </main>
-
-        <!-- 通知提示 -->
-        <div v-if="notification"
-             :class="notification.type === 'success' ? 'bg-green-500' : 'bg-red-500'"
-             class="fixed bottom-4 right-4 px-6 py-4 text-white rounded-lg shadow-lg z-50 transition-all">
-            <div class="flex items-center">
-                <i :class="notification.type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'"
-                   class="fas text-xl mr-3"></i>
-                <span>{{ notification.message }}</span>
-            </div>
-        </div>
     </div>
 
-    <script src="/static/js/app.js"></script>
+    <script>
+        const { createApp, ref, computed, onMounted, onUnmounted, watch, reactive } = Vue;
+
+        // --- Simulation Engine ---
+        class SimulationEngine {
+            constructor(eventCallback) {
+                this.devices = new Map();
+                this.eventCallback = eventCallback;
+                this.intervalId = null;
+
+                // Initialize mock devices
+                this.initDevices();
+                this.startEngine();
+            }
+
+            initDevices() {
+                const mockIds = ['CP-001-A', 'CP-001-B', 'CP-002-A', 'CP-003-X', 'CP-TEST-01'];
+                mockIds.forEach(id => {
+                    this.devices.set(id, {
+                        id: id,
+                        isOnline: true,
+                        status: 'Idle', // Idle, Prepared, Charging, Fault, Finishing
+                        voltage: 220.0,
+                        current: 0.0,
+                        power: 0.0,
+                        energy: 0.0,
+                        duration: 0,
+                        soc: 0, // State of Charge simulation
+                        startTime: null
+                    });
+                });
+            }
+
+            startEngine() {
+                this.intervalId = setInterval(() => {
+                    this.tick();
+                }, 1000);
+            }
+
+            stopEngine() {
+                if (this.intervalId) clearInterval(this.intervalId);
+            }
+
+            tick() {
+                this.devices.forEach(device => {
+                    if (!device.isOnline) return;
+
+                    // Voltage fluctuation (220V +/- 5V)
+                    const noise = (Math.random() - 0.5) * 2; // -1 to 1
+                    device.voltage = 220 + (noise * 2);
+
+                    if (device.status === 'Charging') {
+                        // Current fluctuation (Target 32A or 16A)
+                        const targetCurrent = 32.0;
+                        const currentNoise = (Math.random() - 0.5) * 0.5;
+
+                        // Ramp up current if just started
+                        if (device.current < targetCurrent) {
+                            device.current += 2.0; // Ramp up
+                        } else {
+                            device.current = targetCurrent + currentNoise;
+                        }
+
+                        // Calculate Power (kW) = V * A / 1000
+                        device.power = (device.voltage * device.current) / 1000;
+
+                        // Accumulate Energy (kWh) - simplified for 1 sec tick
+                        // Power (kW) * (1/3600) hours
+                        device.energy += device.power / 3600;
+
+                        // Duration
+                        device.duration += 1;
+
+                        // SOC Simulation
+                        if (device.soc < 100) {
+                            device.soc += 0.1; // Slow charge
+                        } else {
+                            // Auto stop at 100%
+                            this.stopCharging(device.id, 'Auto-Stop (Full Battery)');
+                        }
+                    } else {
+                        device.current = 0;
+                        device.power = 0;
+                    }
+                });
+
+                // Emit update
+                this.eventCallback('tick', Array.from(this.devices.values()));
+            }
+
+            // Actions
+            startCharging(deviceId) {
+                const device = this.devices.get(deviceId);
+                if (device && device.isOnline && device.status !== 'Charging') {
+                    device.status = 'Charging';
+                    device.startTime = Date.now();
+                    device.soc = Math.floor(Math.random() * 50); // Random start SOC
+                    this.eventCallback('webhook', {
+                        event: 'charge_start',
+                        device_id: deviceId,
+                        timestamp: new Date().toISOString(),
+                        data: { status: 'Charging' }
+                    });
+                    return true;
+                }
+                return false;
+            }
+
+            stopCharging(deviceId, reason = 'User Request') {
+                const device = this.devices.get(deviceId);
+                if (device && device.status === 'Charging') {
+                    device.status = 'Finishing';
+                    setTimeout(() => {
+                        device.status = 'Idle';
+                        device.current = 0;
+                        device.power = 0;
+                        this.eventCallback('webhook', {
+                            event: 'charge_stop',
+                            device_id: deviceId,
+                            timestamp: new Date().toISOString(),
+                            data: {
+                                reason: reason,
+                                total_energy: device.energy.toFixed(3),
+                                duration: device.duration
+                            }
+                        });
+                    }, 2000); // Simulate teardown time
+                    return true;
+                }
+                return false;
+            }
+
+            toggleConnection(deviceId) {
+                const device = this.devices.get(deviceId);
+                if (device) {
+                    device.isOnline = !device.isOnline;
+                    if (!device.isOnline) {
+                        device.status = 'Offline';
+                        device.current = 0;
+                        device.power = 0;
+                        device.voltage = 0;
+                    } else {
+                        device.status = 'Idle';
+                    }
+                    this.eventCallback('webhook', {
+                        event: device.isOnline ? 'device_online' : 'device_offline',
+                        device_id: deviceId,
+                        timestamp: new Date().toISOString()
+                    });
+                }
+            }
+
+            fault(deviceId) {
+                const device = this.devices.get(deviceId);
+                if (device) {
+                    device.status = 'Fault';
+                    device.current = 0;
+                    device.power = 0;
+                    this.eventCallback('webhook', {
+                        event: 'device_fault',
+                        device_id: deviceId,
+                        timestamp: new Date().toISOString(),
+                        data: { error_code: 'E_PLUG_UNEXPECTED' }
+                    });
+                }
+            }
+        }
+
+        // --- Vue App ---
+        createApp({
+            setup() {
+                // State
+                const simulationMode = ref(true);
+                const devices = ref([]);
+                const selectedDevice = ref(null);
+                const logs = ref([]);
+                const currentTime = ref('');
+                const logContainer = ref(null);
+                const autoScroll = ref(true);
+                const powerHistory = ref(new Array(40).fill(0)); // For graph
+
+                let engine = null;
+                let timeInterval = null;
+
+                // Computed
+                const filteredDevices = computed(() => {
+                    if (!searchQuery.value) return devices.value;
+                    return devices.value.filter(d => d.id.toLowerCase().includes(searchQuery.value.toLowerCase()));
+                });
+                const searchQuery = ref('');
+
+                // Methods
+                const addLog = (type, message, payload = null) => {
+                    const time = new Date().toLocaleTimeString('en-GB', { hour12: false });
+                    logs.value.push({ time, type, message, payload });
+
+                    if (autoScroll.value && logContainer.value) {
+                        setTimeout(() => {
+                            logContainer.value.scrollTop = logContainer.value.scrollHeight;
+                        }, 50);
+                    }
+                };
+
+                const clearLogs = () => logs.value = [];
+                const toggleAutoScroll = () => autoScroll.value = !autoScroll.value;
+
+                const updateTime = () => {
+                    currentTime.value = new Date().toLocaleString('en-GB');
+                };
+
+                const formatDuration = (seconds) => {
+                    const h = Math.floor(seconds / 3600);
+                    const m = Math.floor((seconds % 3600) / 60);
+                    const s = seconds % 60;
+                    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+                };
+
+                // Engine Callback
+                const handleEngineEvent = (type, data) => {
+                    if (type === 'tick') {
+                        // Update device list
+                        // We merge data to preserve object references if possible, or just replace
+                        // For simplicity in Vue, replacing the array is fine, but we want to keep selection
+                        devices.value = data;
+
+                        // Update selected device ref if it exists
+                        if (selectedDevice.value) {
+                            const updated = data.find(d => d.id === selectedDevice.value.id);
+                            if (updated) {
+                                selectedDevice.value = updated;
+                                // Update graph data
+                                if (updated.status === 'Charging') {
+                                    powerHistory.value.push(Math.min(100, (updated.power / 8) * 100));
+                                } else {
+                                    powerHistory.value.push(0);
+                                }
+                                powerHistory.value.shift();
+                            }
+                        }
+                    } else if (type === 'webhook') {
+                        addLog('WEBHOOK', `Event: ${data.event}`, data);
+                    }
+                };
+
+                // Actions
+                const selectDevice = (device) => {
+                    selectedDevice.value = device;
+                    powerHistory.value = new Array(40).fill(0); // Reset graph
+                };
+
+                const toggleSimulationMode = () => {
+                    simulationMode.value = !simulationMode.value;
+                    addLog('INFO', `Simulation Mode: ${simulationMode.value ? 'ON' : 'OFF'}`);
+                    if (simulationMode.value) {
+                        if (!engine) engine = new SimulationEngine(handleEngineEvent);
+                    } else {
+                        if (engine) {
+                            engine.stopEngine();
+                            engine = null;
+                        }
+                        addLog('WARN', 'Real backend connection not implemented in this demo view.');
+                    }
+                };
+
+                const startCharging = async () => {
+                    if (!selectedDevice.value) return;
+                    addLog('INFO', `Initiating Charge for ${selectedDevice.value.id}...`);
+
+                    if (simulationMode.value && engine) {
+                        const success = engine.startCharging(selectedDevice.value.id);
+                        if (success) addLog('SUCCESS', 'Charge Started (Simulated)');
+                        else addLog('ERROR', 'Failed to start charge (Device busy or offline)');
+                    } else {
+                        // Real API call would go here
+                        // await axios.post(...)
+                    }
+                };
+
+                const stopCharging = async () => {
+                    if (!selectedDevice.value) return;
+                    addLog('INFO', `Stopping Charge for ${selectedDevice.value.id}...`);
+
+                    if (simulationMode.value && engine) {
+                        engine.stopCharging(selectedDevice.value.id);
+                        addLog('SUCCESS', 'Stop Command Sent');
+                    }
+                };
+
+                const toggleDeviceConnection = () => {
+                    if (!selectedDevice.value) return;
+                    if (simulationMode.value && engine) {
+                        engine.toggleConnection(selectedDevice.value.id);
+                    }
+                };
+
+                const simulatePlugUnplug = () => {
+                    if (!selectedDevice.value) return;
+                    if (simulationMode.value && engine) {
+                        engine.fault(selectedDevice.value.id);
+                        addLog('WARN', 'Plug Unplugged unexpectedly!');
+                    }
+                };
+
+                const simulateAutoStop = () => {
+                    if (!selectedDevice.value) return;
+                    if (simulationMode.value && engine) {
+                        engine.stopCharging(selectedDevice.value.id, 'Auto-Stop (Full)');
+                    }
+                };
+
+                // Lifecycle
+                onMounted(() => {
+                    addLog('INFO', 'System Initialized');
+                    updateTime();
+                    timeInterval = setInterval(updateTime, 1000);
+
+                    // Start Simulation by default
+                    engine = new SimulationEngine(handleEngineEvent);
+                    devices.value = Array.from(engine.devices.values());
+                });
+
+                onUnmounted(() => {
+                    if (timeInterval) clearInterval(timeInterval);
+                    if (engine) engine.stopEngine();
+                });
+
+                return {
+                    simulationMode,
+                    devices,
+                    filteredDevices,
+                    searchQuery,
+                    selectedDevice,
+                    logs,
+                    currentTime,
+                    logContainer,
+                    autoScroll,
+                    powerHistory,
+
+                    selectDevice,
+                    toggleSimulationMode,
+                    startCharging,
+                    stopCharging,
+                    toggleDeviceConnection,
+                    simulatePlugUnplug,
+                    simulateAutoStop,
+                    clearLogs,
+                    toggleAutoScroll,
+                    formatDuration
+                };
+            }
+        }).mount('#app');
+    </script>
 </body>
+
 </html>
