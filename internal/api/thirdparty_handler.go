@@ -370,27 +370,6 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		return
 	}
 
-	// 6.5. P1-3: 在同一事务中更新ports表状态为occupied(1)
-	// 避免跨表状态不一致：订单pending时端口应标记为occupied
-	updatePortSQL := `
-		UPDATE ports
-		SET status = 1, updated_at = NOW()
-		WHERE device_id = $1 AND port_no = $2
-	`
-	_, err = tx.Exec(ctx, updatePortSQL, devID, req.PortNo)
-	if err != nil {
-		tx.Rollback(ctx)
-		h.logger.Error("P1-3: failed to update port status", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code: 500,
-			// EN: failed to update port status
-			Message:   "更新端口状态失败",
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
-		return
-	}
-
 	// 7. 提交事务
 	if err := tx.Commit(ctx); err != nil {
 		h.logger.Error("failed to commit transaction", zap.Error(err))

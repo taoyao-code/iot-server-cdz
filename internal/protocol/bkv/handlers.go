@@ -125,14 +125,15 @@ func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
 	// 在此处确保设备至少有默认的2个端口（A/B），避免API返回空数组
 	ports, err := h.Repo.ListPortsByPhyID(ctx, devicePhyID)
 	if err == nil && len(ports) == 0 {
-		// 创建默认端口A (port_no=0, status=0-空闲)
-		if err := h.Repo.UpsertPortState(ctx, devID, 0, 0, nil); err != nil {
+		// 创建默认端口A (port_no=0, status=0x01-在线)
+		initStatus := 0x01 // 0x01 = bit0(在线)
+		if err := h.Repo.UpsertPortState(ctx, devID, 0, initStatus, nil); err != nil {
 			// 端口初始化失败不应中断心跳处理，仅记录错误
 			_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0xFFFF, 0,
 				[]byte(fmt.Sprintf("failed to init port 0: %v", err)), false)
 		}
-		// 创建默认端口B (port_no=1, status=0-空闲)
-		if err := h.Repo.UpsertPortState(ctx, devID, 1, 0, nil); err != nil {
+		// 创建默认端口B (port_no=1, status=0x01-在线)
+		if err := h.Repo.UpsertPortState(ctx, devID, 1, initStatus, nil); err != nil {
 			_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0xFFFF, 0,
 				[]byte(fmt.Sprintf("failed to init port 1: %v", err)), false)
 		}
@@ -418,7 +419,7 @@ func (h *Handlers) handleBKVChargingEnd(ctx context.Context, deviceID int64, pay
 	}
 
 	// 更新端口状态为空闲
-	idleStatus := 0 // 0=空闲
+	idleStatus := 0x09 // 0x09 = bit0(在线) + bit3(空载)
 	return h.Repo.UpsertPortState(ctx, deviceID, portNo, idleStatus, nil)
 }
 
@@ -440,51 +441,8 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 
 	success := true
 
-	// 如果是下行控制指令（平台发给设备）
-	if !f.IsUplink() {
-		// 使用增强的解析器解析控制指令
-		cmd, err := ParseBKVControlCommand(f.Data)
-		if err != nil {
-			success = false
-			return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, success)
-		}
-
-		if cmd.Switch == SwitchOn {
-			// 开始充电：创建订单并更新端口状态
-			orderHex := fmt.Sprintf("%04X%02X%02X", f.MsgID, cmd.SocketNo, cmd.Port)
-
-			// 根据充电模式确定充电参数
-			var durationSec int
-			var kwhTarget int
-
-			switch cmd.Mode {
-			case ChargingModeByTime:
-				durationSec = int(cmd.Duration) * 60 // 分钟转秒
-			case ChargingModeByPower:
-				kwhTarget = int(cmd.Energy) // Wh转换为0.01kWh需要除以10
-			case ChargingModeByLevel:
-				// 按功率充电使用总支付金额作为目标
-				durationSec = int(cmd.Duration) * 60
-			}
-
-			// 创建充电订单（状态1=进行中）
-			if err := h.Repo.UpsertOrderProgress(ctx, devID, int(cmd.Port), orderHex, durationSec, kwhTarget, 1, nil); err != nil {
-				success = false
-			} else {
-				// 更新端口状态为充电中
-				chargingStatus := 1 // 1=充电中
-				if err := h.Repo.UpsertPortState(ctx, devID, int(cmd.Port), chargingStatus, nil); err != nil {
-					success = false
-				}
-			}
-		} else {
-			// 停止充电：更新端口状态为空闲
-			idleStatus := 0 // 0=空闲
-			if err := h.Repo.UpsertPortState(ctx, devID, int(cmd.Port), idleStatus, nil); err != nil {
-				success = false
-			}
-		}
-	} else {
+	// 只处理上行：设备回复
+	if f.IsUplink() {
 		// 上行：设备回复
 		if len(f.Data) >= 2 && len(f.Data) < 64 {
 			innerLen := (int(f.Data[0]) << 8) | int(f.Data[1])
@@ -561,6 +519,13 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 								completeLog := fmt.Sprintf("✅订单已完成: %s (插孔%d, business_no=0x%04X)", chargingOrder.OrderNo, portNo, businessNo)
 								_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(completeLog), true)
 
+								// 同步更新端口状态为空闲 (0x09 = bit0在线 + bit3空载)
+								idleStatus := 0x09
+								if err := h.Repo.UpsertPortState(ctx, devID, protocolPortNo, idleStatus, nil); err != nil {
+									_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()),
+										[]byte(fmt.Sprintf("⚠️更新端口状态失败: port=%d err=%v", protocolPortNo, err)), false)
+								}
+
 								if h.EventQueue != nil {
 									h.pushChargingCompletedEvent(ctx, devicePhyID, chargingOrder.OrderNo, protocolPortNo, endReason, nil)
 								}
@@ -573,6 +538,13 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 							if updateErr := h.Repo.UpdateOrderToCharging(ctx, pendingOrder.OrderNo, startTime); updateErr == nil {
 								updateLog := fmt.Sprintf("✅订单状态已更新: %s -> charging (business_no=0x%04X)", pendingOrder.OrderNo, businessNo)
 								_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(updateLog), true)
+
+								// 同步更新端口状态为充电中 (0x81 = bit0在线 + bit7充电)
+								chargingStatus := 0x81
+								if err := h.Repo.UpsertPortState(ctx, devID, protocolPortNo, chargingStatus, nil); err != nil {
+									_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()),
+										[]byte(fmt.Sprintf("⚠️更新端口状态失败: port=%d err=%v", protocolPortNo, err)), false)
+								}
 
 								if h.EventQueue != nil {
 									h.pushChargingStartedEvent(ctx, devicePhyID, pendingOrder.OrderNo, protocolPortNo, nil)
@@ -626,7 +598,7 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 				}
 
 				// 更新端口状态为空闲
-				idleStatus := 0
+				idleStatus := 0x09                         // 0x09 = bit0(在线) + bit3(空载)
 				powerW := int(endReport.InstantPower) / 10 // 转换为实际瓦数
 				if err := h.Repo.UpsertPortState(ctx, devID, int(endReport.Port), idleStatus, &powerW); err != nil {
 					success = false
@@ -732,7 +704,7 @@ func (h *Handlers) HandleChargingEnd(ctx context.Context, f *Frame) error {
 				success = false
 			} else {
 				// 更新端口状态为空闲
-				idleStatus := 0 // 0=空闲
+				idleStatus := 0x09 // 0x09 = bit0(在线) + bit3(空载)
 				if err := h.Repo.UpsertPortState(ctx, devID, portNo, idleStatus, nil); err != nil {
 					success = false
 				}
