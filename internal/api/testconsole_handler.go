@@ -654,7 +654,7 @@ func (h *TestConsoleHandler) StopTestCharge(c *gin.Context) {
 	h.logger.Info("test stop charge requested",
 		zap.String("test_session_id", testSessionID),
 		zap.String("device_phy_id", devicePhyID),
-		zap.Int("port_no", req.PortNo))
+		zap.Int("port_no", *req.PortNo))
 
 	// 将test_session_id注入到context中，供时间线服务记录
 	c.Request = c.Request.Clone(context.WithValue(ctx, "test_session_id", testSessionID))

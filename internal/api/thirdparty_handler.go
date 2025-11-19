@@ -502,7 +502,7 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 
 // StopChargeRequest 停止充电请求
 type StopChargeRequest struct {
-	PortNo int `json:"port_no" binding:"required,min=0"` // 端口号：0=A端口, 1=B端口, ...（必填）
+	PortNo *int `json:"port_no" binding:"required,min=0"` // 端口号：0=A端口, 1=B端口, ...（必填，使用指针避免0值validation问题）
 }
 
 // StopCharge 停止充电
@@ -539,7 +539,7 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 
 	h.logger.Info("stop charge requested",
 		zap.String("device_phy_id", devicePhyID),
-		zap.Int("port_no", req.PortNo))
+		zap.Int("port_no", *req.PortNo))
 
 	// 1. 验证设备存在
 	devID, err := h.repo.EnsureDevice(ctx, devicePhyID)
@@ -564,7 +564,7 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		WHERE device_id = $1 AND port_no = $2 AND status IN ($3, $4, $5)
 		ORDER BY created_at DESC LIMIT 1
 	`
-	err = h.repo.Pool.QueryRow(ctx, queryOrderSQL, devID, req.PortNo,
+	err = h.repo.Pool.QueryRow(ctx, queryOrderSQL, devID, *req.PortNo,
 		OrderStatusPending, OrderStatusConfirmed, OrderStatusCharging).Scan(&orderNo, &businessNo, &orderStatus)
 	if err != nil {
 		h.logger.Warn("no active order found", zap.Error(err))
@@ -619,7 +619,7 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	if h.outboundQ != nil {
 		msgID := uint32(time.Now().Unix() % 65536)
 		// 构造停止充电控制负载：socketNo=0, port 映射, switch=0
-		innerStopData := h.encodeStopControlPayload(uint8(0), uint8(mapPort(req.PortNo)), biz)
+		innerStopData := h.encodeStopControlPayload(uint8(0), uint8(mapPort(*req.PortNo)), biz)
 
 		// 【关键修复】长度=参数字节数（不含0x07）
 		stopParamLen := len(innerStopData) - 1
