@@ -117,6 +117,10 @@ func (f *fakeRepo) CancelOrderByPort(ctx context.Context, deviceID int64, portNo
 	return nil
 }
 
+func (f *fakeRepo) GetOrderByBusinessNo(ctx context.Context, deviceID int64, businessNo uint16) (*pgstorage.Order, error) {
+	return nil, nil
+}
+
 func TestHandlers_Heartbeat(t *testing.T) {
 	fr := newFakeRepo()
 	h := &Handlers{Repo: fr}

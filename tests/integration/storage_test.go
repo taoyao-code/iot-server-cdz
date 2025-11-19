@@ -181,7 +181,7 @@ func TestStorageOrderOperations(t *testing.T) {
 		orders, err := repo.ListOrdersByPhyID(context.Background(), device.PhyID, 10, 0)
 		require.NoError(t, err)
 		require.Len(t, orders, 1)
-		assert.Equal(t, 2, orders[0].Status) // 已结束
+		assert.Equal(t, 3, orders[0].Status) // 已结算 (3=settled/completed)
 		assert.NotNil(t, orders[0].EndTime)
 	})
 }

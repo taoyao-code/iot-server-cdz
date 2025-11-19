@@ -496,6 +496,10 @@ func (m *MockRepo) CompleteOrderByPort(ctx context.Context, deviceID int64, port
 	return nil
 }
 
+func (m *MockRepo) GetOrderByBusinessNo(ctx context.Context, deviceID int64, businessNo uint16) (*pgstorage.Order, error) {
+	return nil, nil
+}
+
 // Week 6: 组网管理方法（测试桩）
 func (m *MockRepo) UpsertGatewaySocket(ctx context.Context, socket *pgstorage.GatewaySocket) error {
 	return nil

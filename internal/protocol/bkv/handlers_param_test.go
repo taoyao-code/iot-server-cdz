@@ -93,6 +93,10 @@ func (f *fakeRepoParam) CompleteOrderByPort(ctx context.Context, deviceID int64,
 	return nil
 }
 
+func (f *fakeRepoParam) GetOrderByBusinessNo(ctx context.Context, deviceID int64, businessNo uint16) (*pgstorage.Order, error) {
+	return nil, nil
+}
+
 // Week 6: 组网管理方法（测试桩）
 func (f *fakeRepoParam) UpsertGatewaySocket(ctx context.Context, socket *pgstorage.GatewaySocket) error {
 	return nil

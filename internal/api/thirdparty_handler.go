@@ -1383,31 +1383,28 @@ func mapPort(port int) int {
 }
 
 // encodeStartControlPayload 构造0x0015开始充电控制负载
-// 格式对齐 tlv.go 中的 BKVControlCommand 解析：
-// [socketNo(1)][port(1)][switch(1)][mode(1)][duration(2)][energy(2可0)][金额/档位等可选]
+// 格式：[0x07][插座1B][插孔1B][开关1B][模式1B][时长2B][业务号2B]
+// 参考：docs/协议/BKV设备对接总结.md 2.1节
 func (h *ThirdPartyHandler) encodeStartControlPayload(socketNo uint8, port uint8, mode uint8, durationMin uint16, businessNo uint16) []byte {
-	// 0x0015控制命令：按协议2.2.8格式
-	// 格式：BKV子命令0x07(1) + 插座号(1) + 插孔号(1) + 开关(1) + 模式(1) + 时长(2) + 电量(2) + 业务号(2)
-	buf := make([]byte, 11)
+	// 0x0015控制命令：按协议格式
+	buf := make([]byte, 9)
 	buf[0] = 0x07                   // BKV子命令：0x07=控制命令
 	buf[1] = socketNo               // 插座号
 	buf[2] = port                   // 插孔号 (0=A孔, 1=B孔)
 	buf[3] = 0x01                   // 开关：1=开启, 0=关闭
-	buf[4] = mode                   // 充电模式：1=按时长,2=按电量
+	buf[4] = mode                   // 充电模式：1=按时长,0=按电量
 	buf[5] = byte(durationMin >> 8) // 时长高字节
 	buf[6] = byte(durationMin)      // 时长低字节
-	buf[7] = 0x00                   // 电量高字节（按时长模式为0）
-	buf[8] = 0x00                   // 电量低字节（按时长模式为0）
-	buf[9] = byte(businessNo >> 8)  // 业务号高字节
-	buf[10] = byte(businessNo)      // 业务号低字节
+	buf[7] = byte(businessNo >> 8)  // 业务号高字节
+	buf[8] = byte(businessNo)       // 业务号低字节
 	return buf
 }
 
 // encodeStopControlPayload 构造0x0015停止充电控制负载
 func (h *ThirdPartyHandler) encodeStopControlPayload(socketNo uint8, port uint8, businessNo uint16) []byte {
 	// 0x0015停止命令：开关=0表示关闭
-	// 格式：BKV子命令0x07(1) + 插座号(1) + 插孔号(1) + 开关(1) + 模式(1) + 时长(2) + 电量(2) + 业务号(2)
-	buf := make([]byte, 11)
+	// 格式：[0x07][插座1B][插孔1B][开关1B][模式1B][时长2B][业务号2B]
+	buf := make([]byte, 9)
 	buf[0] = 0x07     // BKV子命令：0x07=控制命令
 	buf[1] = socketNo // 插座号
 	buf[2] = port     // 插孔号
@@ -1415,10 +1412,8 @@ func (h *ThirdPartyHandler) encodeStopControlPayload(socketNo uint8, port uint8,
 	buf[4] = 0x01     // 模式（停止时无意义，填1）
 	buf[5] = 0x00     // 时长高字节
 	buf[6] = 0x00     // 时长低字节
-	buf[7] = 0x00     // 电量高字节
-	buf[8] = 0x00     // 电量低字节
-	buf[9] = byte(businessNo >> 8)
-	buf[10] = byte(businessNo)
+	buf[7] = byte(businessNo >> 8)
+	buf[8] = byte(businessNo)
 	return buf
 }
 
