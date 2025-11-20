@@ -443,8 +443,43 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 
 	// 只处理上行：设备回复
 	if f.IsUplink() {
-		// 上行：设备回复
-		if len(f.Data) >= 2 && len(f.Data) < 64 {
+		// 优先识别「充电结束上报」帧（长度型 payload，cmd=0x02）
+		// 避免被下面的「控制ACK」分支误吞掉导致不结算订单/不收敛端口状态。
+		if len(f.Data) >= 20 && f.Data[2] == 0x02 {
+			endReport, err := ParseBKVChargingEnd(f.Data)
+			if err == nil {
+				// 处理充电结束
+				orderHex := fmt.Sprintf("%04X", endReport.BusinessNo)
+
+				// 计算实际充电时长和用电量
+				durationSec := int(endReport.ChargingTime) * 60 // 分钟转秒
+				kwhUsed := int(endReport.EnergyUsed)            // 已经是0.01kWh单位
+
+				// 映射结束原因到平台统一原因码
+				var platformReason int // 默认正常结束
+				if h.Reason != nil {
+					if reason, ok := h.Reason.Translate(int(endReport.EndReason)); ok {
+						platformReason = reason
+					}
+				}
+
+				// 结算订单
+				if err := h.Repo.SettleOrder(ctx, devID, int(endReport.Port), orderHex, durationSec, kwhUsed, platformReason); err != nil {
+					success = false
+				}
+
+				// 更新端口状态为空闲
+				idleStatus := 0x09                         // 0x09 = bit0(在线) + bit3(空载)
+				powerW := int(endReport.InstantPower) / 10 // 转换为实际瓦数
+				if err := h.Repo.UpsertPortState(ctx, devID, int(endReport.Port), idleStatus, &powerW); err != nil {
+					success = false
+				}
+			} else {
+				// 解析失败则标记失败，方便后续排查，但仍记录原始payload
+				success = false
+			}
+		} else if len(f.Data) >= 2 && len(f.Data) < 64 {
+			// 上行：设备控制ACK回复（长度型payload，子命令=0x07）
 			innerLen := (int(f.Data[0]) << 8) | int(f.Data[1])
 			totalLen := 2 + innerLen
 			if innerLen >= 5 && len(f.Data) >= totalLen {
@@ -571,37 +606,6 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 							}
 						}
 					}
-				}
-			}
-		} else if len(f.Data) >= 15 {
-			// 长数据：充电结束上报
-			endReport, err := ParseBKVChargingEnd(f.Data)
-			if err == nil {
-				// 处理充电结束
-				orderHex := fmt.Sprintf("%04X", endReport.BusinessNo)
-
-				// 计算实际充电时长和用电量
-				durationSec := int(endReport.ChargingTime) * 60 // 分钟转秒
-				kwhUsed := int(endReport.EnergyUsed)            // 已经是0.01kWh单位
-
-				// 映射结束原因到平台统一原因码
-				var platformReason int = 0 // 默认正常结束
-				if h.Reason != nil {
-					if reason, ok := h.Reason.Translate(int(endReport.EndReason)); ok {
-						platformReason = reason
-					}
-				}
-
-				// 结算订单
-				if err := h.Repo.SettleOrder(ctx, devID, int(endReport.Port), orderHex, durationSec, kwhUsed, platformReason); err != nil {
-					success = false
-				}
-
-				// 更新端口状态为空闲
-				idleStatus := 0x09                         // 0x09 = bit0(在线) + bit3(空载)
-				powerW := int(endReport.InstantPower) / 10 // 转换为实际瓦数
-				if err := h.Repo.UpsertPortState(ctx, devID, int(endReport.Port), idleStatus, &powerW); err != nil {
-					success = false
 				}
 			}
 		}
