@@ -751,6 +751,14 @@ sendStopCommand:
 		responseData["note"] = "订单将在30秒后自动变为stopped,或收到设备ACK后立即停止"
 	}
 
+	// 将最新端口状态快照附加到响应中，方便调用方直接看到“停止后”的状态视图。
+	var latestPortStatus int
+	const qPort = `SELECT status FROM ports WHERE device_id = $1 AND port_no = $2`
+	if err := h.repo.Pool.QueryRow(ctx, qPort, devID, *req.PortNo).Scan(&latestPortStatus); err == nil {
+		responseData["port_status"] = latestPortStatus
+		responseData["is_charging"] = isBKVChargingStatus(latestPortStatus)
+	}
+
 	c.JSON(http.StatusOK, StandardResponse{
 		Code:      0,
 		Message:   message,
