@@ -228,12 +228,12 @@ func (h *Handlers) HandleBKVStatus(ctx context.Context, f *Frame) error {
 
 	// 如果是充电结束上报，处理订单结算
 	if payload.IsChargingEnd() {
-		return h.handleBKVChargingEnd(ctx, devID, payload)
+		return h.handleBKVChargingEnd(ctx, devID, f, payload)
 	}
 
 	// 如果是异常事件上报，处理异常信息
 	if payload.IsExceptionReport() {
-		return h.handleExceptionEvent(ctx, devID, payload)
+		return h.handleExceptionEvent(ctx, devID, f, payload)
 	}
 
 	// 如果是参数查询，记录参数信息
@@ -251,22 +251,70 @@ func (h *Handlers) HandleBKVStatus(ctx context.Context, f *Frame) error {
 
 // sendStatusAck 构造并下发0x1017状态上报ACK
 func (h *Handlers) sendStatusAck(ctx context.Context, f *Frame, payload *BKVPayload, success bool) {
-	if h == nil || h.Outbound == nil || payload == nil {
+	if h == nil || payload == nil {
 		return
 	}
 
 	data, err := EncodeBKVStatusAck(payload, success)
 	if err != nil {
-		if h.Repo != nil && payload.GatewayID != "" {
-			if devID, derr := h.Repo.EnsureDevice(ctx, payload.GatewayID); derr == nil {
-				msg := []byte(fmt.Sprintf("status ack encode failed: %v", err))
-				_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0xFFFF, 0, msg, false)
-			}
-		}
+		h.logAckIssue(ctx, f, payload, "status ack encode failed", err)
 		return
 	}
 
-	// 复用收到的网关ID，保持和上行一致
+	h.deliverBKVAck(ctx, f, payload, data, "status")
+}
+
+func (h *Handlers) sendChargingEndAck(ctx context.Context, f *Frame, payload *BKVPayload, socketNo, portNo int, success bool) {
+	if h == nil || payload == nil {
+		return
+	}
+
+	var socketPtr *int
+	if socketNo >= 0 {
+		s := socketNo
+		socketPtr = &s
+	}
+
+	var portPtr *int
+	if portNo >= 0 {
+		p := portNo
+		portPtr = &p
+	}
+
+	data, err := EncodeBKVChargingEndAck(payload, socketPtr, portPtr, success)
+	if err != nil {
+		h.logAckIssue(ctx, f, payload, "charging-end ack encode failed", err)
+		return
+	}
+
+	h.deliverBKVAck(ctx, f, payload, data, "charging-end")
+}
+
+func (h *Handlers) sendExceptionAck(ctx context.Context, f *Frame, payload *BKVPayload, socketNo int, success bool) {
+	if h == nil || payload == nil {
+		return
+	}
+
+	var socketPtr *int
+	if socketNo >= 0 {
+		s := socketNo
+		socketPtr = &s
+	}
+
+	data, err := EncodeBKVExceptionAck(payload, socketPtr, success)
+	if err != nil {
+		h.logAckIssue(ctx, f, payload, "exception ack encode failed", err)
+		return
+	}
+
+	h.deliverBKVAck(ctx, f, payload, data, "exception")
+}
+
+func (h *Handlers) deliverBKVAck(ctx context.Context, f *Frame, payload *BKVPayload, data []byte, label string) {
+	if h == nil || h.Outbound == nil || payload == nil || len(data) == 0 {
+		return
+	}
+
 	targetGateway := payload.GatewayID
 	if targetGateway == "" {
 		targetGateway = f.GatewayID
@@ -276,12 +324,39 @@ func (h *Handlers) sendStatusAck(ctx context.Context, f *Frame, payload *BKVPayl
 		return
 	}
 
-	if err := h.Outbound.SendDownlink(targetGateway, 0x1000, f.MsgID, data); err != nil && h.Repo != nil {
-		if devID, derr := h.Repo.EnsureDevice(ctx, targetGateway); derr == nil {
-			msg := []byte(fmt.Sprintf("status ack send failed: %v", err))
-			_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x1000, 0, msg, false)
-		}
+	if err := h.Outbound.SendDownlink(targetGateway, 0x1000, f.MsgID, data); err != nil {
+		h.logAckIssue(ctx, f, payload, fmt.Sprintf("%s ack send failed", label), err)
 	}
+}
+
+func (h *Handlers) logAckIssue(ctx context.Context, f *Frame, payload *BKVPayload, label string, ackErr error) {
+	if h == nil || h.Repo == nil || ackErr == nil {
+		return
+	}
+
+	gateway := ""
+	if payload != nil {
+		gateway = payload.GatewayID
+	}
+	if gateway == "" && f != nil {
+		gateway = f.GatewayID
+	}
+	if gateway == "" {
+		return
+	}
+
+	devID, err := h.Repo.EnsureDevice(ctx, gateway)
+	if err != nil {
+		return
+	}
+
+	msgID := 0
+	if f != nil {
+		msgID = int(f.MsgID)
+	}
+
+	msg := []byte(fmt.Sprintf("%s: %v", label, ackErr))
+	_ = h.Repo.InsertCmdLog(ctx, devID, msgID, 0xFFFF, 0, msg, false)
 }
 
 // handleSocketStatusUpdate 处理插座状态更新
@@ -406,16 +481,26 @@ func (h *Handlers) handleSocketStatusUpdateSimple(ctx context.Context, deviceID 
 }
 
 // handleBKVChargingEnd 处理BKV格式的充电结束上报
-func (h *Handlers) handleBKVChargingEnd(ctx context.Context, deviceID int64, payload *BKVPayload) error {
-	var portNo int = 0
-	var orderID int = 0
-	var kwh01 int = 0
-	var durationSec int = 0
-	var reason int = 0
+func (h *Handlers) handleBKVChargingEnd(ctx context.Context, deviceID int64, f *Frame, payload *BKVPayload) error {
+	var socketNo int = -1
+	var portNo int = -1
+	var orderID int
+	var kwh01 int
+	var durationSec int
+	var reason int
+	success := false
+
+	defer func() {
+		h.sendChargingEndAck(ctx, f, payload, socketNo, portNo, success)
+	}()
 
 	// 解析BKV字段
 	for _, field := range payload.Fields {
 		switch field.Tag {
+		case 0x4A: // 插座号
+			if len(field.Value) >= 1 {
+				socketNo = int(field.Value[0])
+			}
 		case 0x08: // 插孔号
 			if len(field.Value) >= 1 {
 				portNo = int(field.Value[0])
@@ -450,14 +535,24 @@ func (h *Handlers) handleBKVChargingEnd(ctx context.Context, deviceID int64, pay
 	// 生成订单号
 	orderHex := fmt.Sprintf("%04X", orderID)
 
+	actualPort := portNo
+	if actualPort < 0 {
+		actualPort = 0
+	}
+
 	// 结算订单
-	if err := h.Repo.SettleOrder(ctx, deviceID, portNo, orderHex, durationSec, kwh01, reason); err != nil {
+	if err := h.Repo.SettleOrder(ctx, deviceID, actualPort, orderHex, durationSec, kwh01, reason); err != nil {
 		return err
 	}
 
 	// 更新端口状态为空闲
 	idleStatus := 0x09 // 0x09 = bit0(在线) + bit3(空载)
-	return h.Repo.UpsertPortState(ctx, deviceID, portNo, idleStatus, nil)
+	if err := h.Repo.UpsertPortState(ctx, deviceID, actualPort, idleStatus, nil); err != nil {
+		return err
+	}
+
+	success = true
+	return nil
 }
 
 // HandleControl 处理控制指令 (cmd=0x0015)
@@ -918,18 +1013,32 @@ func (h *Handlers) HandleParam(ctx context.Context, f *Frame) error {
 }
 
 // handleExceptionEvent 处理异常事件上报
-func (h *Handlers) handleExceptionEvent(ctx context.Context, deviceID int64, payload *BKVPayload) error {
+func (h *Handlers) handleExceptionEvent(ctx context.Context, deviceID int64, f *Frame, payload *BKVPayload) error {
 	event, err := ParseBKVExceptionEvent(payload)
 	if err != nil {
+		h.sendExceptionAck(ctx, f, payload, -1, false)
 		return fmt.Errorf("failed to parse exception event: %w", err)
 	}
+
+	success := false
+	defer func() {
+		socket := -1
+		if event != nil {
+			socket = int(event.SocketNo)
+		}
+		h.sendExceptionAck(ctx, f, payload, socket, success)
+	}()
 
 	// 这里可以根据异常类型进行不同的处理
 	// 例如：更新设备状态、发送告警、记录异常日志等
 
 	// 记录异常事件到日志（可以扩展为专门的异常事件表）
-	success := true
-	return h.Repo.InsertCmdLog(ctx, deviceID, 0, int(payload.Cmd), 1, []byte(fmt.Sprintf("Exception: Socket=%d, Reason=%d", event.SocketNo, event.SocketEventReason)), success)
+	if err := h.Repo.InsertCmdLog(ctx, deviceID, 0, int(payload.Cmd), 1, []byte(fmt.Sprintf("Exception: Socket=%d, Reason=%d", event.SocketNo, event.SocketEventReason)), true); err != nil {
+		return err
+	}
+
+	success = true
+	return nil
 }
 
 // handleParameterQuery 处理参数查询

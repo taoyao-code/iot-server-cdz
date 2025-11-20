@@ -7,10 +7,13 @@ import (
 	"fmt"
 )
 
+func encodeBKVField(tag, value byte) []byte {
+	return []byte{0x03, 0x01, tag, value}
+}
+
 // encodeBKVAck 构造BKV子协议ACK载荷
-// 结构：04 01 01 [cmd] 0a 01 02 [frameSeq:8] 09 01 03 [gateway:7]
-//   - 可选扩展字段 + 03 01 0f [status]
-func encodeBKVAck(cmd uint16, frameSeq uint64, gatewayID string, status byte, leading []byte) ([]byte, error) {
+// 结构：04 01 01 [cmd] 0a 01 02 [frameSeq:8] 09 01 03 [gateway:7] + fields...
+func encodeBKVAck(cmd uint16, frameSeq uint64, gatewayID string, fields ...[]byte) ([]byte, error) {
 	gatewayBytes, err := hex.DecodeString(gatewayID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid gateway id %q: %w", gatewayID, err)
@@ -40,12 +43,12 @@ func encodeBKVAck(cmd uint16, frameSeq uint64, gatewayID string, status byte, le
 	buf.Write([]byte{0x09, 0x01, 0x03})
 	buf.Write(gatewayBytes)
 
-	if len(leading) > 0 {
-		buf.Write(leading)
+	for _, field := range fields {
+		if len(field) == 0 {
+			continue
+		}
+		buf.Write(field)
 	}
-
-	// ACK字段写在结尾，保持与协议样例一致：03010f01
-	buf.Write([]byte{0x03, 0x01, 0x0f, status})
 
 	return buf.Bytes(), nil
 }
@@ -60,6 +63,46 @@ func EncodeBKVStatusAck(payload *BKVPayload, success bool) ([]byte, error) {
 	if success {
 		status = 0x01
 	}
+	return encodeBKVAck(payload.Cmd, payload.FrameSeq, payload.GatewayID, encodeBKVField(0x0F, status))
+}
 
-	return encodeBKVAck(payload.Cmd, payload.FrameSeq, payload.GatewayID, status, nil)
+// EncodeBKVChargingEndAck 构造0x1004充电结束应答
+func EncodeBKVChargingEndAck(payload *BKVPayload, socketNo, portNo *int, success bool) ([]byte, error) {
+	if payload == nil {
+		return nil, fmt.Errorf("nil payload")
+	}
+
+	fields := make([][]byte, 0, 3)
+	status := byte(0x00)
+	if success {
+		status = 0x01
+	}
+	fields = append(fields, encodeBKVField(0x0F, status))
+	if socketNo != nil && *socketNo >= 0 {
+		fields = append(fields, encodeBKVField(0x4A, byte(*socketNo)))
+	}
+	if portNo != nil && *portNo >= 0 {
+		fields = append(fields, encodeBKVField(0x08, byte(*portNo)))
+	}
+
+	return encodeBKVAck(payload.Cmd, payload.FrameSeq, payload.GatewayID, fields...)
+}
+
+// EncodeBKVExceptionAck 构造0x1010异常事件应答
+func EncodeBKVExceptionAck(payload *BKVPayload, socketNo *int, success bool) ([]byte, error) {
+	if payload == nil {
+		return nil, fmt.Errorf("nil payload")
+	}
+
+	fields := make([][]byte, 0, 2)
+	if socketNo != nil && *socketNo >= 0 {
+		fields = append(fields, encodeBKVField(0x4A, byte(*socketNo)))
+	}
+	status := byte(0x00)
+	if success {
+		status = 0x01
+	}
+	fields = append(fields, encodeBKVField(0x0F, status))
+
+	return encodeBKVAck(payload.Cmd, payload.FrameSeq, payload.GatewayID, fields...)
 }

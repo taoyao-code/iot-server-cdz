@@ -366,7 +366,12 @@ func TestHandlers_ChargingEnd_BKV(t *testing.T) {
 	}
 
 	// 测试处理逻辑
-	if err := h.handleBKVChargingEnd(context.Background(), 1, payload); err != nil {
+	frame := &Frame{
+		MsgID:     0x2001,
+		GatewayID: "82210225000520",
+	}
+
+	if err := h.handleBKVChargingEnd(context.Background(), 1, frame, payload); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
