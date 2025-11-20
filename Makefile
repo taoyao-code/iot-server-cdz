@@ -273,9 +273,11 @@ auto-deploy:
 	@echo "🚀 开始自动化部署..."
 	@echo ""
 	@echo "📋 执行步骤:"
-	@echo "  1. 构建Linux版本"
-	@echo "  2. 部署到测试服务器"
+	@echo "  1. 格式化代码"
+	@echo "  2. 构建Linux版本"
+	@echo "  3. 部署到测试服务器"
 	@echo ""
+	@$(MAKE) fmt
 	@$(MAKE) build-linux
 	@$(MAKE) quick-deploy
 	@echo ""

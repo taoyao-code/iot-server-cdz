@@ -688,6 +688,7 @@ sendStopCommand:
 	}
 
 	// 3. 下发停止充电指令（BKV 0x0015控制设备）
+	stopCommandSent := false
 	if h.outboundQ != nil {
 		msgID := uint32(time.Now().Unix() % 65536)
 		// 构造停止充电控制负载：socketNo=0, port 映射, switch=0
@@ -715,6 +716,7 @@ sendStopCommand:
 			h.logger.Error("failed to push stop command", zap.Error(err))
 		} else {
 			h.logger.Info("stop command pushed", zap.String("order_no", orderNo))
+			stopCommandSent = true
 		}
 	}
 
@@ -731,9 +733,10 @@ sendStopCommand:
 
 	// 4. 返回成功响应
 	responseData := map[string]interface{}{
-		"device_id":   devicePhyID,
-		"port_no":     req.PortNo,
-		"business_no": int(biz),
+		"device_id":    devicePhyID,
+		"port_no":      req.PortNo,
+		"business_no":  int(biz),
+		"command_sent": stopCommandSent,
 	}
 
 	var message string
@@ -755,8 +758,11 @@ sendStopCommand:
 	var latestPortStatus int
 	const qPort = `SELECT status FROM ports WHERE device_id = $1 AND port_no = $2`
 	if err := h.repo.Pool.QueryRow(ctx, qPort, devID, *req.PortNo).Scan(&latestPortStatus); err == nil {
+		isCharging := isBKVChargingStatus(latestPortStatus)
 		responseData["port_status"] = latestPortStatus
-		responseData["is_charging"] = isBKVChargingStatus(latestPortStatus)
+		responseData["is_charging"] = isCharging
+		// state_converged 仅表示“从DB视角看端口不再显示充电”，不代表设备物理层一定已经停止。
+		responseData["state_converged"] = !isCharging
 	}
 
 	c.JSON(http.StatusOK, StandardResponse{

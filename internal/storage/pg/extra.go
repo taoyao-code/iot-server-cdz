@@ -272,7 +272,17 @@ func (r *Repository) FinalizeOrderAndPort(ctx context.Context, orderNo string, o
 			END
 		WHERE order_no = $2 AND status = $3`
 
-	tag, err := tx.Exec(ctx, qUpd, newStatus, orderNo, oldStatus, failureReason)
+	// 为避免在 failureReason=nil 时产生 SQLSTATE 42P08（无法推断参数类型），
+	// 这里显式构造参数，占位但仅在 newStatus=6 时真正写入 failure_reason。
+	var failureParam interface{}
+	if failureReason != nil {
+		failureParam = *failureReason
+	} else {
+		// 对于非失败终态，failure_reason 不会被覆盖，使用空字符串占位即可
+		failureParam = ""
+	}
+
+	tag, err := tx.Exec(ctx, qUpd, newStatus, orderNo, oldStatus, failureParam)
 	if err != nil {
 		return err
 	}

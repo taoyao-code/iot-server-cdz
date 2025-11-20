@@ -82,6 +82,9 @@ COPY --from=build /out/iot-server /app/iot-server
 COPY --from=build /src/configs/production.yaml /app/config.yaml
 COPY --from=build /src/configs/bkv_reason_map.yaml /app/configs/bkv_reason_map.yaml
 
+# 复制Web静态文件（测试控制台前端）
+COPY web/ /app/web/
+
 # 创建日志目录
 RUN mkdir -p /var/log/iot-server && \
     chown -R nonroot:root /var/log/iot-server /app

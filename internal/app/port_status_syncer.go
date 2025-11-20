@@ -210,7 +210,7 @@ func (s *PortStatusSyncer) fixLonelyChargingPorts(ctx context.Context) {
 			  AND o.status IN (0,1,2,8,9,10) -- pending/confirmed/charging/cancelling/stopping/interrupted
 			LIMIT 1
 		) ao(is_active) ON TRUE
-		WHERE (p.status & 0x80) != 0      -- BKV bit7: 端口显示充电
+		WHERE (p.status & 128) <> 0       -- BKV charging bit set
 		  AND ao.is_active IS NULL        -- 无任何活跃订单
 		ORDER BY p.updated_at ASC
 		LIMIT 100
@@ -294,10 +294,7 @@ func (s *PortStatusSyncer) fixLonelyChargingPorts(ctx context.Context) {
 
 		// 收敛端口状态为空闲 (0x09 = bit0在线 + bit3空载)
 		const idleStatus = 0x09
-		if _, err := s.repo.Pool.Exec(ctx,
-			`UPDATE ports SET status=$1, updated_at=NOW() WHERE device_id=$2 AND port_no=$3`,
-			idleStatus, deviceID, portNo,
-		); err != nil {
+		if err := s.repo.UpsertPortState(ctx, deviceID, portNo, idleStatus, nil); err != nil {
 			s.logger.Error("P1-4: failed to auto-fix lonely charging port",
 				zap.Int64("device_id", deviceID),
 				zap.String("phy_id", phyID),
@@ -512,42 +509,15 @@ func (s *PortStatusSyncer) autoFixInconsistency(ctx context.Context, orderNo str
 		reason = "device_offline_auto_fix"
 	}
 
-	// 更新订单状态
-	updateQuery := `
-		UPDATE orders 
-		SET status = $1, 
-		    updated_at = NOW(),
-		    end_time = NOW()
-		WHERE order_no = $2 
-		  AND status = $3  -- 确保状态未被其他进程修改
-	`
-
-	result, err := s.repo.Pool.Exec(ctx, updateQuery, newStatus, orderNo, orderStatus)
-	if err != nil {
-		return fmt.Errorf("update order status: %w", err)
+	// 使用统一的 FinalizeOrderAndPort 收敛订单和端口状态，避免分散更新逻辑
+	const idleStatus = 0x09 // BKV idle: bit0在线 + bit3空载
+	var reasonPtr *string
+	if newStatus == 6 {
+		reasonPtr = &reason
 	}
 
-	rowsAffected := result.RowsAffected()
-	if rowsAffected == 0 {
-		return fmt.Errorf("order status already changed by another process")
-	}
-
-	// 关键修复：同时更新端口状态为空闲 (0x09 = bit0在线 + bit3空载)
-	// 当订单被标记为completed/failed时，端口应该恢复为空闲状态
-	idleStatus := 0x09
-	updatePortQuery := `
-		UPDATE ports
-		SET status = $1, updated_at = NOW()
-		WHERE device_id = $2 AND port_no = $3
-	`
-	if _, err := s.repo.Pool.Exec(ctx, updatePortQuery, idleStatus, deviceID, portNo); err != nil {
-		// 端口状态更新失败不应阻止订单状态更新（订单状态已提交）
-		// 记录错误但不返回，让自动修复继续
-		s.logger.Warn("P1-4: failed to update port status during auto-fix",
-			zap.String("order_no", orderNo),
-			zap.Int64("device_id", deviceID),
-			zap.Int("port_no", portNo),
-			zap.Error(err))
+	if err := s.repo.FinalizeOrderAndPort(ctx, orderNo, orderStatus, newStatus, idleStatus, reasonPtr); err != nil {
+		return fmt.Errorf("finalize order and port: %w", err)
 	}
 
 	// 一致性审计: 统一的自愈日志格式

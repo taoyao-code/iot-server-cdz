@@ -1,0 +1,28 @@
+/* Custom Scrollbar for Logs */
+.log-console::-webkit-scrollbar {
+    width: 8px;
+}
+
+.log-console::-webkit-scrollbar-track {
+    background: #1f2937;
+}
+
+.log-console::-webkit-scrollbar-thumb {
+    background: #4b5563;
+    border-radius: 4px;
+}
+
+.log-console::-webkit-scrollbar-thumb:hover {
+    background: #6b7280;
+}
+
+[v-cloak] {
+    display: none;
+}
+
+body {
+    background-color: #0f172a;
+    /* slate-950 */
+    color: #e2e8f0;
+    /* slate-200 */
+}

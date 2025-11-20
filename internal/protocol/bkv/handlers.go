@@ -1592,9 +1592,25 @@ func (h *Handlers) HandleSocketStateResponse(ctx context.Context, f *Frame) erro
 		float64(resp.Voltage)/10, resp.Current, resp.Power))
 	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
 
-	// 更新插座状态到数据库
-	dbStatus := int(resp.Status) // 0=空闲, 1=充电中, 2=故障
-	power := int(resp.Power)     // W
+	// 更新端口状态到数据库
+	// 为保持与 BKV 状态位图的一致性，这里将 0/1/2 的业务枚举映射为约定的位图值：
+	//   - 0: idle  → 0x09 (在线+空载)
+	//   - 1: charging → 0x81 (在线+充电)
+	//   - 2: fault → 0x00 (离线/故障，占位，不设置充电位)
+	var dbStatus int
+	switch resp.Status {
+	case 0:
+		dbStatus = 0x09
+	case 1:
+		dbStatus = 0x81
+	case 2:
+		dbStatus = 0x00
+	default:
+		// 未知枚举，保守处理为故障/离线
+		dbStatus = 0x00
+	}
+
+	power := int(resp.Power) // W
 	if err := h.Repo.UpsertPortState(ctx, devID, int(resp.SocketNo), dbStatus, &power); err != nil {
 		// 记录错误但不中断处理流程
 		errLog := []byte(fmt.Sprintf("❌failed to update port state: socket=%d err=%v", resp.SocketNo, err))
