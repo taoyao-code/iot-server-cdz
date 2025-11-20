@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/taoyao-code/iot-server/internal/metrics"
 	"github.com/taoyao-code/iot-server/internal/service"
 	"github.com/taoyao-code/iot-server/internal/session"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
@@ -38,6 +39,7 @@ func NewTestConsoleHandler(
 	sess session.SessionManager,
 	outboundQ *redisstorage.OutboundQueue,
 	eventQueue *thirdparty.EventQueue,
+	metrics *metrics.AppMetrics,
 	logger *zap.Logger,
 ) *TestConsoleHandler {
 	return &TestConsoleHandler{
@@ -45,7 +47,7 @@ func NewTestConsoleHandler(
 		sess:            sess,
 		outboundQ:       outboundQ,
 		eventQueue:      eventQueue,
-		thirdPartyH:     NewThirdPartyHandler(repo, sess, outboundQ, eventQueue, logger),
+		thirdPartyH:     NewThirdPartyHandler(repo, sess, outboundQ, eventQueue, metrics, logger),
 		timelineService: service.NewTimelineService(repo, logger),
 		logger:          logger,
 	}
@@ -435,6 +437,18 @@ func (h *TestConsoleHandler) ListTestScenarios(c *gin.Context) {
 			},
 		},
 		{
+			ID:          "auto-stop-by-duration",
+			Name:        "按时长自动停止",
+			Description: "验证按时长充电到期后，设备自动停止时订单和端口状态能正确收敛为完成/空闲",
+			Template: TestScenarioTemplate{
+				ChargeMode:      1, // 按时长
+				Amount:          100,
+				DurationMinutes: 1, // 1分钟自动停止
+				PricePerKwh:     100,
+				ServiceFee:      100,
+			},
+		},
+		{
 			ID:          "fallback-stop",
 			Name:        "端口在充电但无订单的强制停止",
 			Description: "模拟端口状态为充电但无任何活跃订单，调用停止接口验证fallback异常订单与端口自愈逻辑",
@@ -442,6 +456,30 @@ func (h *TestConsoleHandler) ListTestScenarios(c *gin.Context) {
 				ChargeMode:      1,
 				Amount:          100,
 				DurationMinutes: 5,
+				PricePerKwh:     100,
+				ServiceFee:      100,
+			},
+		},
+		{
+			ID:          "port-convergence-test",
+			Name:        "端口状态收敛验证",
+			Description: "完整的Start→Stop流程，验证订单终态化后端口状态在30秒内从charging收敛到idle，检测OrderMonitor和PortStatusSyncer的自愈能力",
+			Template: TestScenarioTemplate{
+				ChargeMode:      1,   // 按时长
+				Amount:          100, // 1元
+				DurationMinutes: 1,   // 1分钟短时充电
+				PricePerKwh:     100,
+				ServiceFee:      100,
+			},
+		},
+		{
+			ID:          "zombie-connection-test",
+			Name:        "僵尸连接检测与自愈",
+			Description: "验证TCP连接存在但心跳超时时的行为：SessionManager.IsOnlineWeighted降权判定、订单自动interrupt、端口状态修复。需要在设备端停止发送心跳但保持TCP连接",
+			Template: TestScenarioTemplate{
+				ChargeMode:      1,   // 按时长
+				Amount:          100, // 1元
+				DurationMinutes: 2,   // 2分钟，足够触发心跳超时
 				PricePerKwh:     100,
 				ServiceFee:      100,
 			},
@@ -562,10 +600,10 @@ func (h *TestConsoleHandler) StartTestCharge(c *gin.Context) {
 			return
 		}
 
-		// 检查是否已有活跃订单
+		// 检查是否已有活跃订单（仅pending/confirmed/charging，不包含过渡状态）
 		var existingOrder string
 		checkSQL := `SELECT order_no FROM orders
-			WHERE device_id = $1 AND port_no = $2 AND status IN (0, 2, 8, 9, 10)
+			WHERE device_id = $1 AND port_no = $2 AND status IN (0, 1, 2)
 			ORDER BY created_at DESC LIMIT 1`
 		_ = h.repo.Pool.QueryRow(ctx, checkSQL, device.ID, req.PortNo).Scan(&existingOrder)
 
@@ -618,7 +656,7 @@ func (h *TestConsoleHandler) StartTestCharge(c *gin.Context) {
 		})
 		return
 
-	case "normal-charge", "manual-stop", "":
+	case "normal-charge", "manual-stop", "auto-stop-by-duration", "":
 		// 场景：正常充电 或 手动停止充电 - 正常调用充电API
 		// 空scenario_id也走正常流程
 		h.logger.Info("scenario: normal flow",
@@ -817,11 +855,13 @@ func (h *TestConsoleHandler) GetTestSession(c *gin.Context) {
 }
 
 // getActiveOrders 获取设备的活跃订单
+// 注意：只包含真正的活跃状态（pending/confirmed/charging），不包含过渡状态（stopping/cancelling/interrupted）
+// 过渡状态订单应该在30-60秒内自动流转到终态，由OrderMonitor负责清理
 func (h *TestConsoleHandler) getActiveOrders(ctx context.Context, deviceID int64) ([]TestActiveOrder, error) {
 	query := `
 		SELECT order_no, port_no, status, start_time, amount_cent
 		FROM orders
-		WHERE device_id = $1 AND status IN (0, 2, 8, 9, 10)
+		WHERE device_id = $1 AND status IN (0, 1, 2)
 		ORDER BY created_at DESC
 		LIMIT 10
 	`

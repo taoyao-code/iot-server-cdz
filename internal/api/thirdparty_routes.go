@@ -3,6 +3,7 @@ package api
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/taoyao-code/iot-server/internal/api/middleware"
+	"github.com/taoyao-code/iot-server/internal/metrics"
 	"github.com/taoyao-code/iot-server/internal/session"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	redisstorage "github.com/taoyao-code/iot-server/internal/storage/redis"
@@ -17,11 +18,12 @@ func RegisterThirdPartyRoutes(
 	sess session.SessionManager,
 	outboundQ *redisstorage.OutboundQueue,
 	eventQueue *thirdparty.EventQueue,
+	metrics *metrics.AppMetrics,
 	authCfg middleware.AuthConfig,
 	logger *zap.Logger,
 ) {
 	// 创建处理器
-	handler := NewThirdPartyHandler(repo, sess, outboundQ, eventQueue, logger)
+	handler := NewThirdPartyHandler(repo, sess, outboundQ, eventQueue, metrics, logger)
 
 	// 第三方API路由组
 	// 使用第三方认证中间件（与内部API认证分开）

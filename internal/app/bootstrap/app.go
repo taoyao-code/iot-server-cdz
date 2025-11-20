@@ -136,11 +136,11 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 		log.Info("third party api authentication config",
 			zap.Int("api_keys_count", len(thirdpartyAuthCfg.APIKeys)),
 			zap.Bool("enabled", thirdpartyAuthCfg.Enabled))
-		api.RegisterThirdPartyRoutes(r, repo, sess, redisQueue, eventQueue, thirdpartyAuthCfg, log)
+		api.RegisterThirdPartyRoutes(r, repo, sess, redisQueue, eventQueue, appm, thirdpartyAuthCfg, log)
 
 		// 注册内部测试控制台路由（仅在启用时）
 		enableTestConsole := cfg.API.Auth.Enabled && len(cfg.API.Auth.APIKeys) > 0
-		api.RegisterTestConsoleRoutes(r, repo, sess, redisQueue, eventQueue, authCfg, log, enableTestConsole)
+		api.RegisterTestConsoleRoutes(r, repo, sess, redisQueue, eventQueue, appm, authCfg, log, enableTestConsole)
 
 		// 注册静态文件服务（测试控制台前端）
 		if enableTestConsole {

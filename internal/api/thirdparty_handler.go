@@ -209,6 +209,8 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 
 	// 4.1. 同时锁定orders和ports表（P1-3完整方案：防止跨表状态不一致）
 	// 🔥 关键修复: 使用SKIP LOCKED快速失败，锁定所有活跃订单
+	// 注意：这里需要包含过渡状态（8,9,10），因为正在stopping/cancelling的订单仍然占用端口
+	// 应该等待过渡状态完成后才能创建新订单
 	var existingOrderNo string
 	checkPortSQL := `
 		SELECT order_no FROM orders
@@ -945,12 +947,12 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 	// 3. 检查设备在线状态
 	isOnline := h.sess.IsOnline(devicePhyID, time.Now())
 
-	// 4. 查询当前活动订单（如果有）
+	// 4. 查询当前活动订单（如果有）- 仅查询真正的活跃状态
 	var activeOrderNo *string
 	var activePortNo *int
 	queryActiveOrderSQL := `
-		SELECT order_no, port_no FROM orders 
-		WHERE device_id = $1 AND status IN (0, 1, 2, 8, 9, 10)
+		SELECT order_no, port_no FROM orders
+		WHERE device_id = $1 AND status IN (0, 1, 2)
 		ORDER BY created_at DESC LIMIT 1
 	`
 	err = h.repo.Pool.QueryRow(ctx, queryActiveOrderSQL, devID).Scan(&activeOrderNo, &activePortNo)
@@ -1682,11 +1684,12 @@ func (h *ThirdPartyHandler) evaluateDeviceConsistency(ctx context.Context, devic
 		return "", ""
 	}
 
-	// 查询活跃订单（pending/confirmed/charging/cancelling/stopping/interrupted）
+	// 查询活跃订单（仅包含真正的活跃状态：pending/confirmed/charging）
+	// 不包含过渡状态（cancelling/stopping/interrupted），它们应该在30-60秒内流转到终态
 	const activeOrderSQL = `
 		SELECT order_no, status, port_no
 		FROM orders
-		WHERE device_id = $1 AND status IN (0,1,2,8,9,10)
+		WHERE device_id = $1 AND status IN (0,1,2)
 	`
 	rows, err := h.repo.Pool.Query(ctx, activeOrderSQL, deviceID)
 	if err != nil {
@@ -1735,6 +1738,54 @@ func (h *ThirdPartyHandler) evaluateDeviceConsistency(ctx context.Context, devic
 	// 规则3: 设备在线且存在活跃订单，但所有端口都不在充电状态
 	if isOnline && hasActiveOrder && !portCharging {
 		return "inconsistent", "active_order_but_ports_not_charging"
+	}
+
+	// 规则4: 检查过渡状态订单（stopping/cancelling/interrupted）是否长时间未流转
+	// 这些状态应该在30-60秒内完成，如果端口仍在充电则说明存在严重不一致
+	const transitionOrderSQL = `
+		SELECT order_no, status, port_no, updated_at
+		FROM orders
+		WHERE device_id = $1 AND status IN (8,9,10)
+	`
+	transitionRows, err := h.repo.Pool.Query(ctx, transitionOrderSQL, deviceID)
+	if err == nil {
+		defer transitionRows.Close()
+		for transitionRows.Next() {
+			var orderNo string
+			var status int
+			var portNo int
+			var updatedAt time.Time
+			if err := transitionRows.Scan(&orderNo, &status, &portNo, &updatedAt); err != nil {
+				continue
+			}
+
+			// 按状态选择超时时间窗口:
+			// - cancelling(8)/stopping(9): 30秒内视为正常过渡，不标记不一致
+			// - interrupted(10): 60秒内视为短暂中断，交由后台任务处理
+			var transitionTimeout time.Duration
+			switch status {
+			case 8, 9:
+				transitionTimeout = 30 * time.Second
+			case 10:
+				transitionTimeout = 60 * time.Second
+			default:
+				// 理论上不会到这里，兜底给一个较大的窗口
+				transitionTimeout = 60 * time.Second
+			}
+
+			// 未超过过渡超时时间窗口时，不视为不一致，交由 OrderMonitor/PortStatusSyncer 收敛
+			if time.Since(updatedAt) < transitionTimeout {
+				continue
+			}
+
+			// 检查对应端口是否仍在充电
+			for _, p := range ports {
+				if p.PortNo == portNo && isBKVChargingStatus(p.Status) {
+					// 过渡状态订单 + 端口仍在充电 = 严重不一致
+					return "inconsistent", fmt.Sprintf("transition_order_%d_but_port_charging", status)
+				}
+			}
+		}
 	}
 
 	return "ok", ""

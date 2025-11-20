@@ -183,6 +183,33 @@ func TestStorageOrderOperations(t *testing.T) {
 		require.Len(t, orders, 1)
 		assert.Equal(t, 3, orders[0].Status) // 已结算 (3=settled/completed)
 		assert.NotNil(t, orders[0].EndTime)
+
+		// business_no 结算路径：预置一条带业务号的订单，然后通过 16进制业务号结算
+		t.Run("SettleOrderWithBusinessNo", func(t *testing.T) {
+			device2 := testutil.CreateTestDevice(t, db, "")
+			portNo2 := 0
+			biz := 0x1234
+			orderNo2 := "THD_BIZ_1234"
+
+			_, err := db.Exec(context.Background(),
+				`INSERT INTO orders (device_id, port_no, order_no, business_no, status) VALUES ($1,$2,$3,$4,2)`,
+				device2.ID, portNo2, orderNo2, biz)
+			require.NoError(t, err)
+
+			// 使用16进制业务号触发 SettleOrder，应更新已有订单而不是插入新行
+			hexBiz := "1234"
+			kwh01_2 := 1200
+			err = repo.SettleOrder(context.Background(), device2.ID, portNo2, hexBiz, 600, kwh01_2, 0)
+			require.NoError(t, err)
+
+			orders2, err := repo.ListOrdersByPhyID(context.Background(), device2.PhyID, 10, 0)
+			require.NoError(t, err)
+			require.Len(t, orders2, 1)
+			assert.Equal(t, 3, orders2[0].Status)
+			assert.NotNil(t, orders2[0].EndTime)
+			require.NotNil(t, orders2[0].Kwh01)
+			assert.Equal(t, int64(kwh01_2), *orders2[0].Kwh01)
+		})
 	})
 }
 

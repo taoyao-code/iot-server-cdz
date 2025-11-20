@@ -1,12 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(go test:*)",
-      "Bash(openspec list:*)",
-      "Bash(openspec validate:*)",
-      "Bash(go build:*)",
-      "Bash(CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build:*)",
-      "Bash(make auto-deploy:*)"
+      "Bash(psql:*)",
+      "Bash(openspec validate:*)"
     ],
     "deny": [],
     "ask": []

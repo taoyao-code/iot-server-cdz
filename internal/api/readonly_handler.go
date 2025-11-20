@@ -90,12 +90,12 @@ func (h *ReadOnlyHandler) ListDevicePorts(c *gin.Context) {
 	now := time.Now()
 	online := h.sess.IsOnline(phy, now)
 
-	// 查询活跃订单（pending/confirmed/charging/cancelling/stopping/interrupted）
+	// 查询活跃订单（仅pending/confirmed/charging）
 	const activeOrderSQL = `
 		SELECT o.order_no, o.status, o.port_no
 		FROM orders o
 		JOIN devices d ON o.device_id = d.id
-		WHERE d.phy_id = $1 AND o.status IN (0,1,2,8,9,10)
+		WHERE d.phy_id = $1 AND o.status IN (0,1,2)
 	`
 	rows, err := h.repo.Pool.Query(ctx, activeOrderSQL, phy)
 	if err != nil {

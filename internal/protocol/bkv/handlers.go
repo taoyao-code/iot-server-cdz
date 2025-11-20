@@ -605,6 +605,33 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 				}
 			}
 		}
+	} else if f.IsDownlink() {
+		// 下行：平台控制指令，用于同步端口状态（测试控制台/E2E使用）
+		if cmd, err := ParseBKVControlCommand(f.Data); err == nil {
+			portNo := int(cmd.Port)
+
+			if cmd.Switch == SwitchOn {
+				// 充电启动：预先标记端口状态，便于内部测试实时观察
+				durationSec := int(cmd.Duration) * 60
+				kwh01 := int(cmd.Energy)
+				orderHex := fmt.Sprintf("BKV-%08X", f.MsgID)
+
+				if err := h.Repo.UpsertOrderProgress(ctx, devID, portNo, orderHex, durationSec, kwh01, orderStatusCharging, nil); err != nil {
+					success = false
+				}
+
+				chargingStatus := 1 // 测试控制台统一使用业务状态枚举
+				if err := h.Repo.UpsertPortState(ctx, devID, portNo, chargingStatus, nil); err != nil {
+					success = false
+				}
+			} else {
+				// 停止充电：同步为空闲状态
+				idleStatus := 0x09 // bit0在线 + bit3空载
+				if err := h.Repo.UpsertPortState(ctx, devID, portNo, idleStatus, nil); err != nil {
+					success = false
+				}
+			}
+		}
 	}
 
 	// 记录控制指令日志

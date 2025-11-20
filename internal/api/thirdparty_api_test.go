@@ -14,6 +14,11 @@ import (
 	"go.uber.org/zap"
 )
 
+func intPtr(v int) *int {
+	val := v
+	return &val
+}
+
 // ===== API请求/响应结构验证测试 =====
 
 // TestThirdPartyAPI_StartCharge_RequestValidation 测试启动充电请求结构
@@ -416,7 +421,7 @@ func TestThirdPartyAPI_StopCharge_FullFlow(t *testing.T) {
 			name:     "正常停止充电-端口1",
 			deviceID: "DEV001",
 			request: StopChargeRequest{
-				PortNo: 1,
+				PortNo: intPtr(1),
 			},
 			wantStatus: 200,
 		},
@@ -424,7 +429,7 @@ func TestThirdPartyAPI_StopCharge_FullFlow(t *testing.T) {
 			name:     "正常停止充电-端口2",
 			deviceID: "DEV002",
 			request: StopChargeRequest{
-				PortNo: 2,
+				PortNo: intPtr(2),
 			},
 			wantStatus: 200,
 		},
@@ -432,7 +437,7 @@ func TestThirdPartyAPI_StopCharge_FullFlow(t *testing.T) {
 			name:     "无效端口号",
 			deviceID: "DEV003",
 			request: StopChargeRequest{
-				PortNo: 0,
+				PortNo: intPtr(0),
 			},
 			wantStatus: 400,
 		},
@@ -1173,7 +1178,7 @@ func TestThirdPartyAPI_BoundaryConditions(t *testing.T) {
 
 	t.Run("最大端口号", func(t *testing.T) {
 		req := StopChargeRequest{
-			PortNo: 255, // 最大端口号
+			PortNo: intPtr(255), // 最大端口号
 		}
 		bytes, err := json.Marshal(req)
 		assert.NoError(t, err)
