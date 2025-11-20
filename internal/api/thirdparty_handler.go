@@ -473,30 +473,7 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 			zap.Int("port_no", req.PortNo))
 
 		// 主动查询插座状态（0x001D），避免仅依赖周期性0x94
-		q1ID := msgID + 1
-		// 使用插座2（与StartCharge一致）
-		qInnerPayload := bkv.EncodeQuerySocketCommand(&bkv.QuerySocketCommand{SocketNo: 0}) // 【关键修复】查询命令长度同样是参数长度（qInnerPayload只有插座号1字节，长度=0或省略长度字段）
-		// 实际测试发现组网设备可能需要长度字段，这里保持一致
-		qParamLen := len(qInnerPayload) // 查询命令没有子命令字节，长度=参数本身
-		qPayload := make([]byte, 2+len(qInnerPayload))
-		qPayload[0] = byte(qParamLen >> 8)
-		qPayload[1] = byte(qParamLen)
-		copy(qPayload[2:], qInnerPayload)
-
-		qFrame := bkv.Build(0x001D, q1ID, devicePhyID, qPayload)
-		_ = h.outboundQ.Enqueue(ctx, &redisstorage.OutboundMessage{
-			ID:        fmt.Sprintf("api_%d", q1ID),
-			DeviceID:  devID,
-			PhyID:     devicePhyID,
-			Command:   qFrame,
-			Priority:  outbound.PriorityHigh, // P1-6: 查询端口状态=高优先级
-			MaxRetry:  2,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-			Timeout:   3000,
-		})
-
-		// 不再对另一端口重发开始指令，严格按请求端口执行
+		_ = h.enqueueSocketStatusQuery(ctx, devID, devicePhyID, 0)
 	}
 
 	// 9. 返回成功响应
@@ -741,6 +718,17 @@ sendStopCommand:
 		}
 	}
 
+	// 可选同步查询：在降级模式下，为了尽量拿到“真实端口状态”，主动发送一次查询插座状态命令(0x001D)，
+	// 并在短时间窗口内轮询 ports 表，观察状态是否发生变化。
+	if isFallbackMode {
+		if err := h.syncPortStatusAfterStop(ctx, devID, devicePhyID, *req.PortNo, requestID); err != nil {
+			h.logger.Warn("sync port status after fallback stop failed",
+				zap.String("device_phy_id", devicePhyID),
+				zap.Int("port_no", *req.PortNo),
+				zap.Error(err))
+		}
+	}
+
 	// 4. 返回成功响应
 	responseData := map[string]interface{}{
 		"device_id":   devicePhyID,
@@ -770,6 +758,73 @@ sendStopCommand:
 		RequestID: requestID,
 		Timestamp: time.Now().Unix(),
 	})
+}
+
+// syncPortStatusAfterStop 在 fallback 停止后，主动查询一次插座状态并等待短时间窗口内的状态收敛
+//
+// 设计约束（KISS/YAGNI）：
+//   - 不引入复杂的命令-响应配对机制，而是复用已有的 0x001D 查询插座状态能力；
+//   - 下发查询命令后，通过轮询 ports 表观测状态变化（最多约3秒），避免长期卡在陈旧快照；
+//   - 仅在 fallback 模式下启用，作为“提高确定性”的增强，而不是硬依赖。
+func (h *ThirdPartyHandler) syncPortStatusAfterStop(
+	ctx context.Context,
+	deviceID int64,
+	devicePhyID string,
+	portNo int,
+	requestID string,
+) error {
+	// 1. 读取当前端口状态作为基准
+	var initialStatus int
+	const qPort = `SELECT status FROM ports WHERE device_id = $1 AND port_no = $2`
+	if err := h.repo.Pool.QueryRow(ctx, qPort, deviceID, portNo).Scan(&initialStatus); err != nil {
+		// 端口不存在时不强制报错，交由上层一致性任务处理
+		return nil
+	}
+
+	// 2. 下发一次查询插座状态命令(0x001D)，复用 StartCharge 中的实现约定：
+	//   - 单机版设备使用 socketNo=0；
+	//   - 组网设备可按插座号扩展，这里先与现有行为保持一致。
+	if h.outboundQ != nil {
+		if err := h.enqueueSocketStatusQuery(ctx, deviceID, devicePhyID, 0 /*socketNo*/); err != nil {
+			// 查询命令发送失败不影响停止本身，仅记录告警
+			h.logger.Warn("failed to enqueue socket status query after fallback stop",
+				zap.String("device_phy_id", devicePhyID),
+				zap.Int("port_no", portNo),
+				zap.Error(err))
+		}
+	}
+
+	// 3. 在短时间窗口内轮询 ports 表，观察状态是否有变化
+	deadline := time.Now().Add(3 * time.Second)
+	pollInterval := 200 * time.Millisecond
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		time.Sleep(pollInterval)
+
+		var currentStatus int
+		if err := h.repo.Pool.QueryRow(ctx, qPort, deviceID, portNo).Scan(&currentStatus); err != nil {
+			// 查询失败时继续下一轮，避免在这里中断
+			continue
+		}
+
+		if currentStatus != initialStatus {
+			h.logger.Info("port status changed after fallback stop",
+				zap.String("device_phy_id", devicePhyID),
+				zap.Int("port_no", portNo),
+				zap.Int("old_status", initialStatus),
+				zap.Int("new_status", currentStatus),
+				zap.String("request_id", requestID))
+			break
+		}
+	}
+
+	return nil
 }
 
 // CancelOrderRequest P0修复: 取消订单请求
@@ -1626,6 +1681,49 @@ func getOrderStatusString(status int) string {
 	}
 }
 
+// enqueueSocketStatusQuery 发送一次查询插座状态命令（0x001D）
+//
+// 说明：
+//   - 目前仅用于 StartCharge/StopCharge 等 API 内部自愈场景；
+//   - 使用 Redis 出站队列，交由统一的 worker 写入设备；
+//   - 不关心具体响应，仅依赖 HandleSocketStateResponse 将结果写回 ports 表。
+func (h *ThirdPartyHandler) enqueueSocketStatusQuery(
+	ctx context.Context,
+	deviceID int64,
+	devicePhyID string,
+	socketNo int,
+) error {
+	if h.outboundQ == nil {
+		return nil
+	}
+
+	msgID := uint32(time.Now().Unix() % 65536)
+
+	// 构造查询插座命令 payload：仅包含插座号
+	qInnerPayload := bkv.EncodeQuerySocketCommand(&bkv.QuerySocketCommand{SocketNo: uint8(socketNo)})
+
+	// 查询命令长度=参数字节数（无子命令字节）
+	qParamLen := len(qInnerPayload)
+	qPayload := make([]byte, 2+len(qInnerPayload))
+	qPayload[0] = byte(qParamLen >> 8)
+	qPayload[1] = byte(qParamLen)
+	copy(qPayload[2:], qInnerPayload)
+
+	frame := bkv.Build(0x001D, msgID, devicePhyID, qPayload)
+
+	return h.outboundQ.Enqueue(ctx, &redisstorage.OutboundMessage{
+		ID:        fmt.Sprintf("api_%d", msgID),
+		DeviceID:  deviceID,
+		PhyID:     devicePhyID,
+		Command:   frame,
+		Priority:  outbound.PriorityHigh,
+		MaxRetry:  2,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Timeout:   3000,
+	})
+}
+
 // parseOrderStatusFilter 将查询参数中的订单状态过滤值解析为内部状态码切片
 // 支持两种形式：
 // 1) 纯数字: "0","1","2"... → 直接转换为对应状态码
@@ -1836,7 +1934,9 @@ func (h *ThirdPartyHandler) evaluateOrderConsistency(ctx context.Context, device
 	return "ok", ""
 }
 
-// isBKVChargingStatus 判断端口状态位图是否表示充电中（BKV: bit7=0x80）
+// isBKVChargingStatus 判断端口状态位图是否表示充电中
+// 当前实现与端口状态同步器 PortStatusSyncer 和 BKV TLV 中 PortStatus.IsCharging 保持一致：
+// 使用 bit7(0x80) 作为“充电中”标志，bit0(0x01) 作为“在线”标志。
 func isBKVChargingStatus(status int) bool {
 	return status&0x80 != 0
 }
