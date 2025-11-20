@@ -272,3 +272,68 @@ Closes #123
 - 支付系统 API（待对接）
 - 短信通知 API（待对接）
 - 用户系统 API（待对接）
+
+---
+
+## OpenSpec Change History
+
+本节记录所有已归档的 OpenSpec 变更提案及其正式规范。
+
+### 已归档变更
+
+#### 2025-11-20: Consistency Lifecycle Specification
+
+**变更 ID**: `add-consistency-lifecycle-spec`
+**规范路径**: `openspec/specs/consistency-lifecycle/spec.md`
+**归档路径**: `openspec/changes/archive/2025-11-20-add-consistency-lifecycle-spec/`
+
+**变更摘要:**
+
+定义了设备/端口/订单生命周期的统一一致性策略，确保 DB、Redis 会话、Redis 队列和设备状态之间的最终一致性。
+
+**核心规范:**
+
+1. **单一真相来源（Single Source of Truth）**
+   - 设备在线状态：以 SessionManager 为准，DB 视为缓存
+   - 端口状态：30 秒收敛窗口
+   - 订单状态机：与设备/端口/队列强一致性
+
+2. **订单生命周期状态机**
+   - 创建原子性：DB + 命令入队同时成功或失败
+   - 过渡状态（stopping/cancelling/interrupted）强制 30-60s 终态化
+   - 终态订单自动收敛端口状态
+
+3. **端口状态收敛机制**
+   - 订单终态 → 端口 idle/fault 自动更新
+   - 后台任务负责修复协议上报缺失场景
+
+4. **一致性感知读 API**
+   - 检测并返回 `consistency_status` 字段
+   - SessionManager 优先于 DB 状态
+
+5. **后台自愈机制**
+   - PortStatusSyncer：修复孤立充电端口
+   - OrderMonitor：清理超时过渡状态
+   - DeadLetterCleaner：处理命令失败
+
+**影响范围:**
+
+- 新增正式规范：`openspec/specs/consistency-lifecycle/spec.md`
+- 新增 6 个 Prometheus 监控指标
+- 新增 8 个 E2E 测试场景（100% 覆盖）
+- 修复 6 处活跃订单查询和一致性检测代码
+- 定义 9 条 OpenSpec 验证规则
+
+**SLA 承诺:**
+
+- 订单过渡状态收敛：stopping ≤30s, interrupted ≤60s
+- 端口状态收敛：正常 ≤15s, 异常修复 ≤60s
+- 自愈成功率 > 99%
+
+**相关文档:**
+
+- 提案：`archive/2025-11-20-add-consistency-lifecycle-spec/proposal.md`
+- 设计：`archive/2025-11-20-add-consistency-lifecycle-spec/design.md`
+- 任务清单：`archive/2025-11-20-add-consistency-lifecycle-spec/tasks.md`
+- 验收标准：`archive/2025-11-20-add-consistency-lifecycle-spec/acceptance-criteria.md`
+- 验证规则：`archive/2025-11-20-add-consistency-lifecycle-spec/.openspec-validation-rules.md`

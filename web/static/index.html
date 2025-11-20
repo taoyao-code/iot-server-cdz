@@ -588,7 +588,11 @@
                 const fetchOrderStatus = async (orderNo) => {
                     if (!orderNo) return;
                     try {
-                        const response = await axios.get(`/api/v1/third/orders/${orderNo}`);
+                        const response = await axios.get(`/api/v1/third/orders/${orderNo}`, {
+                            headers: {
+                                'X-Api-Key': API_KEY
+                            }
+                        });
                         if (response.data.code === 0 && response.data.data) {
                             const order = response.data.data;
                             trackingOrderStatus.value = order.status;
