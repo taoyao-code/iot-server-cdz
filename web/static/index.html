@@ -318,13 +318,22 @@
 
                             <!-- Action Buttons -->
                             <div class="grid grid-cols-2 gap-3 pt-4">
-                                <!-- 启动充��按钮 - 仅在端口空闲时显示 -->
+                                <!-- 启动充电按钮 - 仅在端口空闲时显示 -->
                                 <button v-if="canStartCharge"
                                     @click="startCharging"
                                     :disabled="loading"
                                     class="col-span-2 p-3 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white font-medium text-sm transition-all flex flex-col items-center justify-center space-y-1 border border-transparent disabled:border-gray-700">
                                     <i class="fas fa-play"></i>
                                     <span>启动充电</span>
+                                </button>
+
+                                <!-- 自动化场景：按时长自动停止（1分钟） -->
+                                <button v-if="canStartCharge"
+                                    @click="startAutoStopByDuration"
+                                    :disabled="loading"
+                                    class="col-span-2 p-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white font-medium text-sm transition-all flex flex-col items-center justify-center space-y-1 border border-transparent disabled:border-gray-700">
+                                    <i class="fas fa-robot"></i>
+                                    <span>自动化：按时长1分钟自动停止</span>
                                 </button>
 
                                 <!-- 停止充电按钮 - 仅在端口充电中时显示 -->
@@ -340,6 +349,25 @@
                                 <div v-if="!canStartCharge && !canStopCharge"
                                     class="col-span-2 p-3 rounded-lg bg-gray-800 text-gray-500 text-center text-sm border border-gray-700">
                                     {{ selectedPort === null ? '请选择端口' : (selectedDevice?.is_online ? '端口状态未知' : '设备离线') }}
+                                </div>
+                            </div>
+
+                            <!-- 自动化场景状态面板 -->
+                            <div v-if="trackingOrderNo" class="mt-4 p-3 rounded-lg bg-gray-800 border border-gray-700 space-y-1 text-xs text-gray-300">
+                                <div class="flex items-center justify-between">
+                                    <span class="font-semibold">自动化场景状态</span>
+                                    <span class="px-2 py-0.5 rounded-full text-[10px]"
+                                          :class="trackingOrderStatus === 'completed' ? 'bg-emerald-700 text-emerald-100' : 'bg-yellow-700 text-yellow-100'">
+                                        {{ trackingOrderStatus || '等待设备自动停止...' }}
+                                    </span>
+                                </div>
+                                <div>订单号: <span class="font-mono text-gray-100">{{ trackingOrderNo }}</span></div>
+                                <div v-if="trackingOrderLastUpdated">最近更新: {{ trackingOrderLastUpdated }}</div>
+                                <div v-if="trackingWarning" class="text-[11px] text-red-400">
+                                    {{ trackingWarning }}
+                                </div>
+                                <div class="text-[11px] text-gray-400">
+                                    说明：此场景会创建按时长1分钟的充电订单，依赖设备自动上报充电结束，后台应自动将订单结算并释放端口，无需手动停止。
                                 </div>
                             </div>
                         </div>
@@ -459,6 +487,11 @@
                 const selectedDevice = ref(null);
                 const selectedPort = ref(null);
                 const logs = ref([]);
+                const trackingOrderNo = ref(null);
+                const trackingOrderStatus = ref(null);
+                const trackingOrderLastUpdated = ref(null);
+                const trackingStartedAt = ref(null);
+                const trackingWarning = ref(null);
                 const currentTime = ref('');
                 const logContainer = ref(null);
                 const autoScroll = ref(true);
@@ -552,6 +585,38 @@
                     return '空闲';
                 };
 
+                const fetchOrderStatus = async (orderNo) => {
+                    if (!orderNo) return;
+                    try {
+                        const response = await axios.get(`/api/v1/third/orders/${orderNo}`);
+                        if (response.data.code === 0 && response.data.data) {
+                            const order = response.data.data;
+                            trackingOrderStatus.value = order.status;
+                            trackingOrderLastUpdated.value = new Date().toLocaleString('zh-CN');
+
+                            addLog('信息', `订单状态更新: ${orderNo} -> ${order.status}`);
+
+                            // 简单的超时告警：超过2分钟仍未进入终态，则提示可能异常
+                            const finalStatuses = ['completed', 'failed', 'cancelled'];
+                            if (finalStatuses.includes(order.status)) {
+                                // 终态时清除告警
+                                trackingWarning.value = null;
+                            } else if (trackingStartedAt.value) {
+                                const elapsedMs = Date.now() - trackingStartedAt.value;
+                                if (elapsedMs > 2 * 60 * 1000 && !trackingWarning.value) {
+                                    trackingWarning.value = `订单已超过2分钟仍未进入终态，当前状态：${order.status}，请检查设备或后台日志`;
+                                    addLog('警告', trackingWarning.value);
+                                }
+                            }
+                        } else {
+                            addLog('错误', `获取订单状态失败: ${response.data.message || '未知错误'}`);
+                        }
+                    } catch (error) {
+                        console.error('Failed to fetch order status:', error);
+                        addLog('错误', `获取订单状态失败: ${error.response?.data?.message || error.message}`);
+                    }
+                };
+
                 // API Calls
                 const fetchDevices = async () => {
                     try {
@@ -613,6 +678,10 @@
                             selectedDevice.value = detail;
                         }
                     }
+                     // 若当前有正在跟踪的订单，顺便刷新其状态
+                     if (trackingOrderNo.value) {
+                         await fetchOrderStatus(trackingOrderNo.value);
+                     }
                     loading.value = false;
                 };
 
@@ -662,6 +731,54 @@
                     } catch (error) {
                         console.error('Failed to start charging:', error);
                         addLog('错误', `启动充电失败: ${error.response?.data?.message || error.message}`);
+                    } finally {
+                        loading.value = false;
+                    }
+                };
+
+                // 自动化场景：按时长1分钟自动停止
+                const startAutoStopByDuration = async () => {
+                    if (!selectedDevice.value || selectedPort.value === null) {
+                        addLog('警告', '请先选择设备和端口');
+                        return;
+                    }
+
+                    loading.value = true;
+                    addLog('信息', `自动化场景[按时长1分钟自动停止]启动: ${selectedDevice.value.device_phy_id} 端口 ${selectedPort.value}`);
+
+                    try {
+                        const requestBody = {
+                            port_no: selectedPort.value,
+                            charge_mode: 1,
+                            amount: 100,
+                            duration_minutes: 1,
+                            scenario_id: 'auto-stop-by-duration'
+                        };
+
+                        const response = await axios.post(
+                            `${API_BASE}/internal/test/devices/${selectedDevice.value.device_phy_id}/charge`,
+                            requestBody
+                        );
+
+                        if (response.data.code === 0) {
+                            addLog('成功', '自动化场景已启动，设备将在1分钟后自动停止并结算订单', response.data.data);
+                            const data = response.data.data || {};
+                            if (data.order_no) {
+                                trackingOrderNo.value = data.order_no;
+                                trackingOrderStatus.value = null;
+                                trackingOrderLastUpdated.value = null;
+                                trackingStartedAt.value = Date.now();
+                                trackingWarning.value = null;
+                                addLog('信息', `开始跟踪订单状态: ${data.order_no}`);
+                                await fetchOrderStatus(data.order_no);
+                            }
+                            await refreshData();
+                        } else {
+                            addLog('错误', `自动化场景启动失败: ${response.data.message}`);
+                        }
+                    } catch (error) {
+                        console.error('Failed to start auto-stop-by-duration scenario:', error);
+                        addLog('错误', `自动化场景启动失败: ${error.response?.data?.message || error.message}`);
                     } finally {
                         loading.value = false;
                     }
@@ -726,6 +843,10 @@
                     selectedDevice,
                     selectedPort,
                     logs,
+                    trackingOrderNo,
+                    trackingOrderStatus,
+                    trackingOrderLastUpdated,
+                    trackingWarning,
                     currentTime,
                     logContainer,
                     autoScroll,
@@ -734,6 +855,7 @@
 
                     selectDevice,
                     startCharging,
+                    startAutoStopByDuration,
                     stopCharging,
                     refreshData,
                     clearLogs,
