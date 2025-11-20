@@ -68,21 +68,31 @@ type TestDevice struct {
 }
 
 // PortStatusMeta 端口状态元信息（用于调试和高级场景）
+//
+// 提供协议层原始状态位的详细解析，帮助调试和理解底层协议状态。
+// 所有位标志都基于 BKV 协议的位图定义。
 type PortStatusMeta struct {
-	RawStatus  int  `json:"raw_status"`  // 协议��原始位图值
-	IsOnline   bool `json:"is_online"`   // bit0: 端口在线
-	IsCharging bool `json:"is_charging"` // bit7: 正在充电
-	IsIdle     bool `json:"is_idle"`     // bit3: 空载状态
-	HasFault   bool `json:"has_fault"`   // 是否存在故障
+	RawStatus  int  `json:"raw_status" example:"137"`    // 协议层原始位图值（如 0x89=137）
+	IsOnline   bool `json:"is_online" example:"true"`    // bit0 (0x01): 端口在线标志
+	IsCharging bool `json:"is_charging" example:"false"` // bit7 (0x80): 正在充电标志
+	IsIdle     bool `json:"is_idle" example:"true"`      // bit3 (0x08): 空载状态标志
+	HasFault   bool `json:"has_fault" example:"false"`   // 是否存在故障（基于 !IsOnline）
 }
 
 // TestDevicePort 测试设备端口信息
+//
+// 端口状态使用业务枚举表示，而非协议层位图：
+//   - 0: 空闲（idle）- 端口在线且无充电任务
+//   - 1: 充电中（charging）- 端口正在执行充电任务
+//   - 2: 故障（fault）- 端口离线或存在硬件故障
+//
+// Meta 字段提供原始协议状态的详细解析，用于高级调试。
 type TestDevicePort struct {
-	PortNo  int            `json:"port_no"`
-	Status  int            `json:"status"` // 业务枚举: 0=空闲, 1=充电中, 2=故障
-	Power   int            `json:"power"`  // 功率（瓦）
-	OrderNo string         `json:"order_no,omitempty"`
-	Meta    PortStatusMeta `json:"meta"` // 状态元信息
+	PortNo  int            `json:"port_no" example:"0"`                           // 端口号：0=A端口, 1=B端口, ...
+	Status  int            `json:"status" enums:"0,1,2" example:"0"`              // 业务枚举: 0=空闲, 1=充电中, 2=故障
+	Power   int            `json:"power" example:"0"`                             // 当前功率（瓦）
+	OrderNo string         `json:"order_no,omitempty" example:"THD1763559879001"` // 关联订单号（仅充电时有值）
+	Meta    PortStatusMeta `json:"meta"`                                          // 状态元信息（调试用）
 }
 
 // decodeConsolePortStatus 将BKV协议层位图状态转换为业务枚举

@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(psql:*)",
-      "Bash(openspec validate:*)"
+      "Bash(openspec validate:*)",
+      "Bash(go test:*)",
+      "Bash(cat:*)",
+      "Bash(go build:*)"
     ],
     "deny": [],
     "ask": []
