@@ -80,7 +80,7 @@ func TestParseBKVChargingEnd_Normal(t *testing.T) {
 	// 插座02, 版本5036, 温度30, RSSI20, A孔, 状态98, 业务号0068, 功率0000, 电流0001, 用电量0050, 时间002d
 	hexStr := "02503630200098006800000001005000" + "2d"
 
-	data, _ := hex.DecodeString(hexStr)
+	data, _ := hex.DecodeString(hexStr) // 裸数据（从插座号开始）
 
 	end, err := ParseBKVChargingEnd(data)
 	if err != nil {
@@ -110,6 +110,30 @@ func TestParseBKVChargingEnd_Normal(t *testing.T) {
 	// 状态98 = 10011000，bit4=1表示空载
 	if end.EndReason != ReasonNoLoad {
 		t.Errorf("expected no load reason, got %d", end.EndReason)
+	}
+}
+
+// TestParseBKVChargingEnd_FromCtlData 测试从0x0015完整data段解析结束上报
+func TestParseBKVChargingEnd_FromCtlData(t *testing.T) {
+	// 对应 docs 2.2.9 的完整上行帧 data 段：
+	// 0011(帧长) 02(子命令) 02(插座号) 5036(版本) 30(温度) 20(RSSI)
+	// 00(插孔) 98(状态) 0068(业务号) 0000(功率) 0001(电流) 0050(电量) 002d(时间)
+	hexStr := "001102025036302000980068000000010050002d"
+	data, _ := hex.DecodeString(hexStr)
+
+	end, err := ParseBKVChargingEnd(data)
+	if err != nil {
+		t.Fatalf("parse from ctl data error: %v", err)
+	}
+
+	if end.SocketNo != 2 || end.Port != 0 {
+		t.Fatalf("unexpected socket/port: socket=%d port=%d", end.SocketNo, end.Port)
+	}
+	if end.BusinessNo != 0x0068 {
+		t.Fatalf("unexpected business no: %04x", end.BusinessNo)
+	}
+	if end.EnergyUsed != 80 || end.ChargingTime != 45 {
+		t.Fatalf("unexpected energy/time: kwh01=%d time=%d", end.EnergyUsed, end.ChargingTime)
 	}
 }
 

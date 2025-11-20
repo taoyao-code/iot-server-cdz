@@ -530,7 +530,31 @@ func ParseBKVControlCommand(data []byte) (*BKVControlCommand, error) {
 
 // ParseBKVChargingEnd 解析BKV充电结束上报
 // 支持普通充电结束和按功率充电结束两种格式
+//
+// 兼容两种输入：
+//  1. 直接从插座号开始的裸数据：02 50 36 30 20 00 98 00 68 ...
+//  2. 0x0015 控制帧中的 data 段：0011 02 02 50 36 30 20 00 98 00 68 ...
+//     前 2 字节为帧长，后跟 1 字节子命令(0x02/0x18)，再是插座号等字段。
 func ParseBKVChargingEnd(data []byte) (*BKVChargingEnd, error) {
+	if len(data) < 15 {
+		return nil, ErrTLVShort
+	}
+
+	// 兼容 0x0015 data：0011 02 02 5036...
+	// 判定条件：
+	//   - 至少包含 length(2) + cmd(1) + 最小字段(15)
+	//   - 第3字节为 0x02(普通结束) 或 0x18(按功率结束)
+	//   - length 字段 == 剩余长度减去 cmd(1)（协议文档示例：0x0011 = 总长20-3）
+	if len(data) >= 18 {
+		subCmd := data[2]
+		if subCmd == 0x02 || subCmd == 0x18 {
+			declLen := binary.BigEndian.Uint16(data[0:2])
+			if int(declLen) == len(data)-3 {
+				data = data[3:] // 跳过 length + subCmd，使 data[0] 对齐为插座号
+			}
+		}
+	}
+
 	if len(data) < 15 {
 		return nil, ErrTLVShort
 	}
