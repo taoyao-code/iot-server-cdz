@@ -25,6 +25,11 @@ createApp({
         const loading = ref(false);
         const searchQuery = ref('');
 
+        // 自动刷新配置
+        const autoRefresh = ref(true);  // 自动刷新开关
+        const refreshIntervalSeconds = ref(5);  // 刷新间隔（秒）
+        const refreshIntervalOptions = [3, 5, 10, 15, 30, 60];  // 可选的刷新间隔
+
         // Charge Parameters
         const chargeParams = ref({
             charge_mode: 1,  // 默认按时长
@@ -176,6 +181,34 @@ createApp({
             loading.value = false;
         };
 
+        // 启动/停止自动刷新
+        const setupRefreshInterval = () => {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+                refreshInterval = null;
+            }
+
+            if (autoRefresh.value) {
+                refreshInterval = setInterval(refreshData, refreshIntervalSeconds.value * 1000);
+                addLog('信息', `自动刷新已启用，间隔: ${refreshIntervalSeconds.value}秒`);
+            } else {
+                addLog('信息', '自动刷新已禁用');
+            }
+        };
+
+        // 切换自动刷新
+        const toggleAutoRefresh = () => {
+            autoRefresh.value = !autoRefresh.value;
+            setupRefreshInterval();
+        };
+
+        // 监听刷新间隔变化
+        watch(refreshIntervalSeconds, () => {
+            if (autoRefresh.value) {
+                setupRefreshInterval();
+            }
+        });
+
         // Actions
         const selectDevice = async (device) => {
             addLog('信息', `选择设备: ${device.device_phy_id}`);
@@ -266,8 +299,8 @@ createApp({
             // 初始化获取设备列表
             fetchDevices();
 
-            // 每5秒刷新一次设备列表
-            refreshInterval = setInterval(refreshData, 5000);
+            // 设置自动刷新
+            setupRefreshInterval();
         });
 
         onUnmounted(() => {
@@ -291,6 +324,9 @@ createApp({
             autoScroll,
             loading,
             chargeParams,
+            autoRefresh,
+            refreshIntervalSeconds,
+            refreshIntervalOptions,
 
             selectDevice,
             startCharging,
@@ -298,6 +334,7 @@ createApp({
             refreshData,
             clearLogs,
             toggleAutoScroll,
+            toggleAutoRefresh,
             formatTime,
             getPortStatusText,
             getDeviceStatusText

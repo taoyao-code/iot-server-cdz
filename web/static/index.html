@@ -157,10 +157,36 @@
                         <div class="text-xs text-gray-400">系统时间</div>
                         <div class="font-mono text-sm text-gray-200">{{ currentTime }}</div>
                     </div>
-                    <button @click="refreshData" class="p-2 text-gray-400 hover:text-white transition-colors"
-                        title="刷新">
-                        <i class="fas fa-sync-alt" :class="{ 'animate-spin': loading }"></i>
-                    </button>
+
+                    <!-- 刷新控制区域 -->
+                    <div class="flex items-center space-x-3 bg-gray-800 rounded-lg px-3 py-2 border border-gray-700">
+                        <!-- 自动刷新开关 -->
+                        <button @click="toggleAutoRefresh"
+                            :class="autoRefresh ? 'text-green-400 hover:text-green-300' : 'text-gray-500 hover:text-gray-400'"
+                            class="transition-colors flex items-center space-x-1"
+                            :title="autoRefresh ? '点击关闭自动刷新' : '点击开启自动刷新'">
+                            <i :class="autoRefresh ? 'fas fa-toggle-on' : 'fas fa-toggle-off'" class="text-lg"></i>
+                            <span class="text-xs font-medium">自动刷新</span>
+                        </button>
+
+                        <!-- 刷新间隔选择 -->
+                        <select v-model.number="refreshIntervalSeconds"
+                            :disabled="!autoRefresh"
+                            class="bg-gray-900 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none disabled:opacity-50 disabled:cursor-not-allowed">
+                            <option v-for="interval in refreshIntervalOptions" :key="interval" :value="interval">
+                                {{ interval }}秒
+                            </option>
+                        </select>
+
+                        <div class="w-px h-5 bg-gray-600"></div>
+
+                        <!-- 手动刷新按钮 -->
+                        <button @click="refreshData"
+                            class="p-1.5 text-gray-400 hover:text-white transition-colors rounded hover:bg-gray-700"
+                            :title="autoRefresh ? '立即刷新' : '手动刷新'">
+                            <i class="fas fa-sync-alt" :class="{ 'animate-spin': loading }"></i>
+                        </button>
+                    </div>
                 </div>
             </header>
 
