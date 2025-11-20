@@ -1,20 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(psql:*)",
-      "Bash(openspec validate:*)",
-      "Bash(go test:*)",
-      "Bash(cat:*)",
-      "Bash(go build:*)",
-      "Bash(chmod:*)",
-      "Bash(docker-compose down:*)",
-      "Bash(docker-compose:*)",
-      "Bash(docker ps:*)",
-      "Bash(docker exec:*)",
-      "Bash(go version:*)",
-      "Bash(go clean:*)",
-      "Bash(go mod download:*)",
-      "mcp______zhi"
+      "Bash(git for-each-ref:*)",
+      "Bash(git config:*)"
     ],
     "deny": [],
     "ask": []

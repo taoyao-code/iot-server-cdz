@@ -219,9 +219,11 @@ func (h *Handlers) HandleBKVStatus(ctx context.Context, f *Frame) error {
 		return err
 	}
 
-	// 如果是状态上报，尝试解析并更新端口状态
+	// 如果是状态上报，尝试解析并更新端口状态，并按协议回ACK
 	if payload.IsStatusReport() {
-		return h.handleSocketStatusUpdate(ctx, devID, payload)
+		err = h.handleSocketStatusUpdate(ctx, devID, payload)
+		h.sendStatusAck(ctx, f, payload, err == nil)
+		return err
 	}
 
 	// 如果是充电结束上报，处理订单结算
@@ -245,6 +247,41 @@ func (h *Handlers) HandleBKVStatus(ctx context.Context, f *Frame) error {
 	}
 
 	return nil
+}
+
+// sendStatusAck 构造并下发0x1017状态上报ACK
+func (h *Handlers) sendStatusAck(ctx context.Context, f *Frame, payload *BKVPayload, success bool) {
+	if h == nil || h.Outbound == nil || payload == nil {
+		return
+	}
+
+	data, err := EncodeBKVStatusAck(payload, success)
+	if err != nil {
+		if h.Repo != nil && payload.GatewayID != "" {
+			if devID, derr := h.Repo.EnsureDevice(ctx, payload.GatewayID); derr == nil {
+				msg := []byte(fmt.Sprintf("status ack encode failed: %v", err))
+				_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0xFFFF, 0, msg, false)
+			}
+		}
+		return
+	}
+
+	// 复用收到的网关ID，保持和上行一致
+	targetGateway := payload.GatewayID
+	if targetGateway == "" {
+		targetGateway = f.GatewayID
+	}
+
+	if targetGateway == "" {
+		return
+	}
+
+	if err := h.Outbound.SendDownlink(targetGateway, 0x1000, f.MsgID, data); err != nil && h.Repo != nil {
+		if devID, derr := h.Repo.EnsureDevice(ctx, targetGateway); derr == nil {
+			msg := []byte(fmt.Sprintf("status ack send failed: %v", err))
+			_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x1000, 0, msg, false)
+		}
+	}
 }
 
 // handleSocketStatusUpdate 处理插座状态更新
