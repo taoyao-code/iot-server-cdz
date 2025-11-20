@@ -261,28 +261,33 @@ func (r *Repository) FinalizeOrderAndPort(ctx context.Context, orderNo string, o
 	}
 
 	// 2. 更新订单终态（仅在状态仍为 oldStatus 时更新）
-	const qUpd = `
+	// 为避免在 failureReason=nil 时触发 SQLSTATE 42P08（无法推断参数类型），
+	// 仅在终态为 failed(6) 且给出了 failureReason 时才在 SQL 中引用第4个参数。
+	var (
+		qUpd string
+		args []interface{}
+	)
+
+	if newStatus == 6 && failureReason != nil {
+		qUpd = `
 		UPDATE orders
 		SET status = $1,
 		    end_time = COALESCE(end_time, NOW()),
 		    updated_at = NOW(),
-		    failure_reason = CASE
-				WHEN $4 IS NOT NULL AND $1 = 6 THEN $4
-				ELSE failure_reason
-			END
+		    failure_reason = $4
 		WHERE order_no = $2 AND status = $3`
-
-	// 为避免在 failureReason=nil 时产生 SQLSTATE 42P08（无法推断参数类型），
-	// 这里显式构造参数，占位但仅在 newStatus=6 时真正写入 failure_reason。
-	var failureParam interface{}
-	if failureReason != nil {
-		failureParam = *failureReason
+		args = []interface{}{newStatus, orderNo, oldStatus, *failureReason}
 	} else {
-		// 对于非失败终态，failure_reason 不会被覆盖，使用空字符串占位即可
-		failureParam = ""
+		qUpd = `
+		UPDATE orders
+		SET status = $1,
+		    end_time = COALESCE(end_time, NOW()),
+		    updated_at = NOW()
+		WHERE order_no = $2 AND status = $3`
+		args = []interface{}{newStatus, orderNo, oldStatus}
 	}
 
-	tag, err := tx.Exec(ctx, qUpd, newStatus, orderNo, oldStatus, failureParam)
+	tag, err := tx.Exec(ctx, qUpd, args...)
 	if err != nil {
 		return err
 	}

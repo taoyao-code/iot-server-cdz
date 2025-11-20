@@ -12,7 +12,7 @@ import (
 
 // ConnectDBAndMigrate 建立数据库连接并按需执行迁移
 func ConnectDBAndMigrate(ctx context.Context, cfg cfgpkg.DatabaseConfig, migrateDir string, log *zap.Logger) (*pgxpool.Pool, error) {
-	dbpool, err := pgstorage.NewPool(ctx, cfg.DSN, cfg.MaxOpenConns, cfg.MaxIdleConns, cfg.ConnMaxLifetime)
+	dbpool, err := pgstorage.NewPool(ctx, cfg.DSN, cfg.MaxOpenConns, cfg.MaxIdleConns, cfg.ConnMaxLifetime, log)
 	if err != nil {
 		if log != nil {
 			log.Error("db connect error", zap.Error(err))

@@ -5,13 +5,23 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/tracelog"
+	"go.uber.org/zap"
 )
 
 // NewPool 创建 pgx 连接池
-func NewPool(ctx context.Context, dsn string, maxOpen, maxIdle int, maxLifetime time.Duration) (*pgxpool.Pool, error) {
+func NewPool(ctx context.Context, dsn string, maxOpen, maxIdle int, maxLifetime time.Duration, logger *zap.Logger) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, err
+	}
+
+	// 添加 SQL 日志追踪器
+	if logger != nil {
+		cfg.ConnConfig.Tracer = &tracelog.TraceLog{
+			Logger:   &pgxZapLogger{logger: logger},
+			LogLevel: tracelog.LogLevelTrace, // 记录所有 SQL 语句
+		}
 	}
 
 	// Week2: 优化连接池配置
@@ -50,4 +60,31 @@ func NewPool(ctx context.Context, dsn string, maxOpen, maxIdle int, maxLifetime 
 	}
 
 	return pool, nil
+}
+
+// pgxZapLogger 实现 tracelog.Logger 接口,将 pgx 日志适配到 zap
+type pgxZapLogger struct {
+	logger *zap.Logger
+}
+
+func (l *pgxZapLogger) Log(ctx context.Context, level tracelog.LogLevel, msg string, data map[string]interface{}) {
+	fields := make([]zap.Field, 0, len(data))
+	for k, v := range data {
+		fields = append(fields, zap.Any(k, v))
+	}
+
+	switch level {
+	case tracelog.LogLevelTrace:
+		l.logger.Debug("[SQL] "+msg, fields...)
+	case tracelog.LogLevelDebug:
+		l.logger.Debug(msg, fields...)
+	case tracelog.LogLevelInfo:
+		l.logger.Info(msg, fields...)
+	case tracelog.LogLevelWarn:
+		l.logger.Warn(msg, fields...)
+	case tracelog.LogLevelError:
+		l.logger.Error(msg, fields...)
+	default:
+		l.logger.Info(msg, fields...)
+	}
 }

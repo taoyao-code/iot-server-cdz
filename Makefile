@@ -93,6 +93,41 @@ test-ci:
 	@echo "🧪 运行CI测试..."
 	@./scripts/test-all.sh --verbose
 
+# 本地调试环境（推荐用于IDE调试）
+.PHONY: debug-up debug-down debug-logs debug-status debug-run debug-clean debug-all
+
+debug-up:
+	@echo "🔧 启动本地调试环境..."
+	@./scripts/start-debug.sh
+
+debug-down:
+	@echo "停止本地调试环境..."
+	@./scripts/stop-debug.sh
+
+debug-logs:
+	@echo "查看调试环境日志..."
+	docker-compose -f docker-compose.debug.yml logs -f
+
+debug-status:
+	@echo "检查调试环境状态..."
+	docker ps --filter "name=iot-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+debug-run:
+	@echo "🚀 启动本地调试服务器..."
+	@echo "配置文件: configs/local.yaml"
+	@echo "⚠️  请先运行: source scripts/load-debug-env.sh"
+	@echo ""
+	IOT_CONFIG=configs/local.yaml go run ./cmd/server
+
+debug-clean:
+	@echo "清理本地调试环境（包括数据卷）..."
+	docker-compose -f docker-compose.debug.yml down -v
+	@echo "✅ 本地调试环境已清理"
+
+debug-all:
+	@echo "🔧 一键启动完整调试环境..."
+	@./scripts/run-local.sh
+
 # 本地开发环境（仅依赖服务）
 .PHONY: dev-up dev-down dev-logs dev-status dev-run dev-clean dev-all
 
@@ -293,7 +328,16 @@ deploy-full:
 help:
 	@echo "IOT Server Makefile命令："
 	@echo ""
-	@echo "🚀 本地开发（推荐）："
+	@echo "🔧 本地调试（推荐，用于IDE断点调试）："
+	@echo "  make debug-all       - 一键启动完整调试环境 ⭐"
+	@echo "  make debug-up        - 启动调试容器（PostgreSQL + Redis）"
+	@echo "  make debug-run       - 启动应用服务器（需先加载环境变量）"
+	@echo "  make debug-down      - 停止调试环境"
+	@echo "  make debug-logs      - 查看调试环境日志"
+	@echo "  make debug-status    - 检查调试环境状态"
+	@echo "  make debug-clean     - 清理调试环境（包括数据）"
+	@echo ""
+	@echo "🚀 本地开发："
 	@echo "  make dev-all         - 一键启动（依赖服务+应用服务器）"
 	@echo "  make dev-up          - 启动依赖服务（PostgreSQL，复用本地Redis）"
 	@echo "  make dev-run         - 启动应用服务器（需先执行 dev-up）"

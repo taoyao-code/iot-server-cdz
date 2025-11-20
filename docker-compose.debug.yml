@@ -1,0 +1,60 @@
+version: "3.8"
+
+# 本地调试环境 - 仅启动 PostgreSQL 和 Redis
+# 使用方式: docker-compose -f docker-compose.debug.yml up -d
+# IOT Server 在本地通过 go run 或 IDE 启动
+
+services:
+  # Redis服务（本地调试）
+  redis:
+    image: redis:7-alpine
+    container_name: iot-redis-debug
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD:-yaohuiisadmin}
+    ports:
+      - "6379:6379" # 映射到本地 6379 端口
+    volumes:
+      - redis_debug_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-yaohuiisadmin}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # PostgreSQL数据库（本地调试）
+  postgres:
+    image: postgres:15-alpine
+    container_name: iot-postgres-debug
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-iot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iot123}
+      POSTGRES_DB: ${POSTGRES_DB:-iot_server}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432" # 映射到本地 5432 端口
+    volumes:
+      - postgres_debug_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-iot}"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    shm_size: 256mb
+
+volumes:
+  redis_debug_data:
+    driver: local
+  postgres_debug_data:
+    driver: local

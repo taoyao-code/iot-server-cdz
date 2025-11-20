@@ -6,12 +6,12 @@ app:
   env: dev
 
 http:
-  addr: ":8080"
+  addr: ":7055"
   readTimeout: 30s
   writeTimeout: 30s
 
 tcp:
-  addr: ":7001" # 本地开发使用 7001（7000 被系统占用）
+  addr: ":7065" # 本地开发使用 7065（7000 被系统占用）
   readTimeout: 300s
   writeTimeout: 30s
   maxConnections: 10000 # 与生产保持一致
@@ -51,21 +51,19 @@ metrics:
   path: "/metrics"
 
 database:
-  # 本地开发：连接到 localhost:5432 (docker-compose.local.yml 启动的 PostgreSQL)
   dsn: "postgres://iot:iot123@localhost:5432/iot_server?sslmode=disable"
-  maxOpenConns: 100 # 与生产保持一致
-  maxIdleConns: 20 # 与生产保持一致
-  connMaxLifetime: 2h # 与生产保持一致
-  autoMigrate: true # 本地开发启用自动迁移，方便开发
+  maxOpenConns: 100
+  maxIdleConns: 20
+  connMaxLifetime: 2h
+  autoMigrate: true
 
-# Redis配置（本地开发）
 redis:
   enabled: true
-  addr: "localhost:6379" # 连接到本地 Docker 容器的 Redis
-  password: "123456"
+  addr: "localhost:6379"
+  password: "yaohuiisadmin"
   db: 0
-  pool_size: 100 # 与生产保持一致
-  min_idle_conns: 20 # 与生产保持一致
+  pool_size: 100
+  min_idle_conns: 20
   dial_timeout: 5s
   read_timeout: 3s
   write_timeout: 3s
@@ -81,9 +79,9 @@ thirdparty:
     enable_dedup: true
   auth:
     api_keys:
-      - "${THIRDPARTY_API_KEY}" # 从环境变量读取
-    require_hmac: true # 与生产保持一致：启用HMAC验证确保安全性
-  ip_whitelist: [] # 本地开发不限制 IP（生产环境建议配置）
+      - "sk_test_thirdparty_key_for_testing_12345678"
+    require_hmac: true
+  ip_whitelist: []
 
 session:
   heartbeat_timeout_sec: 60 # P1-1修复: 心跳周期30s × 2 = 60s (避免网络波动误判)
@@ -98,6 +96,6 @@ session:
 # API认证配置
 api:
   auth:
-    enabled: true # 与生产保持一致：必须启用认证确保安全性
+    enabled: true
     api_keys:
-      - "${API_KEY}" # 从环境变量读取，建议使用32位以上强密钥
+      - "sk_test_admin_key_for_testing_12345678"
