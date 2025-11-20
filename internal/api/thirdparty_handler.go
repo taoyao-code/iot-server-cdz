@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/taoyao-code/iot-server/internal/metrics"
 	"github.com/taoyao-code/iot-server/internal/outbound"
 	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 	"github.com/taoyao-code/iot-server/internal/session"
@@ -25,6 +26,7 @@ type ThirdPartyHandler struct {
 	sess       session.SessionManager
 	outboundQ  *redisstorage.OutboundQueue
 	eventQueue *thirdparty.EventQueue
+	metrics    *metrics.AppMetrics // 一致性监控指标
 	logger     *zap.Logger
 }
 
@@ -34,6 +36,7 @@ func NewThirdPartyHandler(
 	sess session.SessionManager,
 	outboundQ *redisstorage.OutboundQueue,
 	eventQueue *thirdparty.EventQueue,
+	metrics *metrics.AppMetrics,
 	logger *zap.Logger,
 ) *ThirdPartyHandler {
 	return &ThirdPartyHandler{
@@ -41,6 +44,7 @@ func NewThirdPartyHandler(
 		sess:       sess,
 		outboundQ:  outboundQ,
 		eventQueue: eventQueue,
+		metrics:    metrics,
 		logger:     logger,
 	}
 }
@@ -437,11 +441,34 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 			Timeout:   5000,
 		})
 		if err != nil {
-			h.logger.Error("failed to push charge command", zap.Error(err))
-			// 不返回错误，订单已创建，可稍后重试
-		} else {
-			h.logger.Info("charge command pushed", zap.String("order_no", orderNo))
+			h.logger.Error("failed to push charge command",
+				zap.Error(err),
+				zap.String("order_no", orderNo),
+				zap.String("device_phy_id", devicePhyID))
+
+			// 一致性修复: 命令入队失败时返回错误，确保原子性语义
+			// 符合规范要求: "从客户端视角看要么都成功，要么都失败"
+			// 虽然订单已创建，但 OrderMonitor 会在超时后自动清理 pending 订单
+			c.JSON(http.StatusInternalServerError, StandardResponse{
+				Code: 500,
+				// EN: charge command enqueue failed
+				Message: "充电命令入队失败，请稍后重试",
+				Data: map[string]interface{}{
+					"order_no":   orderNo,
+					"device_id":  devicePhyID,
+					"reason":     "queue_enqueue_failed",
+					"retry_hint": "pending订单将在5分钟后自动清理，请稍后重试",
+				},
+				RequestID: requestID,
+				Timestamp: time.Now().Unix(),
+			})
+			return
 		}
+
+		h.logger.Info("charge command pushed",
+			zap.String("order_no", orderNo),
+			zap.String("device_phy_id", devicePhyID),
+			zap.Int("port_no", req.PortNo))
 
 		// 主动查询插座状态（0x001D），避免仅依赖周期性0x94
 		q1ID := msgID + 1
@@ -563,7 +590,6 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	`
 	err = h.repo.Pool.QueryRow(ctx, queryOrderSQL, devID, *req.PortNo,
 		OrderStatusPending, OrderStatusConfirmed, OrderStatusCharging).Scan(&orderNo, &businessNo, &orderStatus)
-
 	// 降级逻辑：找不到订单时，检查端口实际状态
 	if err != nil {
 		h.logger.Warn("no active order found, checking port status for fallback", zap.Error(err))
@@ -609,10 +635,19 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		}
 
 		// 端口确实在充电，但无订单记录 → 强制停止（状态修复）
-		h.logger.Warn("port is charging but no order found, forcing stop",
+		// 一致性审计: 添加统一的状态字段便于追踪
+		h.logger.Warn("consistency: fallback stop triggered - port charging without order",
+			// 标准一致性字段
+			zap.String("source", "api_stop_charge"),
+			zap.String("scenario", "fallback_stop_without_order"),
+			zap.String("expected_state", "port_has_active_order"),
+			zap.String("actual_state", "port_charging_no_order"),
+			// 业务上下文
 			zap.String("device_phy_id", devicePhyID),
 			zap.Int("port_no", *req.PortNo),
-			zap.Int("port_status", portStatus))
+			zap.Int("port_status", portStatus),
+			zap.String("port_status_hex", fmt.Sprintf("0x%02x", portStatus)),
+		)
 
 		// 生成临时订单号用于日志追踪和异常记录
 		orderNo = fmt.Sprintf("FALLBACK_%d_%d", time.Now().Unix(), *req.PortNo)

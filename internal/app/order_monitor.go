@@ -217,6 +217,21 @@ func (m *OrderMonitor) cleanupCancellingOrders(ctx context.Context) {
 			continue
 		}
 
+		// 一致性审计: 记录超时订单自动取消
+		m.logger.Info("consistency: auto-cancelling timeout order",
+			// 标准一致性字段
+			zap.String("source", "order_monitor"),
+			zap.String("scenario", "cancelling_timeout"),
+			zap.String("expected_state", "order_cancelled_by_device_ack"),
+			zap.String("actual_state", "order_stuck_in_cancelling"),
+			zap.String("action", "auto_finalize_to_cancelled"),
+			// 业务上下文
+			zap.String("order_no", orderNo),
+			zap.Int("old_status", api.OrderStatusCancelling),
+			zap.Int("new_status", api.OrderStatusCancelled),
+			zap.String("reason", "cancelling超时30秒"),
+		)
+
 		// 5 = cancelled，0x09 = BKV idle (在线+空载)
 		if err := m.repo.FinalizeOrderAndPort(ctx, orderNo, api.OrderStatusCancelling, api.OrderStatusCancelled, 0x09, nil); err != nil {
 			m.logger.Error("cleanup cancelling orders: finalize failed",
@@ -257,6 +272,21 @@ func (m *OrderMonitor) cleanupStoppingOrders(ctx context.Context) {
 			m.logger.Error("cleanup stopping orders: scan failed", zap.Error(err))
 			continue
 		}
+
+		// 一致性审计: 记录超时订单自动停止
+		m.logger.Info("consistency: auto-stopping timeout order",
+			// 标准一致性字段
+			zap.String("source", "order_monitor"),
+			zap.String("scenario", "stopping_timeout"),
+			zap.String("expected_state", "order_stopped_by_device_ack"),
+			zap.String("actual_state", "order_stuck_in_stopping"),
+			zap.String("action", "auto_finalize_to_stopped"),
+			// 业务上下文
+			zap.String("order_no", orderNo),
+			zap.Int("old_status", api.OrderStatusStopping),
+			zap.Int("new_status", 7),
+			zap.String("reason", "stopping超时30秒"),
+		)
 
 		// 7 = stopped/settled，0x09 = BKV idle
 		if err := m.repo.FinalizeOrderAndPort(ctx, orderNo, api.OrderStatusStopping, 7, 0x09, nil); err != nil {
@@ -299,6 +329,22 @@ func (m *OrderMonitor) cleanupInterruptedOrders(ctx context.Context) {
 			m.logger.Error("cleanup interrupted orders: scan failed", zap.Error(err))
 			continue
 		}
+
+		// 一致性审计: 记录中断订单自动失败
+		m.logger.Warn("consistency: auto-failing interrupted order",
+			// 标准一致性字段
+			zap.String("source", "order_monitor"),
+			zap.String("scenario", "interrupted_timeout"),
+			zap.String("expected_state", "device_recovered_or_order_resumed"),
+			zap.String("actual_state", "device_offline_too_long"),
+			zap.String("action", "auto_finalize_to_failed"),
+			// 业务上下文
+			zap.String("order_no", orderNo),
+			zap.Int("old_status", api.OrderStatusInterrupted),
+			zap.Int("new_status", api.OrderStatusFailed),
+			zap.String("failure_reason", reason),
+			zap.String("reason", "设备离线超过60秒未恢复"),
+		)
 
 		// 6 = failed，端口收敛为 idle（0x09）；failure_reason 写入一次
 		if err := m.repo.FinalizeOrderAndPort(ctx, orderNo, api.OrderStatusInterrupted, api.OrderStatusFailed, 0x09, &reason); err != nil {

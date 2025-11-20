@@ -56,6 +56,14 @@ type AppMetrics struct {
 	OrderStateInconsistencyTotal  *prometheus.CounterVec // labels: type=duplicate|invalid_transition - 订单状态不一致
 	SessionZombieConnectionsGauge prometheus.Gauge       // 僵尸连接数（无会话但连接未关闭）
 	ProtocolChecksumErrorTotal    *prometheus.CounterVec // labels: protocol=bkv|ap3000 - 校验和错误
+
+	// 一致性监控指标 (Consistency Lifecycle Spec - Line 15)
+	ConsistencyEventsTotal        *prometheus.CounterVec // labels: source, scenario, severity=info|warn|error
+	ConsistencyAutoFixTotal       *prometheus.CounterVec // labels: source, scenario, action
+	ConsistencyFallbackStopTotal  prometheus.Counter     // Fallback stop 无订单场景计数
+	ConsistencyLonelyPortFixTotal prometheus.Counter     // 孤立端口修复计数
+	ConsistencyOrderTimeoutTotal  *prometheus.CounterVec // labels: order_status=cancelling|stopping|interrupted
+	ConsistencyQueueFailureTotal  *prometheus.CounterVec // labels: operation=enqueue|dequeue, reason
 }
 
 // NewAppMetrics 注册并返回业务指标
@@ -157,6 +165,32 @@ func NewAppMetrics(reg *prometheus.Registry) *AppMetrics {
 			Name: "protocol_checksum_error_total",
 			Help: "Protocol checksum errors by protocol type.",
 		}, []string{"protocol"}),
+
+		// 一致性监控指标
+		ConsistencyEventsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "consistency_events_total",
+			Help: "Total consistency events by source, scenario and severity.",
+		}, []string{"source", "scenario", "severity"}),
+		ConsistencyAutoFixTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "consistency_auto_fix_total",
+			Help: "Total auto-fix actions by source, scenario and action.",
+		}, []string{"source", "scenario", "action"}),
+		ConsistencyFallbackStopTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "consistency_fallback_stop_total",
+			Help: "Total fallback stop operations (port charging without order).",
+		}),
+		ConsistencyLonelyPortFixTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "consistency_lonely_port_fix_total",
+			Help: "Total lonely charging port fixes.",
+		}),
+		ConsistencyOrderTimeoutTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "consistency_order_timeout_total",
+			Help: "Total order timeout auto-finalizations by order status.",
+		}, []string{"order_status"}),
+		ConsistencyQueueFailureTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "consistency_queue_failure_total",
+			Help: "Total queue operation failures by operation and reason.",
+		}, []string{"operation", "reason"}),
 	}
 	reg.MustRegister(
 		m.TCPAccepted, m.TCPBytesReceived,
@@ -167,6 +201,10 @@ func NewAppMetrics(reg *prometheus.Registry) *AppMetrics {
 		m.ChargeReportTotal, m.ChargeReportPowerGauge, m.ChargeReportCurrentGauge, m.ChargeReportEnergyTotal,
 		m.PortStatusMismatchTotal, m.PortStatusAutoFixedTotal, m.PortStatusQueryResponseTotal,
 		m.OutboundACKTimeoutTotal, m.OrderStateInconsistencyTotal, m.SessionZombieConnectionsGauge, m.ProtocolChecksumErrorTotal,
+		// 一致性监控指标
+		m.ConsistencyEventsTotal, m.ConsistencyAutoFixTotal,
+		m.ConsistencyFallbackStopTotal, m.ConsistencyLonelyPortFixTotal,
+		m.ConsistencyOrderTimeoutTotal, m.ConsistencyQueueFailureTotal,
 	)
 	return m
 }

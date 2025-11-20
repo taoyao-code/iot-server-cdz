@@ -101,13 +101,15 @@ func (s *PortStatusSyncer) syncAllDevices(ctx context.Context) {
 }
 
 // queryOnlineDevicesPorts 查询在线设备的端口状态（扩展功能）
+// 修复：不再依赖 devices.online 字段（生产代码从未维护该字段）
+// 改用 last_seen_at + SessionManager 实时判断在线状态
 func (s *PortStatusSyncer) queryOnlineDevicesPorts(ctx context.Context) {
-	// 查询最近60秒内有心跳的在线设备
+	// 查询最近60秒内有心跳的设备（不依赖 online 字段）
 	query := `
 		SELECT id, phy_id, last_seen_at
 		FROM devices
-		WHERE online = true 
-		  AND last_seen_at > NOW() - INTERVAL '60 seconds'
+		WHERE last_seen_at > NOW() - INTERVAL '60 seconds'
+		ORDER BY last_seen_at DESC
 		LIMIT 50  -- 每次最多查询50个设备，避免队列堵塞
 	`
 
@@ -118,7 +120,9 @@ func (s *PortStatusSyncer) queryOnlineDevicesPorts(ctx context.Context) {
 	}
 	defer rows.Close()
 
+	now := time.Now()
 	devicesQueried := 0
+
 	for rows.Next() {
 		var deviceID int64
 		var phyID string
@@ -126,6 +130,11 @@ func (s *PortStatusSyncer) queryOnlineDevicesPorts(ctx context.Context) {
 
 		if err := rows.Scan(&deviceID, &phyID, &lastSeenAt); err != nil {
 			s.logger.Error("P1-4: failed to scan device", zap.Error(err))
+			continue
+		}
+
+		// 使用 SessionManager 实时判断在线状态（单一真相源）
+		if !s.sess.IsOnline(phyID, now) {
 			continue
 		}
 
@@ -248,15 +257,40 @@ func (s *PortStatusSyncer) fixLonelyChargingPorts(ctx context.Context) {
 			continue
 		}
 
-		s.logger.Warn("P1-4: lonely charging port detected, auto-fixing",
+		// 一致性审计: 统一的自愈日志格式
+		s.logger.Warn("consistency: auto-fixing lonely charging port",
+			// 标准一致性字段
+			zap.String("source", "port_status_syncer"),
+			zap.String("scenario", "lonely_charging_port"),
+			zap.String("expected_state", "port_idle_or_has_order"),
+			zap.String("actual_state", "port_charging_no_order"),
+			zap.String("action", "converge_to_idle"),
+			// 业务上下文
 			zap.Int64("device_id", deviceID),
 			zap.String("phy_id", phyID),
 			zap.Int("port_no", portNo),
-			zap.Int("status", status),
-			zap.Bool("online", online),
-			zap.Time("updated_at", updatedAt),
-			zap.Time("last_seen_at", lastSeen),
-			zap.Duration("age", age))
+			zap.Int("port_status", status),
+			zap.String("port_status_hex", fmt.Sprintf("0x%02x", status)),
+			zap.Bool("device_online", online),
+			zap.Time("port_updated_at", updatedAt),
+			zap.Time("device_last_seen_at", lastSeen),
+			zap.Duration("stale_duration", age),
+		)
+
+		// Prometheus 指标: 记录孤立端口修复事件
+		if s.metrics != nil {
+			s.metrics.ConsistencyLonelyPortFixTotal.Inc()
+			s.metrics.ConsistencyEventsTotal.WithLabelValues(
+				"port_status_syncer",
+				"lonely_charging_port",
+				"warn",
+			).Inc()
+			s.metrics.ConsistencyAutoFixTotal.WithLabelValues(
+				"port_status_syncer",
+				"lonely_charging_port",
+				"converge_to_idle",
+			).Inc()
+		}
 
 		// 收敛端口状态为空闲 (0x09 = bit0在线 + bit3空载)
 		const idleStatus = 0x09
@@ -516,13 +550,36 @@ func (s *PortStatusSyncer) autoFixInconsistency(ctx context.Context, orderNo str
 			zap.Error(err))
 	}
 
-	s.logger.Info("P1-4: order status auto-fixed",
+	// 一致性审计: 统一的自愈日志格式
+	s.logger.Info("consistency: order status auto-fixed",
+		// 标准一致性字段
+		zap.String("source", "port_status_syncer"),
+		zap.String("scenario", "order_port_inconsistency"),
+		zap.String("expected_state", fmt.Sprintf("order_status_%d_matches_port", orderStatus)),
+		zap.String("actual_state", "order_port_mismatch"),
+		zap.String("action", "auto_fix_order_and_port"),
+		// 业务上下文
 		zap.String("order_no", orderNo),
 		zap.Int64("device_id", deviceID),
 		zap.Int("port_no", portNo),
-		zap.Int("old_status", orderStatus),
-		zap.Int("new_status", newStatus),
-		zap.String("reason", reason))
+		zap.Int("old_order_status", orderStatus),
+		zap.Int("new_order_status", newStatus),
+		zap.String("fix_reason", reason),
+	)
+
+	// Prometheus 指标: 记录订单自愈事件
+	if s.metrics != nil {
+		s.metrics.ConsistencyEventsTotal.WithLabelValues(
+			"port_status_syncer",
+			"order_port_inconsistency",
+			"info",
+		).Inc()
+		s.metrics.ConsistencyAutoFixTotal.WithLabelValues(
+			"port_status_syncer",
+			"order_port_inconsistency",
+			"auto_fix_order_and_port",
+		).Inc()
+	}
 
 	return nil
 }

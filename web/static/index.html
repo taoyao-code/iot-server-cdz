@@ -500,7 +500,7 @@
 
                 // 判断是否可以停止充电
                 const canStopCharge = computed(() => {
-                    return selectedPortStatus.value === 1;
+                    return selectedPortStatus.value === 1 && selectedDevice.value?.is_online;
                 });
 
                 // Methods
