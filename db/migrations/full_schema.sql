@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS orders (
     device_id       BIGINT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
     port_no         INT NOT NULL,
     order_no        TEXT NOT NULL,
+    business_no     INTEGER NOT NULL DEFAULT 0,
     start_time      TIMESTAMPTZ,
     end_time        TIMESTAMPTZ,
     kwh_0p01        BIGINT,      -- 以 0.01kWh 为单位
@@ -61,6 +62,7 @@ CREATE TABLE IF NOT EXISTS orders (
     charge_mode     INT NOT NULL DEFAULT 1,  -- 充电模式: 1=按时长, 2=按电量, 3=按功率, 4=充满自停
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    failure_reason  TEXT,
     test_session_id TEXT,        -- E2E测试会话标识
     UNIQUE(order_no)
 );
@@ -69,6 +71,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_device_created ON orders(device_id, create
 CREATE INDEX IF NOT EXISTS idx_orders_device_port ON orders(device_id, port_no);
 CREATE INDEX IF NOT EXISTS idx_orders_time ON orders(start_time, end_time);
 CREATE INDEX IF NOT EXISTS idx_orders_test_session ON orders(test_session_id) WHERE test_session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_orders_business_no ON orders(device_id, business_no);
 
 -- cmd_log: 指令日志（上下行）
 CREATE TABLE IF NOT EXISTS cmd_log (

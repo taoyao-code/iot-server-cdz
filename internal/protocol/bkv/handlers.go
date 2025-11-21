@@ -181,11 +181,35 @@ func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
 }
 
 // encodeHeartbeatAck 构造心跳ACK的payload（当前时间）
-// 格式：YYYYMMDDHHmmss (14字节ASCII)
+// 按协议文档使用7字节BCD时间戳: YYYYMMDDHHMMSS
 func encodeHeartbeatAck(gatewayID string) []byte {
 	now := time.Now()
-	timeStr := now.Format("20060102150405") // YYYYMMDDHHmmss
-	return []byte(timeStr)
+	year := now.Year()
+
+	toBCD := func(v int) byte {
+		if v < 0 {
+			v = 0
+		}
+		if v > 99 {
+			v = v % 100
+		}
+		hi := (v / 10) & 0x0F
+		lo := (v % 10) & 0x0F
+		return byte(hi<<4 | lo)
+	}
+
+	yy1 := year / 100
+	yy2 := year % 100
+
+	return []byte{
+		toBCD(yy1),
+		toBCD(yy2),
+		toBCD(int(now.Month())),
+		toBCD(now.Day()),
+		toBCD(now.Hour()),
+		toBCD(now.Minute()),
+		toBCD(now.Second()),
+	}
 }
 
 // HandleBKVStatus 处理BKV插座状态上报 (cmd=0x1000 with BKV payload)
