@@ -29,7 +29,6 @@ CREATE TABLE IF NOT EXISTS devices (
     rssi            INTEGER,             -- 信号强度
     fw_ver          TEXT,                -- 固件版本(GN协议使用)
     last_seen_at    TIMESTAMPTZ,
-    online          BOOLEAN NOT NULL DEFAULT false,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

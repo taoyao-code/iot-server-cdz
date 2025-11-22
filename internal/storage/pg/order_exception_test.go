@@ -98,7 +98,7 @@ func TestException_ChargingOrderDeviceOffline(t *testing.T) {
 
 	// 2. 模拟设备离线：设置last_seen为61秒前
 	_, err = repo.Pool.Exec(ctx,
-		"UPDATE devices SET last_seen_at = NOW() - INTERVAL '61 seconds', online = false WHERE id=$1",
+		"UPDATE devices SET last_seen_at = NOW() - INTERVAL '61 seconds' WHERE id=$1",
 		deviceID)
 	require.NoError(t, err)
 

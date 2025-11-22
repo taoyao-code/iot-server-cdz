@@ -471,9 +471,34 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 			zap.String("order_no", orderNo),
 			zap.String("device_phy_id", devicePhyID),
 			zap.Int("port_no", req.PortNo))
-
 		// 主动查询插座状态（0x001D），避免仅依赖周期性0x94
 		_ = h.enqueueSocketStatusQuery(ctx, devID, devicePhyID, 0)
+
+		// 新增：等待设备状态就绪验证
+		if err := h.waitForDeviceReady(ctx, devID, devicePhyID, req.PortNo, orderNo, requestID); err != nil {
+			// 设备未就绪，返回具体错误信息
+			h.logger.Warn("device not ready for charging",
+				zap.String("device_phy_id", devicePhyID),
+				zap.Int("port_no", req.PortNo),
+				zap.String("order_no", orderNo),
+				zap.Error(err))
+
+			c.JSON(http.StatusServiceUnavailable, StandardResponse{
+				Code: 50301, // DEVICE_NOT_READY
+				// EN: device is not ready for charging
+				Message: "设备未就绪，无法开始充电",
+				Data: map[string]interface{}{
+					"device_id":    devicePhyID,
+					"port_no":      req.PortNo,
+					"order_no":     orderNo,
+					"error_code":   "DEVICE_NOT_READY",
+					"error_detail": err.Error(),
+				},
+				RequestID: requestID,
+				Timestamp: time.Now().Unix(),
+			})
+			return
+		}
 	}
 
 	// 9. 返回成功响应
@@ -1713,17 +1738,16 @@ func (h *ThirdPartyHandler) enqueueSocketStatusQuery(
 
 	msgID := uint32(time.Now().Unix() % 65536)
 
-	// 构造查询插座命令 payload：仅包含插座号
-	qInnerPayload := bkv.EncodeQuerySocketCommand(&bkv.QuerySocketCommand{SocketNo: uint8(socketNo)})
+	// 按《设备对接指引-组网设备2024》2.2.4:
+	// 外层命令使用0x0015，内层为长度型payload: [lenH][lenL][0x1D][插座号]
+	innerLen := 2 // 子命令(1) + 插座号(1)
+	qPayload := make([]byte, 4)
+	qPayload[0] = byte(innerLen >> 8)
+	qPayload[1] = byte(innerLen)
+	qPayload[2] = 0x1D
+	qPayload[3] = byte(socketNo)
 
-	// 查询命令长度=参数字节数（无子命令字节）
-	qParamLen := len(qInnerPayload)
-	qPayload := make([]byte, 2+len(qInnerPayload))
-	qPayload[0] = byte(qParamLen >> 8)
-	qPayload[1] = byte(qParamLen)
-	copy(qPayload[2:], qInnerPayload)
-
-	frame := bkv.Build(0x001D, msgID, devicePhyID, qPayload)
+	frame := bkv.Build(0x0015, msgID, devicePhyID, qPayload)
 
 	return h.outboundQ.Enqueue(ctx, &redisstorage.OutboundMessage{
 		ID:        fmt.Sprintf("api_%d", msgID),
@@ -2092,4 +2116,99 @@ func (h *ThirdPartyHandler) GetOrderEvents(c *gin.Context) {
 		RequestID: requestID,
 		Timestamp: time.Now().Unix(),
 	})
+}
+
+// waitForDeviceReady 等待设备就绪状态验证
+// 在发送充电命令后，轮询检查设备状态是否从空载转为可充电状态
+func (h *ThirdPartyHandler) waitForDeviceReady(ctx context.Context, deviceID int64, devicePhyID string, portNo int, orderNo string, requestID string) error {
+	// 最大等待时间5秒，轮询间隔500ms
+	maxWait := 5 * time.Second
+	pollInterval := 500 * time.Millisecond
+	deadline := time.Now().Add(maxWait)
+
+	h.logger.Info("waiting for device ready state",
+		zap.String("device_phy_id", devicePhyID),
+		zap.Int("port_no", portNo),
+		zap.String("order_no", orderNo),
+		zap.Duration("max_wait", maxWait))
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// 查询当前端口状态
+		var portStatus int
+		querySQL := `SELECT status FROM ports WHERE device_id = $1 AND port_no = $2`
+		err := h.repo.Pool.QueryRow(ctx, querySQL, deviceID, portNo).Scan(&portStatus)
+		if err != nil {
+			h.logger.Warn("failed to query port status during ready check",
+				zap.String("device_phy_id", devicePhyID),
+				zap.Int("port_no", portNo),
+				zap.Error(err))
+			// 查询失败时继续等待，不立即返回错误
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		// 分析状态位 - 与 BKV PortStatus/端口状态同步器保持一致：
+		//   bit7(0x80): 充电中
+		//   bit3(0x08): 空载/空闲
+		//   bit0(0x01): 在线
+		isOnline := (portStatus & 0x01) != 0   // bit0=1表示在线
+		isCharging := (portStatus & 0x80) != 0 // bit7=1表示充电中
+		isNoLoad := (portStatus & 0x08) != 0   // bit3=1表示空载/空闲
+
+		h.logger.Debug("device state check",
+			zap.String("device_phy_id", devicePhyID),
+			zap.Int("port_no", portNo),
+			zap.Int("port_status", portStatus),
+			zap.String("port_status_hex", fmt.Sprintf("0x%02x", portStatus)),
+			zap.Bool("is_online", isOnline),
+			zap.Bool("is_charging", isCharging),
+			zap.Bool("is_no_load", isNoLoad))
+
+		// 设备就绪条件：
+		// 1. 必须在线
+		// 2. 不能处于空载状态（空载表示设备拒绝充电）
+		// 3. 如果已经开始充电，则视为就绪
+		if !isOnline {
+			return fmt.Errorf("device offline (status=0x%02x)", portStatus)
+		}
+
+		if isCharging {
+			// 设备已经开始充电，视为就绪
+			h.logger.Info("device ready - charging started",
+				zap.String("device_phy_id", devicePhyID),
+				zap.Int("port_no", portNo),
+				zap.String("order_no", orderNo))
+			return nil
+		}
+
+		if isNoLoad {
+			// 设备处于空载状态，继续等待
+			h.logger.Debug("device in no-load state, waiting",
+				zap.String("device_phy_id", devicePhyID),
+				zap.Int("port_no", portNo),
+				zap.Int("port_status", portStatus))
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		// 设备在线且不在空载状态，视为就绪
+		h.logger.Info("device ready - online and not no-load",
+			zap.String("device_phy_id", devicePhyID),
+			zap.Int("port_no", portNo),
+			zap.String("order_no", orderNo),
+			zap.Int("port_status", portStatus))
+		return nil
+	}
+
+	// 超时：设备仍未就绪 - 获取最终状态
+	var finalStatus int
+	finalQuerySQL := `SELECT status FROM ports WHERE device_id = $1 AND port_no = $2`
+	_ = h.repo.Pool.QueryRow(ctx, finalQuerySQL, deviceID, portNo).Scan(&finalStatus)
+	return fmt.Errorf("device not ready after %v (final_status=0x%02x)", maxWait, finalStatus)
 }

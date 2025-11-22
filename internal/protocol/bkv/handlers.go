@@ -599,6 +599,30 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 
 	// 只处理上行：设备回复
 	if f.IsUplink() {
+		// 2.2.4 查询插座状态响应 (cmd=0x0015, 子命令0x1D)
+		// 数据结构: [lenH][lenL][0x1D][SocketStatePayload...]
+		// 其中 SocketStatePayload 与 ParseSocketStateResponse 解析格式保持一致。
+		if len(f.Data) >= 3 && f.Data[2] == 0x1D {
+			innerLen := int(binary.BigEndian.Uint16(f.Data[0:2]))
+			if innerLen <= 0 || len(f.Data) < 3+innerLen {
+				logMsg := fmt.Sprintf("SocketStatusQueryResponse(0x0015/0x1D) invalid length: declared=%d actual=%d payload=%x",
+					innerLen, len(f.Data)-3, f.Data)
+				_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), []byte(logMsg), false)
+				return nil
+			}
+
+			inner := f.Data[3 : 3+innerLen]
+			// 复用 HandleSocketStateResponse 的解析与端口状态更新逻辑
+			innerFrame := &Frame{
+				Cmd:       0x001D,
+				MsgID:     f.MsgID,
+				Direction: f.Direction,
+				GatewayID: f.GatewayID,
+				Data:      inner,
+			}
+			return h.HandleSocketStateResponse(ctx, innerFrame)
+		}
+
 		// 优先识别「充电结束上报」帧（长度型 payload，子命令=0x02/0x18）
 		// 避免被下面的「控制ACK」分支误吞掉导致不结算订单/不收敛端口状态。
 		if len(f.Data) >= 18 && len(f.Data) >= 3 && (f.Data[2] == 0x02 || f.Data[2] == 0x18) {
@@ -629,6 +653,13 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 				powerW := int(endReport.InstantPower) / 10 // 转换为实际瓦数
 				if err := h.Repo.UpsertPortState(ctx, devID, int(endReport.Port), idleStatus, &powerW); err != nil {
 					success = false
+				}
+
+				// 按协议2.2.9/2.2.2，设备上报充电结束后平台需返回确认帧。
+				// 采用与 minimal_bkv_service 一致的最小ACK数据格式：0002 0c 01 01
+				if h.Outbound != nil && devicePhyID != "" {
+					ackData := []byte{0x00, 0x02, 0x0c, 0x01, 0x01}
+					_ = h.Outbound.SendDownlink(devicePhyID, 0x0015, f.MsgID, ackData)
 				}
 			} else {
 				// 解析失败则标记失败，方便后续排查，但仍记录原始payload
@@ -780,13 +811,14 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 					success = false
 				}
 
-				chargingStatus := 1 // 测试控制台统一使用业务状态枚举
+				// 使用与正式协议一致的BKV位图：0x81 = bit0在线 + bit7充电中
+				chargingStatus := 0x81
 				if err := h.Repo.UpsertPortState(ctx, devID, portNo, chargingStatus, nil); err != nil {
 					success = false
 				}
 			} else {
-				// 停止充电：同步为空闲状态
-				idleStatus := 0x09 // bit0在线 + bit3空载
+				// 停止充电：同步为空闲状态（0x09 = bit0在线 + bit3空载）
+				idleStatus := 0x09
 				if err := h.Repo.UpsertPortState(ctx, devID, portNo, idleStatus, nil); err != nil {
 					success = false
 				}
@@ -1696,9 +1728,10 @@ func (h *Handlers) HandlePowerLevelEnd(ctx context.Context, f *Frame) error {
 	// 目前先返回确认
 	reply := EncodePowerLevelEndReply(report.PortNo, 0) // 0=确认成功
 
-	// 发送确认回复（下行）
-	// TODO: 通过Outbound发送回复
-	_ = reply
+	// 发送确认回复（下行），使用cmd=0x0018以匹配上行命令
+	if h.Outbound != nil && f.GatewayID != "" && len(reply) > 0 {
+		_ = h.Outbound.SendDownlink(f.GatewayID, 0x0018, f.MsgID, reply)
+	}
 
 	return nil
 }
