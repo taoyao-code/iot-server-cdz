@@ -197,10 +197,10 @@ func NewConnHandler(
 				return getBKVHandlers().HandleControl(ctx, f)
 			})) // 控制设备
 
-			// 网络管理
+			// 网络管理 (0x0005: 网络节点列表相关 - 刷新/添加ACK)
 			bkvAdapter.Register(0x0005, wrapBKVHandler(func(ctx context.Context, f *bkv.Frame) error {
-				return getBKVHandlers().HandleGeneric(ctx, f)
-			})) // 网络节点列表
+				return getBKVHandlers().HandleNetworkList(ctx, f)
+			}))
 			bkvAdapter.Register(0x0008, wrapBKVHandler(func(ctx context.Context, f *bkv.Frame) error {
 				return getBKVHandlers().HandleNetworkRefresh(ctx, f)
 			})) // 刷新插座列表

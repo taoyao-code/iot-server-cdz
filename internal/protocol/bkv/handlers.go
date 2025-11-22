@@ -599,9 +599,9 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 
 	// 只处理上行：设备回复
 	if f.IsUplink() {
-		// 优先识别「充电结束上报」帧（长度型 payload，cmd=0x02）
+		// 优先识别「充电结束上报」帧（长度型 payload，子命令=0x02/0x18）
 		// 避免被下面的「控制ACK」分支误吞掉导致不结算订单/不收敛端口状态。
-		if len(f.Data) >= 20 && f.Data[2] == 0x02 {
+		if len(f.Data) >= 18 && len(f.Data) >= 3 && (f.Data[2] == 0x02 || f.Data[2] == 0x18) {
 			endReport, err := ParseBKVChargingEnd(f.Data)
 			if err == nil {
 				// 处理充电结束
@@ -935,6 +935,61 @@ func (h *Handlers) HandleGeneric(ctx context.Context, f *Frame) error {
 	// 记录通用指令日志
 	success := true
 	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, success)
+}
+
+// HandleNetworkList 处理0x0005 网络节点列表相关指令（2.2.5/2.2.6 ACK）
+// 对标 docs/协议/设备对接指引-组网设备2024(1).txt 中的:
+// - 2.2.5 下发网络节点列表-刷新列表 设备回复
+// - 2.2.6 下发网络节点列表-添加单个插座 设备回复
+func (h *Handlers) HandleNetworkList(ctx context.Context, f *Frame) error {
+	if h == nil || h.Repo == nil {
+		return nil
+	}
+
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
+
+	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
+	if err != nil {
+		return err
+	}
+
+	d := f.Data
+	success := true
+	var msg string
+
+	if len(d) >= 4 {
+		subCmd := d[2]
+		result := d[3]
+
+		switch subCmd {
+		case 0x08:
+			// 2.2.5 刷新列表 ACK: 长度(2) + 0x08 + 结果(1=OK,0=失败)
+			status := "OK"
+			if result != 0x01 {
+				status = "FAIL"
+				success = false
+			}
+			msg = fmt.Sprintf("NetworkRefreshAck: sub=0x%02X result=%d(%s)", subCmd, result, status)
+		case 0x09:
+			// 2.2.6 添加单个插座 ACK: 长度(2) + 0x09 + 结果(1=OK,0=失败)
+			status := "OK"
+			if result != 0x01 {
+				status = "FAIL"
+				success = false
+			}
+			msg = fmt.Sprintf("NetworkAddNodeAck: sub=0x%02X result=%d(%s)", subCmd, result, status)
+		default:
+			// 其他子命令暂时只记录原始payload
+			msg = fmt.Sprintf("NetworkCmd0005: sub=0x%02X payload=%x", subCmd, d)
+		}
+	} else {
+		msg = fmt.Sprintf("NetworkCmd0005: short payload len=%d payload=%x", len(d), d)
+	}
+
+	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), []byte(msg), success)
 }
 
 // getDirection 获取数据方向标识

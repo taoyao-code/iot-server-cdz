@@ -21,8 +21,8 @@ func RegisterHandlers(adapter *Adapter, handlers *Handlers) {
 
 	// 参数查询指令 (协议文档中提到的)
 	adapter.Register(0x0005, func(f *Frame) error {
-		return handlers.HandleGeneric(context.Background(), f)
-	})
+		return handlers.HandleNetworkList(context.Background(), f)
+	}) // 0x0005: 网络节点列表相关 (2.2.5/2.2.6 ACK)
 
 	// OTA升级指令
 	adapter.Register(0x0007, func(f *Frame) error {
