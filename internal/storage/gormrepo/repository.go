@@ -3,6 +3,7 @@ package gormrepo
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 
 	"gorm.io/gorm"
@@ -304,6 +305,41 @@ func (r *Repository) CompleteOrder(ctx context.Context, deviceID int64, portNo i
 		return gorm.ErrRecordNotFound
 	}
 	return nil
+}
+
+// SettleOrder 结算订单（兼容 business_no 与 order_no 两种匹配方式）。
+// 语义等价于 internal/storage/pg.Repository.SettleOrder。
+func (r *Repository) SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh0p01 int, reason int) error {
+	// 1) 尝试按 business_no 更新（第三方 StartCharge 流程）
+	if biz, err := strconv.ParseInt(orderHex, 16, 32); err == nil {
+		const updateByBiz = `
+UPDATE orders
+SET end_time   = NOW(),
+    kwh_0p01   = ?,
+    end_reason = ?,
+    status     = 3,
+    updated_at = NOW()
+WHERE device_id   = ?
+  AND port_no     = ?
+  AND business_no = ?`
+		res := r.db.WithContext(ctx).Exec(updateByBiz, kwh0p01, reason, deviceID, portNo, int(biz))
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected > 0 {
+			return nil
+		}
+	}
+
+	// 2) 回退路径：按 order_no upsert（兼容老协议/测试用例）
+	const upsertByOrderNo = `
+INSERT INTO orders (device_id, port_no, order_no, start_time, end_time, kwh_0p01, end_reason, status)
+VALUES (?, ?, ?, NOW()-make_interval(secs => ?), NOW(), ?, ?, 3)
+ON CONFLICT (order_no)
+DO UPDATE SET end_time=NOW(), kwh_0p01=EXCLUDED.kwh_0p01, end_reason=EXCLUDED.end_reason, status=3, updated_at=NOW()`
+
+	res := r.db.WithContext(ctx).Exec(upsertByOrderNo, deviceID, portNo, orderHex, durationSec, kwh0p01, reason)
+	return res.Error
 }
 
 // AppendCmdLog 写入指令日志。

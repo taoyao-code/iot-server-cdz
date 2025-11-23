@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/taoyao-code/iot-server/internal/storage"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
 )
@@ -92,6 +93,7 @@ const (
 // Handlers BKV 协议处理器集合
 type Handlers struct {
 	Repo        repoAPI
+	Core        storage.CoreRepo
 	Reason      *ReasonMap
 	CardService CardServiceAPI         // Week4: 刷卡充电服务
 	Outbound    OutboundSender         // Week5: 下行消息发送器
@@ -423,8 +425,19 @@ func (h *Handlers) updatePortAndOrder(ctx context.Context, deviceID int64, devic
 	}
 
 	// 1. 更新端口状态到数据库
-	if err := h.Repo.UpsertPortState(ctx, deviceID, int(port.PortNo), status, powerW); err != nil {
-		return fmt.Errorf("upsert port state: %w", err)
+	if h.Core != nil {
+		var power32 *int32
+		if powerW != nil {
+			p := int32(*powerW)
+			power32 = &p
+		}
+		if err := h.Core.UpsertPortSnapshot(ctx, deviceID, int32(port.PortNo), int32(status), power32, time.Now()); err != nil {
+			return fmt.Errorf("upsert port state via core repo: %w", err)
+		}
+	} else {
+		if err := h.Repo.UpsertPortState(ctx, deviceID, int(port.PortNo), status, powerW); err != nil {
+			return fmt.Errorf("upsert port state: %w", err)
+		}
 	}
 
 	// 2. P0修复: 检查是否需要更新订单状态
@@ -492,13 +505,30 @@ func (h *Handlers) handleSocketStatusUpdateSimple(ctx context.Context, deviceID 
 	}
 
 	// 更新端口A状态
-	if err := h.Repo.UpsertPortState(ctx, deviceID, 0, portAStatus, portAPower); err != nil {
-		return fmt.Errorf("failed to update port A state: %w", err)
-	}
-
-	// 更新端口B状态
-	if err := h.Repo.UpsertPortState(ctx, deviceID, 1, portBStatus, portBPower); err != nil {
-		return fmt.Errorf("failed to update port B state: %w", err)
+	if h.Core != nil {
+		var powerA32, powerB32 *int32
+		if portAPower != nil {
+			p := int32(*portAPower)
+			powerA32 = &p
+		}
+		if portBPower != nil {
+			p := int32(*portBPower)
+			powerB32 = &p
+		}
+		now := time.Now()
+		if err := h.Core.UpsertPortSnapshot(ctx, deviceID, 0, int32(portAStatus), powerA32, now); err != nil {
+			return fmt.Errorf("failed to update port A state via core repo: %w", err)
+		}
+		if err := h.Core.UpsertPortSnapshot(ctx, deviceID, 1, int32(portBStatus), powerB32, now); err != nil {
+			return fmt.Errorf("failed to update port B state via core repo: %w", err)
+		}
+	} else {
+		if err := h.Repo.UpsertPortState(ctx, deviceID, 0, portAStatus, portAPower); err != nil {
+			return fmt.Errorf("failed to update port A state: %w", err)
+		}
+		if err := h.Repo.UpsertPortState(ctx, deviceID, 1, portBStatus, portBPower); err != nil {
+			return fmt.Errorf("failed to update port B state: %w", err)
+		}
 	}
 
 	return nil
@@ -565,14 +595,24 @@ func (h *Handlers) handleBKVChargingEnd(ctx context.Context, deviceID int64, f *
 	}
 
 	// 结算订单
-	if err := h.Repo.SettleOrder(ctx, deviceID, actualPort, orderHex, durationSec, kwh01, reason); err != nil {
+	if h.Core != nil {
+		if err := h.Core.SettleOrder(ctx, deviceID, actualPort, orderHex, durationSec, kwh01, reason); err != nil {
+			return err
+		}
+	} else if err := h.Repo.SettleOrder(ctx, deviceID, actualPort, orderHex, durationSec, kwh01, reason); err != nil {
 		return err
 	}
 
 	// 更新端口状态为空闲
 	idleStatus := 0x09 // 0x09 = bit0(在线) + bit3(空载)
-	if err := h.Repo.UpsertPortState(ctx, deviceID, actualPort, idleStatus, nil); err != nil {
-		return err
+	if h.Core != nil {
+		if err := h.Core.UpsertPortSnapshot(ctx, deviceID, int32(actualPort), int32(idleStatus), nil, time.Now()); err != nil {
+			return err
+		}
+	} else {
+		if err := h.Repo.UpsertPortState(ctx, deviceID, actualPort, idleStatus, nil); err != nil {
+			return err
+		}
 	}
 
 	success = true
@@ -644,15 +684,26 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 				}
 
 				// 结算订单
-				if err := h.Repo.SettleOrder(ctx, devID, int(endReport.Port), orderHex, durationSec, kwhUsed, platformReason); err != nil {
+				if h.Core != nil {
+					if err := h.Core.SettleOrder(ctx, devID, int(endReport.Port), orderHex, durationSec, kwhUsed, platformReason); err != nil {
+						success = false
+					}
+				} else if err := h.Repo.SettleOrder(ctx, devID, int(endReport.Port), orderHex, durationSec, kwhUsed, platformReason); err != nil {
 					success = false
 				}
 
 				// 更新端口状态为空闲
 				idleStatus := 0x09                         // 0x09 = bit0(在线) + bit3(空载)
 				powerW := int(endReport.InstantPower) / 10 // 转换为实际瓦数
-				if err := h.Repo.UpsertPortState(ctx, devID, int(endReport.Port), idleStatus, &powerW); err != nil {
-					success = false
+				if h.Core != nil {
+					p := int32(powerW)
+					if err := h.Core.UpsertPortSnapshot(ctx, devID, int32(endReport.Port), int32(idleStatus), &p, time.Now()); err != nil {
+						success = false
+					}
+				} else {
+					if err := h.Repo.UpsertPortState(ctx, devID, int(endReport.Port), idleStatus, &powerW); err != nil {
+						success = false
+					}
 				}
 
 				// 按协议2.2.9/2.2.2，设备上报充电结束后平台需返回确认帧。
@@ -743,9 +794,15 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 
 								// 同步更新端口状态为空闲 (0x09 = bit0在线 + bit3空载)
 								idleStatus := 0x09
-								if err := h.Repo.UpsertPortState(ctx, devID, protocolPortNo, idleStatus, nil); err != nil {
+								var upsertErr error
+								if h.Core != nil {
+									upsertErr = h.Core.UpsertPortSnapshot(ctx, devID, int32(protocolPortNo), int32(idleStatus), nil, time.Now())
+								} else {
+									upsertErr = h.Repo.UpsertPortState(ctx, devID, protocolPortNo, idleStatus, nil)
+								}
+								if upsertErr != nil {
 									_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()),
-										[]byte(fmt.Sprintf("⚠️更新端口状态失败: port=%d err=%v", protocolPortNo, err)), false)
+										[]byte(fmt.Sprintf("⚠️更新端口状态失败: port=%d err=%v", protocolPortNo, upsertErr)), false)
 								}
 
 								if h.EventQueue != nil {
@@ -763,9 +820,15 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 
 								// 同步更新端口状态为充电中 (0x81 = bit0在线 + bit7充电)
 								chargingStatus := 0x81
-								if err := h.Repo.UpsertPortState(ctx, devID, protocolPortNo, chargingStatus, nil); err != nil {
+								var upsertErr error
+								if h.Core != nil {
+									upsertErr = h.Core.UpsertPortSnapshot(ctx, devID, int32(protocolPortNo), int32(chargingStatus), nil, time.Now())
+								} else {
+									upsertErr = h.Repo.UpsertPortState(ctx, devID, protocolPortNo, chargingStatus, nil)
+								}
+								if upsertErr != nil {
 									_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()),
-										[]byte(fmt.Sprintf("⚠️更新端口状态失败: port=%d err=%v", protocolPortNo, err)), false)
+										[]byte(fmt.Sprintf("⚠️更新端口状态失败: port=%d err=%v", protocolPortNo, upsertErr)), false)
 								}
 
 								if h.EventQueue != nil {
@@ -813,14 +876,26 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 
 				// 使用与正式协议一致的BKV位图：0x81 = bit0在线 + bit7充电中
 				chargingStatus := 0x81
-				if err := h.Repo.UpsertPortState(ctx, devID, portNo, chargingStatus, nil); err != nil {
-					success = false
+				if h.Core != nil {
+					if err := h.Core.UpsertPortSnapshot(ctx, devID, int32(portNo), int32(chargingStatus), nil, time.Now()); err != nil {
+						success = false
+					}
+				} else {
+					if err := h.Repo.UpsertPortState(ctx, devID, portNo, chargingStatus, nil); err != nil {
+						success = false
+					}
 				}
 			} else {
 				// 停止充电：同步为空闲状态（0x09 = bit0在线 + bit3空载）
 				idleStatus := 0x09
-				if err := h.Repo.UpsertPortState(ctx, devID, portNo, idleStatus, nil); err != nil {
-					success = false
+				if h.Core != nil {
+					if err := h.Core.UpsertPortSnapshot(ctx, devID, int32(portNo), int32(idleStatus), nil, time.Now()); err != nil {
+						success = false
+					}
+				} else {
+					if err := h.Repo.UpsertPortState(ctx, devID, portNo, idleStatus, nil); err != nil {
+						success = false
+					}
 				}
 			}
 		}
@@ -919,13 +994,37 @@ func (h *Handlers) HandleChargingEnd(ctx context.Context, f *Frame) error {
 			}
 
 			// 结算订单
-			if err := h.Repo.SettleOrder(ctx, devID, portNo, orderHex, durationSec, kwh01, reason); err != nil {
-				success = false
-			} else {
-				// 更新端口状态为空闲
-				idleStatus := 0x09 // 0x09 = bit0(在线) + bit3(空载)
-				if err := h.Repo.UpsertPortState(ctx, devID, portNo, idleStatus, nil); err != nil {
+			if h.Core != nil {
+				if err := h.Core.SettleOrder(ctx, devID, portNo, orderHex, durationSec, kwh01, reason); err != nil {
 					success = false
+				} else {
+					// 更新端口状态为空闲
+					idleStatus := 0x09 // 0x09 = bit0(在线) + bit3(空载)
+					if h.Core != nil {
+						if err := h.Core.UpsertPortSnapshot(ctx, devID, int32(portNo), int32(idleStatus), nil, time.Now()); err != nil {
+							success = false
+						}
+					} else {
+						if err := h.Repo.UpsertPortState(ctx, devID, portNo, idleStatus, nil); err != nil {
+							success = false
+						}
+					}
+				}
+			} else {
+				if err := h.Repo.SettleOrder(ctx, devID, portNo, orderHex, durationSec, kwh01, reason); err != nil {
+					success = false
+				} else {
+					// 更新端口状态为空闲
+					idleStatus := 0x09 // 0x09 = bit0(在线) + bit3(空载)
+					if h.Core != nil {
+						if err := h.Core.UpsertPortSnapshot(ctx, devID, int32(portNo), int32(idleStatus), nil, time.Now()); err != nil {
+							success = false
+						}
+					} else {
+						if err := h.Repo.UpsertPortState(ctx, devID, portNo, idleStatus, nil); err != nil {
+							success = false
+						}
+					}
 				}
 			}
 		}
@@ -1873,9 +1972,16 @@ func (h *Handlers) HandleSocketStateResponse(ctx context.Context, f *Frame) erro
 	}
 
 	power := int(resp.Power) // W
-	if err := h.Repo.UpsertPortState(ctx, devID, int(resp.SocketNo), dbStatus, &power); err != nil {
+	var upsertErr error
+	if h.Core != nil {
+		p := int32(power)
+		upsertErr = h.Core.UpsertPortSnapshot(ctx, devID, int32(resp.SocketNo), int32(dbStatus), &p, time.Now())
+	} else {
+		upsertErr = h.Repo.UpsertPortState(ctx, devID, int(resp.SocketNo), dbStatus, &power)
+	}
+	if upsertErr != nil {
 		// 记录错误但不中断处理流程
-		errLog := []byte(fmt.Sprintf("❌failed to update port state: socket=%d err=%v", resp.SocketNo, err))
+		errLog := []byte(fmt.Sprintf("❌failed to update port state: socket=%d err=%v", resp.SocketNo, upsertErr))
 		_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0xFFFF, 0, errLog, false)
 	}
 

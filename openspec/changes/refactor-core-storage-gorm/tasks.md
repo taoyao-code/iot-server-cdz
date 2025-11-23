@@ -23,7 +23,7 @@
   - 保证所有查询使用 GORM 表达，不再拼接 SQL。
 - [x] 3.2 首先迁移“启动充电”主链路：
   - StartCharge 中的设备/端口/订单/队列访问全部改为调用 `CoreRepo`（GORM 实现）；
-  - BKV 控制 ACK / 充电结束上报中的订单结算和端口收敛使用 `CoreRepo`；
+  - BKV 控制 ACK / 充电结束上报中的订单结算已通过 `CoreRepo.SettleOrder` 访问存储层；
   - PortStatusSyncer 中对 `ports`/`orders` 的一致性检查改用 `CoreRepo`。
 
 ## 4. 去 SQL 阶段（核心路径）

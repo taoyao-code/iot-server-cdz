@@ -47,6 +47,10 @@ type CoreRepo interface {
 	UpdateOrderStatus(ctx context.Context, orderID int64, status int32) error
 	// CompleteOrder 完成订单（写入结束原因、时间、累计电量/金额等；实现内保证与端口状态一致性可选在同一事务完成）
 	CompleteOrder(ctx context.Context, deviceID int64, portNo int32, endReason int32, endTime time.Time, amountCent *int64, kwh0p01 *int64) error
+	// SettleOrder 结算订单（兼容 business_no 与 order_no 两种匹配方式）
+	// 语义等价于原 pg 仓储中的 SettleOrder：优先按 device_id+port_no+business_no 更新，
+	// 若无匹配则按 order_no upsert（创建或更新）终态订单。
+	SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh0p01 int, reason int) error
 
 	// ---------- 指令日志 ----------
 	// AppendCmdLog 追加一条上下行指令日志
