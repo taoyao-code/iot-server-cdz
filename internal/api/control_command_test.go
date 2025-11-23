@@ -3,16 +3,16 @@ package api
 import (
 	"encoding/hex"
 	"testing"
+
+	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 )
 
 // TestEncodeStartControlPayload 测试开始充电命令编码
 // 根据《设备对接指引-组网设备2024》和 docs/协议/BKV设备对接总结.md 2.1节
 // 命令格式：[0x07][插座1B][插孔1B][开关1B][模式1B][时长2B][业务号2B]
 func TestEncodeStartControlPayload(t *testing.T) {
-	h := &ThirdPartyHandler{}
-
 	// 测试用例1: 插座2，A孔，按时长，240分钟
-	payload := h.encodeStartControlPayload(
+	payload := bkv.EncodeStartControlPayload(
 		2,      // socketNo: 2号插座
 		0,      // port: A孔 (0=A, 1=B)
 		1,      // mode: 1=按时长
@@ -59,10 +59,8 @@ func TestEncodeStartControlPayload(t *testing.T) {
 
 // TestEncodeStopControlPayload 测试停止充电命令编码
 func TestEncodeStopControlPayload(t *testing.T) {
-	h := &ThirdPartyHandler{}
-
 	// 测试用例: 插座2，A孔
-	payload := h.encodeStopControlPayload(
+	payload := bkv.EncodeStopControlPayload(
 		2,      // socketNo: 2号插座
 		0,      // port: A孔
 		0x0068, // businessNo: 业务号
@@ -97,9 +95,7 @@ func TestEncodeStopControlPayload(t *testing.T) {
 
 // TestRealWorldExample 测试真实案例：插座1，A孔，按时长60分钟
 func TestRealWorldExample(t *testing.T) {
-	h := &ThirdPartyHandler{}
-
-	payload := h.encodeStartControlPayload(
+	payload := bkv.EncodeStartControlPayload(
 		1,  // socketNo: 1号插座
 		0,  // port: A孔 (第一个插孔)
 		1,  // mode: 1=按时长

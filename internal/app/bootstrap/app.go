@@ -97,6 +97,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	// Week5: 创建Outbound适配器（用于BKV下行消息）
 	// 🔥 修复：传入Redis队列，确保心跳ACK能被worker立即发送
 	outboundAdapter := app.NewOutboundAdapter(dbpool, repo, redisQueue)
+	driverCommandSource := bkv.NewCommandSource(outboundAdapter, log)
 
 	// P1-2修复: 创建CardService（刷卡充电业务）
 	pricingEngine := service.NewPricingEngine()
@@ -104,10 +105,13 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 
 	handlerSet := &ap3000.Handlers{Repo: repo, Pusher: pusher, PushURL: pushURL, Metrics: appm}
 
+	// DriverCore: 协议驱动 -> 核心的事件收敛入口
+	driverCore := app.NewDriverCore(coreRepo, log)
+
 	// P1修复: 使用NewHandlersWithServices完整初始化BKV处理器
 	// P1-2修复: 注入CardService，启用订单确认ACK验证
 	// v2.1: 注入Metrics支持充电上报监控（2025-10-31）
-	bkvHandlers := bkv.NewHandlersWithServices(repo, coreRepo, bkvReason, cardService, outboundAdapter, eventQueue, deduper)
+	bkvHandlers := bkv.NewHandlersWithServices(repo, coreRepo, bkvReason, cardService, outboundAdapter, eventQueue, deduper, driverCore)
 	bkvHandlers.Metrics = appm // 注入指标采集器
 
 	log.Info("protocol handlers initialized",
@@ -144,11 +148,11 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 		log.Info("third party api authentication config",
 			zap.Int("api_keys_count", len(thirdpartyAuthCfg.APIKeys)),
 			zap.Bool("enabled", thirdpartyAuthCfg.Enabled))
-		api.RegisterThirdPartyRoutes(r, repo, coreRepo, sess, redisQueue, eventQueue, appm, thirdpartyAuthCfg, log)
+		api.RegisterThirdPartyRoutes(r, repo, coreRepo, sess, driverCommandSource, eventQueue, appm, thirdpartyAuthCfg, log)
 
 		// 注册内部测试控制台路由（仅在启用时）
 		enableTestConsole := cfg.API.Auth.Enabled && len(cfg.API.Auth.APIKeys) > 0
-		api.RegisterTestConsoleRoutes(r, repo, coreRepo, sess, redisQueue, eventQueue, appm, authCfg, log, enableTestConsole)
+		api.RegisterTestConsoleRoutes(r, repo, coreRepo, sess, driverCommandSource, eventQueue, appm, authCfg, log, enableTestConsole)
 
 		// 注册静态文件服务（测试控制台前端）
 		if enableTestConsole {

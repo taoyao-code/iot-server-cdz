@@ -12,12 +12,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/taoyao-code/iot-server/internal/driverapi"
 	"github.com/taoyao-code/iot-server/internal/metrics"
 	"github.com/taoyao-code/iot-server/internal/service"
 	"github.com/taoyao-code/iot-server/internal/session"
 	"github.com/taoyao-code/iot-server/internal/storage"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
-	redisstorage "github.com/taoyao-code/iot-server/internal/storage/redis"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
 	"go.uber.org/zap"
 )
@@ -27,7 +27,6 @@ import (
 type TestConsoleHandler struct {
 	repo            *pgstorage.Repository
 	sess            session.SessionManager
-	outboundQ       *redisstorage.OutboundQueue
 	eventQueue      *thirdparty.EventQueue
 	thirdPartyH     *ThirdPartyHandler
 	timelineService *service.TimelineService
@@ -39,7 +38,7 @@ func NewTestConsoleHandler(
 	repo *pgstorage.Repository,
 	core storage.CoreRepo,
 	sess session.SessionManager,
-	outboundQ *redisstorage.OutboundQueue,
+	commandSource driverapi.CommandSource,
 	eventQueue *thirdparty.EventQueue,
 	metrics *metrics.AppMetrics,
 	logger *zap.Logger,
@@ -47,9 +46,8 @@ func NewTestConsoleHandler(
 	return &TestConsoleHandler{
 		repo:            repo,
 		sess:            sess,
-		outboundQ:       outboundQ,
 		eventQueue:      eventQueue,
-		thirdPartyH:     NewThirdPartyHandler(repo, core, sess, outboundQ, eventQueue, metrics, logger),
+		thirdPartyH:     NewThirdPartyHandler(repo, core, sess, commandSource, eventQueue, metrics, logger),
 		timelineService: service.NewTimelineService(repo, logger),
 		logger:          logger,
 	}

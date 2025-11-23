@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/taoyao-code/iot-server/internal/coremodel"
+	"github.com/taoyao-code/iot-server/internal/driverapi"
 	"github.com/taoyao-code/iot-server/internal/storage"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
@@ -100,6 +102,9 @@ type Handlers struct {
 	EventQueue  *thirdparty.EventQueue // v2.1: 事件队列（第三方推送）
 	Deduper     *thirdparty.Deduper    // v2.1: 去重器
 	Metrics     MetricsAPI             // v2.1: 监控指标（Prometheus）
+
+	// CoreEvents 为驱动 -> 核心 的事件上报入口
+	CoreEvents driverapi.EventSink
 }
 
 // HandleHeartbeat 处理心跳帧 (cmd=0x0000 或 BKV cmd=0x1017)
@@ -119,8 +124,28 @@ func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
 		return err
 	}
 
-	// 刷新数据库中的最近心跳时间（与 Redis 会话一致）
-	_ = h.Repo.TouchDeviceLastSeen(ctx, devicePhyID, time.Now())
+	now := time.Now()
+
+	// 通过 CoreEvents 报告心跳，让核心更新 last_seen 等状态；若未注入则回退到直接触库。
+	updateViaCore := false
+	if h.CoreEvents != nil && devicePhyID != "" {
+		hb := &coremodel.CoreEvent{
+			Type:       coremodel.EventDeviceHeartbeat,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			OccurredAt: now,
+			DeviceHeartbeat: &coremodel.DeviceHeartbeatPayload{
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				Status:     coremodel.DeviceStateOnline,
+				LastSeenAt: now,
+			},
+		}
+		if err := h.CoreEvents.HandleCoreEvent(ctx, hb); err == nil {
+			updateViaCore = true
+		}
+	}
+	if !updateViaCore {
+		_ = h.Repo.TouchDeviceLastSeen(ctx, devicePhyID, now)
+	}
 
 	// P1-4修复: 初始化默认端口（仅在端口不存在时）
 	// BKV设备可能只发送心跳不发送状态报告，导致ports表为空
@@ -424,20 +449,35 @@ func (h *Handlers) updatePortAndOrder(ctx context.Context, deviceID int64, devic
 		powerW = &power
 	}
 
-	// 1. 更新端口状态到数据库
-	if h.Core != nil {
-		var power32 *int32
-		if powerW != nil {
-			p := int32(*powerW)
-			power32 = &p
-		}
-		if err := h.Core.UpsertPortSnapshot(ctx, deviceID, int32(port.PortNo), int32(status), power32, time.Now()); err != nil {
-			return fmt.Errorf("upsert port state via core repo: %w", err)
-		}
-	} else {
-		if err := h.Repo.UpsertPortState(ctx, deviceID, int(port.PortNo), status, powerW); err != nil {
-			return fmt.Errorf("upsert port state: %w", err)
-		}
+	// 1. 更新端口状态：通过 CoreEvents 上报 PortSnapshot 事件，由核心持久化。
+	if h.CoreEvents == nil || devicePhyID == "" {
+		return fmt.Errorf("core events sink not configured for port snapshot")
+	}
+
+	var power32 *int32
+	if powerW != nil {
+		p := int32(*powerW)
+		power32 = &p
+	}
+	evPort := coremodel.PortNo(port.PortNo)
+
+	ev := &coremodel.CoreEvent{
+		Type:       coremodel.EventPortSnapshot,
+		DeviceID:   coremodel.DeviceID(devicePhyID),
+		PortNo:     &evPort,
+		OccurredAt: time.Now(),
+		PortSnapshot: &coremodel.PortSnapshot{
+			DeviceID:  coremodel.DeviceID(devicePhyID),
+			PortNo:    coremodel.PortNo(port.PortNo),
+			Status:    coremodel.PortStatusUnknown,
+			RawStatus: int32(status),
+			PowerW:    power32,
+			At:        time.Now(),
+		},
+	}
+
+	if err := h.CoreEvents.HandleCoreEvent(ctx, ev); err != nil {
+		return fmt.Errorf("emit port snapshot event failed: %w", err)
 	}
 
 	// 2. P0修复: 检查是否需要更新订单状态
@@ -504,31 +544,67 @@ func (h *Handlers) handleSocketStatusUpdateSimple(ctx context.Context, deviceID 
 		}
 	}
 
-	// 更新端口A状态
-	if h.Core != nil {
-		var powerA32, powerB32 *int32
-		if portAPower != nil {
-			p := int32(*portAPower)
-			powerA32 = &p
+	// 更新端口A/B状态：通过 CoreEvents 上报快照事件，由核心持久化。
+	if h.CoreEvents == nil || payload.GatewayID == "" {
+		return fmt.Errorf("core events sink not configured for port snapshot")
+	}
+
+	now := time.Now()
+	devID := coremodel.DeviceID(payload.GatewayID)
+
+	powerA32 := func() *int32 {
+		if portAPower == nil {
+			return nil
 		}
-		if portBPower != nil {
-			p := int32(*portBPower)
-			powerB32 = &p
+		p := int32(*portAPower)
+		return &p
+	}()
+	powerB32 := func() *int32 {
+		if portBPower == nil {
+			return nil
 		}
-		now := time.Now()
-		if err := h.Core.UpsertPortSnapshot(ctx, deviceID, 0, int32(portAStatus), powerA32, now); err != nil {
-			return fmt.Errorf("failed to update port A state via core repo: %w", err)
-		}
-		if err := h.Core.UpsertPortSnapshot(ctx, deviceID, 1, int32(portBStatus), powerB32, now); err != nil {
-			return fmt.Errorf("failed to update port B state via core repo: %w", err)
-		}
-	} else {
-		if err := h.Repo.UpsertPortState(ctx, deviceID, 0, portAStatus, portAPower); err != nil {
-			return fmt.Errorf("failed to update port A state: %w", err)
-		}
-		if err := h.Repo.UpsertPortState(ctx, deviceID, 1, portBStatus, portBPower); err != nil {
-			return fmt.Errorf("failed to update port B state: %w", err)
-		}
+		p := int32(*portBPower)
+		return &p
+	}()
+
+	// A口
+	portA := coremodel.PortNo(0)
+	evA := &coremodel.CoreEvent{
+		Type:       coremodel.EventPortSnapshot,
+		DeviceID:   devID,
+		PortNo:     &portA,
+		OccurredAt: now,
+		PortSnapshot: &coremodel.PortSnapshot{
+			DeviceID:  devID,
+			PortNo:    portA,
+			Status:    coremodel.PortStatusUnknown,
+			RawStatus: int32(portAStatus),
+			PowerW:    powerA32,
+			At:        now,
+		},
+	}
+	if err := h.CoreEvents.HandleCoreEvent(ctx, evA); err != nil {
+		return fmt.Errorf("failed to emit port A snapshot event: %w", err)
+	}
+
+	// B口
+	portB := coremodel.PortNo(1)
+	evB := &coremodel.CoreEvent{
+		Type:       coremodel.EventPortSnapshot,
+		DeviceID:   devID,
+		PortNo:     &portB,
+		OccurredAt: now,
+		PortSnapshot: &coremodel.PortSnapshot{
+			DeviceID:  devID,
+			PortNo:    portB,
+			Status:    coremodel.PortStatusUnknown,
+			RawStatus: int32(portBStatus),
+			PowerW:    powerB32,
+			At:        now,
+		},
+	}
+	if err := h.CoreEvents.HandleCoreEvent(ctx, evB); err != nil {
+		return fmt.Errorf("failed to emit port B snapshot event: %w", err)
 	}
 
 	return nil
@@ -594,25 +670,38 @@ func (h *Handlers) handleBKVChargingEnd(ctx context.Context, deviceID int64, f *
 		actualPort = 0
 	}
 
-	// 结算订单
-	if h.Core != nil {
-		if err := h.Core.SettleOrder(ctx, deviceID, actualPort, orderHex, durationSec, kwh01, reason); err != nil {
-			return err
-		}
-	} else if err := h.Repo.SettleOrder(ctx, deviceID, actualPort, orderHex, durationSec, kwh01, reason); err != nil {
-		return err
+	// 使用 CoreEvents 将充电结束标准化为核心事件，由中间件核心完成订单结算和端口更新。
+	if h.CoreEvents == nil || payload.GatewayID == "" {
+		return fmt.Errorf("core events sink not configured for BKV charging end")
 	}
 
-	// 更新端口状态为空闲
-	idleStatus := 0x09 // 0x09 = bit0(在线) + bit3(空载)
-	if h.Core != nil {
-		if err := h.Core.UpsertPortSnapshot(ctx, deviceID, int32(actualPort), int32(idleStatus), nil, time.Now()); err != nil {
-			return err
-		}
-	} else {
-		if err := h.Repo.UpsertPortState(ctx, deviceID, actualPort, idleStatus, nil); err != nil {
-			return err
-		}
+	nextStatus := int32(0x09) // 0x09 = bit0(在线) + bit3(空载)
+	rawReason := int32(reason)
+	evPort := coremodel.PortNo(actualPort)
+	evBiz := coremodel.BusinessNo(orderHex)
+
+	ev := &coremodel.CoreEvent{
+		Type:       coremodel.EventSessionEnded,
+		DeviceID:   coremodel.DeviceID(payload.GatewayID),
+		PortNo:     &evPort,
+		BusinessNo: &evBiz,
+		OccurredAt: time.Now(),
+		SessionEnded: &coremodel.SessionEndedPayload{
+			DeviceID:       coremodel.DeviceID(payload.GatewayID),
+			PortNo:         coremodel.PortNo(actualPort),
+			BusinessNo:     coremodel.BusinessNo(orderHex),
+			EnergyKWh01:    int32(kwh01),
+			DurationSec:    int32(durationSec),
+			EndReasonCode:  "",
+			InstantPowerW:  nil,
+			OccurredAt:     time.Now(),
+			RawReason:      &rawReason,
+			NextPortStatus: &nextStatus,
+		},
+	}
+
+	if err := h.CoreEvents.HandleCoreEvent(ctx, ev); err != nil {
+		return fmt.Errorf("core event session ended failed: %w", err)
 	}
 
 	success = true
@@ -663,15 +752,12 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 			return h.HandleSocketStateResponse(ctx, innerFrame)
 		}
 
-		// 优先识别「充电结束上报」帧（长度型 payload，子命令=0x02/0x18）
+		// 优先识别「充电结束上报」帧（长度型 payload，子命令=0x02/0x18），并转换为核心事件
 		// 避免被下面的「控制ACK」分支误吞掉导致不结算订单/不收敛端口状态。
 		if len(f.Data) >= 18 && len(f.Data) >= 3 && (f.Data[2] == 0x02 || f.Data[2] == 0x18) {
 			endReport, err := ParseBKVChargingEnd(f.Data)
 			if err == nil {
-				// 处理充电结束
 				orderHex := fmt.Sprintf("%04X", endReport.BusinessNo)
-
-				// 计算实际充电时长和用电量
 				durationSec := int(endReport.ChargingTime) * 60 // 分钟转秒
 				kwhUsed := int(endReport.EnergyUsed)            // 已经是0.01kWh单位
 
@@ -683,25 +769,35 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 					}
 				}
 
-				// 结算订单
-				if h.Core != nil {
-					if err := h.Core.SettleOrder(ctx, devID, int(endReport.Port), orderHex, durationSec, kwhUsed, platformReason); err != nil {
-						success = false
-					}
-				} else if err := h.Repo.SettleOrder(ctx, devID, int(endReport.Port), orderHex, durationSec, kwhUsed, platformReason); err != nil {
+				if h.CoreEvents == nil || devicePhyID == "" {
 					success = false
-				}
-
-				// 更新端口状态为空闲
-				idleStatus := 0x09                         // 0x09 = bit0(在线) + bit3(空载)
-				powerW := int(endReport.InstantPower) / 10 // 转换为实际瓦数
-				if h.Core != nil {
-					p := int32(powerW)
-					if err := h.Core.UpsertPortSnapshot(ctx, devID, int32(endReport.Port), int32(idleStatus), &p, time.Now()); err != nil {
-						success = false
-					}
 				} else {
-					if err := h.Repo.UpsertPortState(ctx, devID, int(endReport.Port), idleStatus, &powerW); err != nil {
+					idleStatus := int32(0x09) // 0x09 = bit0(在线) + bit3(空载)
+					rawReason := int32(platformReason)
+					evPort := coremodel.PortNo(endReport.Port)
+					evBiz := coremodel.BusinessNo(orderHex)
+
+					ev := &coremodel.CoreEvent{
+						Type:       coremodel.EventSessionEnded,
+						DeviceID:   coremodel.DeviceID(devicePhyID),
+						PortNo:     &evPort,
+						BusinessNo: &evBiz,
+						OccurredAt: time.Now(),
+						SessionEnded: &coremodel.SessionEndedPayload{
+							DeviceID:       coremodel.DeviceID(devicePhyID),
+							PortNo:         coremodel.PortNo(endReport.Port),
+							BusinessNo:     coremodel.BusinessNo(orderHex),
+							EnergyKWh01:    int32(kwhUsed),
+							DurationSec:    int32(durationSec),
+							EndReasonCode:  "",
+							InstantPowerW:  nil,
+							OccurredAt:     time.Now(),
+							RawReason:      &rawReason,
+							NextPortStatus: &idleStatus,
+						},
+					}
+
+					if err := h.CoreEvents.HandleCoreEvent(ctx, ev); err != nil {
 						success = false
 					}
 				}
@@ -993,38 +1089,37 @@ func (h *Handlers) HandleChargingEnd(ctx context.Context, f *Frame) error {
 				h.Metrics.GetChargeReportEnergyTotal().WithLabelValues(deviceIDStr, portNoStr).Add(energyWh)
 			}
 
-			// 结算订单
-			if h.Core != nil {
-				if err := h.Core.SettleOrder(ctx, devID, portNo, orderHex, durationSec, kwh01, reason); err != nil {
-					success = false
-				} else {
-					// 更新端口状态为空闲
-					idleStatus := 0x09 // 0x09 = bit0(在线) + bit3(空载)
-					if h.Core != nil {
-						if err := h.Core.UpsertPortSnapshot(ctx, devID, int32(portNo), int32(idleStatus), nil, time.Now()); err != nil {
-							success = false
-						}
-					} else {
-						if err := h.Repo.UpsertPortState(ctx, devID, portNo, idleStatus, nil); err != nil {
-							success = false
-						}
-					}
-				}
+			// 使用 CoreEvents 将充电结束标准化为核心事件，由中间件核心完成订单结算和端口更新。
+			if h.CoreEvents == nil || devicePhyID == "" {
+				success = false
 			} else {
-				if err := h.Repo.SettleOrder(ctx, devID, portNo, orderHex, durationSec, kwh01, reason); err != nil {
+				nextStatus := int32(0x09) // 0x09 = bit0(在线) + bit3(空载)
+				rawReason := int32(reason)
+				evPort := coremodel.PortNo(portNo)
+				evBiz := coremodel.BusinessNo(orderHex)
+
+				ev := &coremodel.CoreEvent{
+					Type:       coremodel.EventSessionEnded,
+					DeviceID:   coremodel.DeviceID(devicePhyID),
+					PortNo:     &evPort,
+					BusinessNo: &evBiz,
+					OccurredAt: time.Now(),
+					SessionEnded: &coremodel.SessionEndedPayload{
+						DeviceID:       coremodel.DeviceID(devicePhyID),
+						PortNo:         coremodel.PortNo(portNo),
+						BusinessNo:     coremodel.BusinessNo(orderHex),
+						EnergyKWh01:    int32(kwh01),
+						DurationSec:    int32(durationSec),
+						EndReasonCode:  "",
+						InstantPowerW:  nil,
+						OccurredAt:     time.Now(),
+						RawReason:      &rawReason,
+						NextPortStatus: &nextStatus,
+					},
+				}
+
+				if err := h.CoreEvents.HandleCoreEvent(ctx, ev); err != nil {
 					success = false
-				} else {
-					// 更新端口状态为空闲
-					idleStatus := 0x09 // 0x09 = bit0(在线) + bit3(空载)
-					if h.Core != nil {
-						if err := h.Core.UpsertPortSnapshot(ctx, devID, int32(portNo), int32(idleStatus), nil, time.Now()); err != nil {
-							success = false
-						}
-					} else {
-						if err := h.Repo.UpsertPortState(ctx, devID, portNo, idleStatus, nil); err != nil {
-							success = false
-						}
-					}
 				}
 			}
 		}

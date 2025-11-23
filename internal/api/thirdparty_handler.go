@@ -10,14 +10,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/taoyao-code/iot-server/internal/coremodel"
+	"github.com/taoyao-code/iot-server/internal/driverapi"
 	"github.com/taoyao-code/iot-server/internal/metrics"
-	"github.com/taoyao-code/iot-server/internal/outbound"
-	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 	"github.com/taoyao-code/iot-server/internal/session"
 	"github.com/taoyao-code/iot-server/internal/storage"
 	"github.com/taoyao-code/iot-server/internal/storage/models"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
-	redisstorage "github.com/taoyao-code/iot-server/internal/storage/redis"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
 	"go.uber.org/zap"
 )
@@ -27,7 +26,7 @@ type ThirdPartyHandler struct {
 	repo       *pgstorage.Repository
 	core       storage.CoreRepo
 	sess       session.SessionManager
-	outboundQ  *redisstorage.OutboundQueue
+	driverCmd  driverapi.CommandSource
 	eventQueue *thirdparty.EventQueue
 	metrics    *metrics.AppMetrics // 一致性监控指标
 	logger     *zap.Logger
@@ -38,7 +37,7 @@ func NewThirdPartyHandler(
 	repo *pgstorage.Repository,
 	core storage.CoreRepo,
 	sess session.SessionManager,
-	outboundQ *redisstorage.OutboundQueue,
+	commandSource driverapi.CommandSource,
 	eventQueue *thirdparty.EventQueue,
 	metrics *metrics.AppMetrics,
 	logger *zap.Logger,
@@ -47,7 +46,7 @@ func NewThirdPartyHandler(
 		repo:       repo,
 		core:       core,
 		sess:       sess,
-		outboundQ:  outboundQ,
+		driverCmd:  commandSource,
 		eventQueue: eventQueue,
 		metrics:    metrics,
 		logger:     logger,
@@ -388,123 +387,60 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		zap.Int64("device_id", devID),
 		zap.Int("port_no", req.PortNo))
 
-	// 8. 构造并下发充电指令（BKV 0x0015下行）
-	// 按协议 2.2.8：外层BKV命令0x0015，内层控制命令0x07
-	if h.outboundQ != nil {
-		msgID := uint32(time.Now().Unix() % 65536)
-		mapped := uint8(mapPort(req.PortNo))
-		biz := businessNo
-		// 🔧 修复：使用 GetDuration() 获取时长参数
-		durationMin := uint16(req.GetDuration())
-
-		// 🔥 插座号设置（硬件层核心参数）
-		//
-		// 【重要】插座号决定了目标设备，必须根据设备类型选择：
-		//
-		// 1. 单机版设备（如82241218000382）：
-		//    - 仅支持插座号 0（默认/唯一插座）
-		//    - 设备内有2个物理插孔（A孔/B孔），通过portNo区分
-		//    - 如果使用插座号1/2，设备会返回ACK失败（result=00）
-		//
-		// 2. 组网版设备（待对接）：
-		//    - 支持插座号 1-250（多个独立插座通过网关管理）
-		//    - 每个插座有独立MAC地址和UID编号
-		//    - 需要先通过2.2.5/2.2.6命令下发网络节点列表
-		//
-		// 【协议依据】设备对接指引-组网设备2024(1).txt：
-		//   - 2.2.8 控制命令格式：[长度][0x07][插座号][插孔号][开关][模式][时长][业务号]
-		//   - 单机版协议示例中插座号始终为0
-		//
-		// 【测试验证】生产环境（2025-10-31）：
-		//   - 插座号=1 → 设备ACK: 00 01 00（失败）
-		//   - 插座号=2 → 设备ACK: 00 02 00（失败）
-		//   - 插座号=0 → 设备ACK: 01 00 00（成功）✅
-		socketNo := uint8(0)
-
-		// 构造内层payload（命令0x07 + 参数）
-		innerPayload := h.encodeStartControlPayload(socketNo, mapped, uint8(req.ChargeMode), durationMin, biz) // 【关键修复】根据组网设备协议2.2.8，长度字段=参数字节数（不含0x07命令字节）
-		// 协议示例: 0008 07 02 00 01 01 00f0 0000
-		//          ^^^^ 长度=8 (后面8字节参数，不含07)
-		// 格式：[参数长度(2字节)] + [07命令] + [参数]
-		paramLen := len(innerPayload) - 1 // 去掉0x07命令字节
-		payload := make([]byte, 2+len(innerPayload))
-		payload[0] = byte(paramLen >> 8) // 参数长度高字节
-		payload[1] = byte(paramLen)      // 参数长度低字节
-		copy(payload[2:], innerPayload)  // 完整内层payload(含0x07)
-
-		h.logger.Info("DEBUG: payload生成", zap.Int("inner_len", len(innerPayload)), zap.Int("total_len", len(payload)), zap.String("payload_hex", fmt.Sprintf("%x", payload)))
-		// 构造外层BKV帧（命令0x0015）
-		frame := bkv.Build(0x0015, msgID, devicePhyID, payload)
-		h.logger.Info("DEBUG: BKV帧生成", zap.Int("frame_len", len(frame)), zap.String("frame_hex", fmt.Sprintf("%x", frame)))
-
-		err = h.outboundQ.Enqueue(ctx, &redisstorage.OutboundMessage{
-			ID:        fmt.Sprintf("api_%d", msgID),
-			DeviceID:  devID,
-			PhyID:     devicePhyID,
-			Command:   frame,
-			Priority:  outbound.PriorityHigh, // P1-6: 启动充电=高优先级
-			MaxRetry:  3,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-			Timeout:   5000,
-		})
-		if err != nil {
-			h.logger.Error("failed to push charge command",
-				zap.Error(err),
-				zap.String("order_no", orderNo),
-				zap.String("device_phy_id", devicePhyID))
-
-			// 一致性修复: 命令入队失败时返回错误，确保原子性语义
-			// 符合规范要求: "从客户端视角看要么都成功，要么都失败"
-			// 虽然订单已创建，但 OrderMonitor 会在超时后自动清理 pending 订单
-			c.JSON(http.StatusInternalServerError, StandardResponse{
-				Code: 500,
-				// EN: charge command enqueue failed
-				Message: "充电命令入队失败，请稍后重试",
-				Data: map[string]interface{}{
-					"order_no":   orderNo,
-					"device_id":  devicePhyID,
-					"reason":     "queue_enqueue_failed",
-					"retry_hint": "pending订单将在5分钟后自动清理，请稍后重试",
-				},
-				RequestID: requestID,
-				Timestamp: time.Now().Unix(),
-			})
-			return
-		}
-
-		h.logger.Info("charge command pushed",
+	if err := h.dispatchStartChargeCommand(ctx, devicePhyID, devID, &req, orderNo, businessNo); err != nil {
+		h.logger.Error("failed to dispatch start command",
+			zap.Error(err),
 			zap.String("order_no", orderNo),
+			zap.String("device_phy_id", devicePhyID))
+
+		c.JSON(http.StatusInternalServerError, StandardResponse{
+			Code: 500,
+			// EN: charge command enqueue failed
+			Message: "充电命令发送失败，请稍后重试",
+			Data: map[string]interface{}{
+				"order_no":   orderNo,
+				"device_id":  devicePhyID,
+				"reason":     "command_dispatch_failed",
+				"retry_hint": "pending订单将在5分钟后自动清理，请稍后重试",
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
+	h.logger.Info("charge command dispatched",
+		zap.String("order_no", orderNo),
+		zap.String("device_phy_id", devicePhyID),
+		zap.Int("port_no", req.PortNo))
+
+	// 主动查询插座状态（0x001D），避免仅依赖周期性0x94
+	_ = h.enqueueSocketStatusQuery(ctx, devID, devicePhyID, 0)
+
+	// 新增：等待设备状态就绪验证
+	if err := h.waitForDeviceReady(ctx, devID, devicePhyID, req.PortNo, orderNo, requestID); err != nil {
+		// 设备未就绪，返回具体错误信息
+		h.logger.Warn("device not ready for charging",
 			zap.String("device_phy_id", devicePhyID),
-			zap.Int("port_no", req.PortNo))
-		// 主动查询插座状态（0x001D），避免仅依赖周期性0x94
-		_ = h.enqueueSocketStatusQuery(ctx, devID, devicePhyID, 0)
+			zap.Int("port_no", req.PortNo),
+			zap.String("order_no", orderNo),
+			zap.Error(err))
 
-		// 新增：等待设备状态就绪验证
-		if err := h.waitForDeviceReady(ctx, devID, devicePhyID, req.PortNo, orderNo, requestID); err != nil {
-			// 设备未就绪，返回具体错误信息
-			h.logger.Warn("device not ready for charging",
-				zap.String("device_phy_id", devicePhyID),
-				zap.Int("port_no", req.PortNo),
-				zap.String("order_no", orderNo),
-				zap.Error(err))
-
-			c.JSON(http.StatusServiceUnavailable, StandardResponse{
-				Code: 50301, // DEVICE_NOT_READY
-				// EN: device is not ready for charging
-				Message: "设备未就绪，无法开始充电",
-				Data: map[string]interface{}{
-					"device_id":    devicePhyID,
-					"port_no":      req.PortNo,
-					"order_no":     orderNo,
-					"error_code":   "DEVICE_NOT_READY",
-					"error_detail": err.Error(),
-				},
-				RequestID: requestID,
-				Timestamp: time.Now().Unix(),
-			})
-			return
-		}
+		c.JSON(http.StatusServiceUnavailable, StandardResponse{
+			Code: 50301, // DEVICE_NOT_READY
+			// EN: device is not ready for charging
+			Message: "设备未就绪，无法开始充电",
+			Data: map[string]interface{}{
+				"device_id":    devicePhyID,
+				"port_no":      req.PortNo,
+				"order_no":     orderNo,
+				"error_code":   "DEVICE_NOT_READY",
+				"error_detail": err.Error(),
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
 	}
 
 	// 9. 返回成功响应
@@ -523,6 +459,147 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		RequestID: requestID,
 		Timestamp: time.Now().Unix(),
 	})
+}
+
+func (h *ThirdPartyHandler) dispatchStartChargeCommand(
+	ctx context.Context,
+	devicePhyID string,
+	deviceID int64,
+	req *StartChargeRequest,
+	orderNo string,
+	businessNo uint16,
+) error {
+	if req == nil {
+		return fmt.Errorf("request required")
+	}
+
+	if h.driverCmd == nil {
+		return fmt.Errorf("driver command source not configured")
+	}
+
+	durationMin := uint16(req.GetDuration())
+	if durationMin == 0 {
+		durationMin = 1
+	}
+
+	return h.sendStartChargeViaDriver(ctx, devicePhyID, req.PortNo, businessNo, orderNo, req.ChargeMode, durationMin)
+}
+
+func (h *ThirdPartyHandler) sendStartChargeViaDriver(
+	ctx context.Context,
+	devicePhyID string,
+	portNo int,
+	businessNo uint16,
+	orderNo string,
+	chargeMode int,
+	durationMin uint16,
+) error {
+	if h.driverCmd == nil {
+		return fmt.Errorf("driver command source not configured")
+	}
+	bizStr := strconv.Itoa(int(businessNo))
+	biz := coremodel.BusinessNo(bizStr)
+	modeCode := int32(chargeMode)
+	durationSec := int32(durationMin) * 60
+
+	cmd := &coremodel.CoreCommand{
+		Type:      coremodel.CommandStartCharge,
+		CommandID: fmt.Sprintf("start:%s:%d", orderNo, time.Now().UnixNano()),
+		DeviceID:  coremodel.DeviceID(devicePhyID),
+		PortNo:    coremodel.PortNo(portNo),
+		BusinessNo: func() *coremodel.BusinessNo {
+			return &biz
+		}(),
+		IssuedAt: time.Now(),
+		StartCharge: &coremodel.StartChargePayload{
+			Mode:              fmt.Sprintf("mode_%d", chargeMode),
+			ModeCode:          &modeCode,
+			TargetDurationSec: &durationSec,
+		},
+	}
+
+	return h.driverCmd.SendCoreCommand(ctx, cmd)
+}
+
+func (h *ThirdPartyHandler) dispatchStopChargeCommand(
+	ctx context.Context,
+	devicePhyID string,
+	deviceID int64,
+	portNo int,
+	orderNo string,
+	businessNo uint16,
+) (bool, error) {
+	if h.driverCmd == nil {
+		return false, fmt.Errorf("driver command source not configured")
+	}
+	if err := h.sendStopChargeViaDriver(ctx, devicePhyID, portNo, businessNo, orderNo); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (h *ThirdPartyHandler) sendStopChargeViaDriver(
+	ctx context.Context,
+	devicePhyID string,
+	portNo int,
+	businessNo uint16,
+	orderNo string,
+) error {
+	if h.driverCmd == nil {
+		return fmt.Errorf("driver command source not configured")
+	}
+	biz := coremodel.BusinessNo(strconv.Itoa(int(businessNo)))
+
+	cmd := &coremodel.CoreCommand{
+		Type:      coremodel.CommandStopCharge,
+		CommandID: fmt.Sprintf("stop:%s:%d", orderNo, time.Now().UnixNano()),
+		DeviceID:  coremodel.DeviceID(devicePhyID),
+		PortNo:    coremodel.PortNo(portNo),
+		BusinessNo: func() *coremodel.BusinessNo {
+			return &biz
+		}(),
+		IssuedAt: time.Now(),
+		StopCharge: &coremodel.StopChargePayload{
+			Reason: "api_stop_charge",
+		},
+	}
+
+	return h.driverCmd.SendCoreCommand(ctx, cmd)
+}
+
+func (h *ThirdPartyHandler) dispatchQueryPortStatusCommand(
+	ctx context.Context,
+	deviceID int64,
+	devicePhyID string,
+	socketNo int,
+) error {
+	if h.driverCmd == nil {
+		return fmt.Errorf("driver command source not configured")
+	}
+	return h.sendQueryPortStatusViaDriver(ctx, devicePhyID, socketNo)
+}
+
+func (h *ThirdPartyHandler) sendQueryPortStatusViaDriver(
+	ctx context.Context,
+	devicePhyID string,
+	socketNo int,
+) error {
+	if h.driverCmd == nil {
+		return fmt.Errorf("driver command source not configured")
+	}
+
+	socket := int32(socketNo)
+	cmd := &coremodel.CoreCommand{
+		Type:      coremodel.CommandQueryPortStatus,
+		CommandID: fmt.Sprintf("query:%s:%d", devicePhyID, time.Now().UnixNano()),
+		DeviceID:  coremodel.DeviceID(devicePhyID),
+		IssuedAt:  time.Now(),
+		QueryPortStatus: &coremodel.QueryPortStatusPayload{
+			SocketNo: &socket,
+		},
+	}
+
+	return h.driverCmd.SendCoreCommand(ctx, cmd)
 }
 
 // StopChargeRequest 停止充电请求
@@ -718,37 +795,27 @@ sendStopCommand:
 		biz = deriveBusinessNo(orderNo)
 	}
 
-	// 3. 下发停止充电指令（BKV 0x0015控制设备）
-	stopCommandSent := false
-	if h.outboundQ != nil {
-		msgID := uint32(time.Now().Unix() % 65536)
-		// 构造停止充电控制负载：socketNo=0, port 映射, switch=0
-		innerStopData := h.encodeStopControlPayload(uint8(0), uint8(mapPort(*req.PortNo)), biz)
+	stopCommandSent, dispatchErr := h.dispatchStopChargeCommand(ctx, devicePhyID, devID, *req.PortNo, orderNo, biz)
+	if dispatchErr != nil {
+		h.logger.Error("failed to dispatch stop command",
+			zap.Error(dispatchErr),
+			zap.String("order_no", orderNo),
+			zap.String("device_phy_id", devicePhyID))
 
-		// 【关键修复】长度=参数字节数（不含0x07）
-		stopParamLen := len(innerStopData) - 1
-		stopData := make([]byte, 2+len(innerStopData))
-		stopData[0] = byte(stopParamLen >> 8)
-		stopData[1] = byte(stopParamLen)
-		copy(stopData[2:], innerStopData)
-
-		err = h.outboundQ.Enqueue(ctx, &redisstorage.OutboundMessage{
-			ID:        fmt.Sprintf("api_%d", msgID),
-			DeviceID:  devID,
-			PhyID:     devicePhyID,
-			Command:   bkv.Build(0x0015, msgID, devicePhyID, stopData),
-			Priority:  outbound.PriorityEmergency, // P1-6: 停止充电=紧急优先级
-			MaxRetry:  3,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-			Timeout:   5000,
+		c.JSON(http.StatusInternalServerError, StandardResponse{
+			Code: 500,
+			// EN: stop command dispatch failed
+			Message: "停止命令发送失败，请稍后重试",
+			Data: map[string]interface{}{
+				"order_no":   orderNo,
+				"device_id":  devicePhyID,
+				"reason":     "command_dispatch_failed",
+				"retry_hint": "若设备未响应，可重新发起停止请求",
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
 		})
-		if err != nil {
-			h.logger.Error("failed to push stop command", zap.Error(err))
-		} else {
-			h.logger.Info("stop command pushed", zap.String("order_no", orderNo))
-			stopCommandSent = true
-		}
+		return
 	}
 
 	// 可选同步查询：在降级模式下，为了尽量拿到“真实端口状态”，主动发送一次查询插座状态命令(0x001D)，
@@ -826,17 +893,12 @@ func (h *ThirdPartyHandler) syncPortStatusAfterStop(
 		return nil
 	}
 
-	// 2. 下发一次查询插座状态命令(0x001D)，复用 StartCharge 中的实现约定：
-	//   - 单机版设备使用 socketNo=0；
-	//   - 组网设备可按插座号扩展，这里先与现有行为保持一致。
-	if h.outboundQ != nil {
-		if err := h.enqueueSocketStatusQuery(ctx, deviceID, devicePhyID, 0 /*socketNo*/); err != nil {
-			// 查询命令发送失败不影响停止本身，仅记录告警
-			h.logger.Warn("failed to enqueue socket status query after fallback stop",
-				zap.String("device_phy_id", devicePhyID),
-				zap.Int("port_no", portNo),
-				zap.Error(err))
-		}
+	// 2. 下发一次查询插座状态命令(0x001D)，复用 StartCharge 中的实现约定。
+	if err := h.enqueueSocketStatusQuery(ctx, deviceID, devicePhyID, 0 /*socketNo*/); err != nil {
+		h.logger.Warn("failed to enqueue socket status query after fallback stop",
+			zap.String("device_phy_id", devicePhyID),
+			zap.Int("port_no", portNo),
+			zap.Error(err))
 	}
 
 	// 3. 在短时间窗口内轮询 ports 表，观察状态是否有变化
@@ -1418,55 +1480,41 @@ func (h *ThirdPartyHandler) SetParams(c *gin.Context) {
 		zap.String("device_phy_id", devicePhyID),
 		zap.Int("param_count", len(req.Params)))
 
-	// 1. 验证设备存在
-	_, err := h.repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		h.logger.Error("failed to get device", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code:      500,
-			Message:   "failed to get device",
+	if h.driverCmd == nil {
+		c.JSON(http.StatusServiceUnavailable, StandardResponse{
+			Code:      503,
+			Message:   "command dispatcher unavailable",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
 		return
 	}
 
-	// 2. 下发参数写入指令（BKV 0x0002）
-	if h.outboundQ != nil {
-		msgID := uint32(time.Now().Unix() % 65536)
-
-		// 构造参数写入指令payload
-		// 格式：参数个数(1字节) + [参数ID(1字节) + 参数值长度(1字节) + 参数值(N字节)]...
-		paramData := []byte{byte(len(req.Params))}
-		for _, p := range req.Params {
-			paramValue := []byte(p.Value)
-			paramData = append(paramData, byte(p.ID), byte(len(paramValue)))
-			paramData = append(paramData, paramValue...)
-		}
-
-		// 获取设备ID（前面已验证过）
-		devID, _ := h.repo.EnsureDevice(ctx, devicePhyID)
-		err = h.outboundQ.Enqueue(ctx, &redisstorage.OutboundMessage{
-			ID:        fmt.Sprintf("api_%d", msgID),
-			DeviceID:  devID,
-			PhyID:     devicePhyID,
-			Command:   paramData,
-			Priority:  outbound.PriorityNormal, // P1-6: 参数设置=普通优先级
-			MaxRetry:  3,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-			Timeout:   5000,
+	params := make([]coremodel.SetParamItem, 0, len(req.Params))
+	for _, p := range req.Params {
+		params = append(params, coremodel.SetParamItem{
+			ID:    int32(p.ID),
+			Value: p.Value,
 		})
-		if err != nil {
-			h.logger.Error("failed to push param write command", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, StandardResponse{
-				Code:      500,
-				Message:   "failed to send param command",
-				RequestID: requestID,
-				Timestamp: time.Now().Unix(),
-			})
-			return
-		}
+	}
+
+	cmd := &coremodel.CoreCommand{
+		Type:      coremodel.CommandSetParams,
+		CommandID: fmt.Sprintf("setparams:%s:%d", devicePhyID, time.Now().UnixNano()),
+		DeviceID:  coremodel.DeviceID(devicePhyID),
+		IssuedAt:  time.Now(),
+		SetParams: &coremodel.SetParamsPayload{Params: params},
+	}
+
+	if err := h.driverCmd.SendCoreCommand(ctx, cmd); err != nil {
+		h.logger.Error("failed to dispatch set params command", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, StandardResponse{
+			Code:      500,
+			Message:   "failed to send param command",
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
 	}
 
 	// 3. 返回成功响应
@@ -1528,56 +1576,41 @@ func (h *ThirdPartyHandler) TriggerOTA(c *gin.Context) {
 		zap.String("version", req.Version),
 		zap.Int("target_type", req.TargetType))
 
-	// 1. 验证设备存在
-	devID, err := h.repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		h.logger.Error("failed to get device", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code:      500,
-			Message:   "failed to get device",
+	if h.driverCmd == nil {
+		c.JSON(http.StatusServiceUnavailable, StandardResponse{
+			Code:      503,
+			Message:   "command dispatcher unavailable",
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
 		return
 	}
 
-	// 2. 创建OTA任务记录（如果有ota_tasks表）
-	// 这里简化处理，直接下发OTA指令
+	socket := int32(req.TargetSocket)
+	cmd := &coremodel.CoreCommand{
+		Type:      coremodel.CommandTriggerOTA,
+		CommandID: fmt.Sprintf("ota:%s:%d", devicePhyID, time.Now().UnixNano()),
+		DeviceID:  coremodel.DeviceID(devicePhyID),
+		IssuedAt:  time.Now(),
+		TriggerOTA: &coremodel.TriggerOTAPayload{
+			TargetType:   int32(req.TargetType),
+			TargetSocket: &socket,
+			FirmwareURL:  req.FirmwareURL,
+			Version:      req.Version,
+			MD5:          req.MD5,
+			Size:         int32(req.Size),
+		},
+	}
 
-	// 3. 下发OTA升级指令（BKV 0x0007）
-	if h.outboundQ != nil {
-		msgID := uint32(time.Now().Unix() % 65536)
-
-		// 构造OTA指令payload（简化版）
-		// 实际格式需要根据BKV协议规范
-		otaData := []byte{
-			byte(req.TargetType),   // 目标类型
-			byte(req.TargetSocket), // 目标插座号
-		}
-		// 追加URL、版本等信息（简化处理）
-		otaData = append(otaData, []byte(req.FirmwareURL)...)
-
-		err = h.outboundQ.Enqueue(ctx, &redisstorage.OutboundMessage{
-			ID:        fmt.Sprintf("api_%d", msgID),
-			DeviceID:  devID,
-			PhyID:     devicePhyID,
-			Command:   otaData,
-			Priority:  outbound.PriorityLow, // P1-6: OTA升级=低优先级
-			MaxRetry:  3,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-			Timeout:   5000,
+	if err := h.driverCmd.SendCoreCommand(ctx, cmd); err != nil {
+		h.logger.Error("failed to dispatch ota command", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, StandardResponse{
+			Code:      500,
+			Message:   "failed to send ota command",
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
 		})
-		if err != nil {
-			h.logger.Error("failed to push ota command", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, StandardResponse{
-				Code:      500,
-				Message:   "failed to send ota command",
-				RequestID: requestID,
-				Timestamp: time.Now().Unix(),
-			})
-			return
-		}
+		return
 	}
 
 	// 4. 返回成功响应
@@ -1585,10 +1618,9 @@ func (h *ThirdPartyHandler) TriggerOTA(c *gin.Context) {
 		Code:    0,
 		Message: "ota command sent successfully",
 		Data: map[string]interface{}{
-			"device_id":    devicePhyID,
-			"device_db_id": devID,
-			"version":      req.Version,
-			"target_type":  req.TargetType,
+			"device_id":   devicePhyID,
+			"version":     req.Version,
+			"target_type": req.TargetType,
 		},
 		RequestID: requestID,
 		Timestamp: time.Now().Unix(),
@@ -1596,82 +1628,6 @@ func (h *ThirdPartyHandler) TriggerOTA(c *gin.Context) {
 }
 
 // ===== 辅助函数 =====
-
-// encodeChargeCommand 编码充电指令（简化版本）
-// 实际应使用 internal/protocol/bkv/card.go 中的 ChargeCommand.Encode()
-func (h *ThirdPartyHandler) encodeChargeCommand(orderNo string, chargeMode uint8, amount, duration uint32, power uint16, pricePerKwh uint32, serviceFee uint16) []byte {
-	// 这里返回简化的payload
-	// 实际应该使用完整的BKV编码
-	data := make([]byte, 0, 64)
-
-	// 订单号（16字节，定长）
-	orderBytes := make([]byte, 16)
-	copy(orderBytes, orderNo)
-	data = append(data, orderBytes...)
-
-	// 充电模式（1字节）
-	data = append(data, chargeMode)
-
-	// 金额（4字节）
-	data = append(data, byte(amount>>24), byte(amount>>16), byte(amount>>8), byte(amount))
-
-	// 时长（4字节）
-	data = append(data, byte(duration>>24), byte(duration>>16), byte(duration>>8), byte(duration))
-
-	// 功率（2字节）
-	data = append(data, byte(power>>8), byte(power))
-
-	// 电价（4字节）
-	data = append(data, byte(pricePerKwh>>24), byte(pricePerKwh>>16), byte(pricePerKwh>>8), byte(pricePerKwh))
-
-	// 服务费率（2字节）
-	data = append(data, byte(serviceFee>>8), byte(serviceFee))
-
-	return data
-}
-
-// mapPort 将业务端口号(1/2)映射为协议端口(0=A,1=B)
-func mapPort(port int) int {
-	if port < 0 {
-		return 0
-	}
-	return port
-}
-
-// encodeStartControlPayload 构造0x0015开始充电控制负载
-// 格式：[0x07][插座1B][插孔1B][开关1B][模式1B][时长2B][业务号2B]
-// 参考：docs/协议/BKV设备对接总结.md 2.1节
-func (h *ThirdPartyHandler) encodeStartControlPayload(socketNo uint8, port uint8, mode uint8, durationMin uint16, businessNo uint16) []byte {
-	// 0x0015控制命令：按协议格式
-	buf := make([]byte, 9)
-	buf[0] = 0x07                   // BKV子命令：0x07=控制命令
-	buf[1] = socketNo               // 插座号
-	buf[2] = port                   // 插孔号 (0=A孔, 1=B孔)
-	buf[3] = 0x01                   // 开关：1=开启, 0=关闭
-	buf[4] = mode                   // 充电模式：1=按时长,0=按电量
-	buf[5] = byte(durationMin >> 8) // 时长高字节
-	buf[6] = byte(durationMin)      // 时长低字节
-	buf[7] = byte(businessNo >> 8)  // 业务号高字节
-	buf[8] = byte(businessNo)       // 业务号低字节
-	return buf
-}
-
-// encodeStopControlPayload 构造0x0015停止充电控制负载
-func (h *ThirdPartyHandler) encodeStopControlPayload(socketNo uint8, port uint8, businessNo uint16) []byte {
-	// 0x0015停止命令：开关=0表示关闭
-	// 格式：[0x07][插座1B][插孔1B][开关1B][模式1B][时长2B][业务号2B]
-	buf := make([]byte, 9)
-	buf[0] = 0x07     // BKV子命令：0x07=控制命令
-	buf[1] = socketNo // 插座号
-	buf[2] = port     // 插孔号
-	buf[3] = 0x00     // 开关：0=关闭
-	buf[4] = 0x01     // 模式（停止时无意义，填1）
-	buf[5] = 0x00     // 时长高字节
-	buf[6] = 0x00     // 时长低字节
-	buf[7] = byte(businessNo >> 8)
-	buf[8] = byte(businessNo)
-	return buf
-}
 
 // deriveBusinessNo 从订单号推导16位业务号
 func deriveBusinessNo(orderNo string) uint16 {
@@ -1738,34 +1694,7 @@ func (h *ThirdPartyHandler) enqueueSocketStatusQuery(
 	devicePhyID string,
 	socketNo int,
 ) error {
-	if h.outboundQ == nil {
-		return nil
-	}
-
-	msgID := uint32(time.Now().Unix() % 65536)
-
-	// 按《设备对接指引-组网设备2024》2.2.4:
-	// 外层命令使用0x0015，内层为长度型payload: [lenH][lenL][0x1D][插座号]
-	innerLen := 2 // 子命令(1) + 插座号(1)
-	qPayload := make([]byte, 4)
-	qPayload[0] = byte(innerLen >> 8)
-	qPayload[1] = byte(innerLen)
-	qPayload[2] = 0x1D
-	qPayload[3] = byte(socketNo)
-
-	frame := bkv.Build(0x0015, msgID, devicePhyID, qPayload)
-
-	return h.outboundQ.Enqueue(ctx, &redisstorage.OutboundMessage{
-		ID:        fmt.Sprintf("api_%d", msgID),
-		DeviceID:  deviceID,
-		PhyID:     devicePhyID,
-		Command:   frame,
-		Priority:  outbound.PriorityHigh,
-		MaxRetry:  2,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-		Timeout:   3000,
-	})
+	return h.dispatchQueryPortStatusCommand(ctx, deviceID, devicePhyID, socketNo)
 }
 
 // parseOrderStatusFilter 将查询参数中的订单状态过滤值解析为内部状态码切片

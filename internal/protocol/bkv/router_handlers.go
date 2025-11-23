@@ -1,6 +1,10 @@
 package bkv
 
-import "context"
+import (
+	"context"
+
+	"github.com/taoyao-code/iot-server/internal/coremodel"
+)
 
 // RegisterHandlers 注册BKV协议的所有指令处理器
 func RegisterHandlers(adapter *Adapter, handlers *Handlers) {
@@ -133,8 +137,9 @@ func RegisterHandlers(adapter *Adapter, handlers *Handlers) {
 func NewBKVProtocol(repo repoAPI, reasonMap *ReasonMap) *Adapter {
 	adapter := NewAdapter()
 	handlers := &Handlers{
-		Repo:   repo,
-		Reason: reasonMap,
+		Repo:       repo,
+		Reason:     reasonMap,
+		CoreEvents: &nopEventSink{},
 	}
 
 	RegisterHandlers(adapter, handlers)
@@ -173,4 +178,11 @@ var BKVCommands = map[uint16]string{
 func IsBKVCommand(cmd uint16) bool {
 	_, exists := BKVCommands[cmd]
 	return exists
+}
+
+// nopEventSink 用于协议层测试：丢弃所有核心事件。
+type nopEventSink struct{}
+
+func (n *nopEventSink) HandleCoreEvent(_ context.Context, _ *coremodel.CoreEvent) error {
+	return nil
 }

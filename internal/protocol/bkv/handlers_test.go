@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/taoyao-code/iot-server/internal/coremodel"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 )
 
@@ -144,9 +145,47 @@ func TestHandlers_Heartbeat(t *testing.T) {
 	}
 }
 
+func TestHandlers_Heartbeat_CoreEvent(t *testing.T) {
+	fr := newFakeRepo()
+	evSink := &testEventSink{}
+	h := &Handlers{
+		Repo:       fr,
+		CoreEvents: evSink,
+	}
+
+	frame := &Frame{
+		Cmd:       0x0000,
+		MsgID:     321,
+		Direction: 0x01,
+		GatewayID: "82200520004869",
+		Data:      []byte{0x01, 0x02},
+	}
+
+	if err := h.HandleHeartbeat(context.Background(), frame); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	if evSink.last == nil {
+		t.Fatalf("expected core event")
+	}
+	if evSink.last.Type != coremodel.EventDeviceHeartbeat {
+		t.Fatalf("unexpected event type: %v", evSink.last.Type)
+	}
+	if evSink.last.DeviceHeartbeat == nil {
+		t.Fatalf("missing heartbeat payload")
+	}
+	if evSink.last.DeviceHeartbeat.Status != coremodel.DeviceStateOnline {
+		t.Fatalf("unexpected heartbeat status: %v", evSink.last.DeviceHeartbeat.Status)
+	}
+}
+
 func TestHandlers_BKVStatus(t *testing.T) {
 	fr := newFakeRepo()
-	h := &Handlers{Repo: fr}
+	evSink := &testEventSink{}
+	h := &Handlers{
+		Repo:       fr,
+		CoreEvents: evSink,
+	}
 
 	// 构造BKV状态报文
 	bkvData := "04010110170a0102000000000000000009010382231214002700650194"
@@ -176,7 +215,11 @@ func TestHandlers_BKVStatus(t *testing.T) {
 
 func TestHandlers_BKVStatus_ImprovedParsing(t *testing.T) {
 	fr := newFakeRepo()
-	h := &Handlers{Repo: fr}
+	evSink := &testEventSink{}
+	h := &Handlers{
+		Repo:       fr,
+		CoreEvents: evSink,
+	}
 
 	// 创建一个包含详细插座状态的BKV载荷
 	payload := &BKVPayload{
@@ -296,7 +339,11 @@ func TestHandlers_Control_StopCharging(t *testing.T) {
 
 func TestHandlers_ChargingEnd_Basic(t *testing.T) {
 	fr := newFakeRepo()
-	h := &Handlers{Repo: fr}
+	evSink := &testEventSink{}
+	h := &Handlers{
+		Repo:       fr,
+		CoreEvents: evSink,
+	}
 
 	// 构造基础充电结束上报 (cmd=0x0015)
 	// 基于协议文档：0011 02 02 5036 30 20 00 98 0068 0000 0001 0050 002d
@@ -328,25 +375,25 @@ func TestHandlers_ChargingEnd_Basic(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	// 应该有两个日志：SettleOrder + InsertCmdLog
-	if fr.logs != 2 {
-		t.Fatalf("expected 2 logs (settle + cmd), got %d", fr.logs)
+	// 应该上报一个 SessionEnded 事件
+	if evSink.last == nil {
+		t.Fatalf("expected one core event, got nil")
 	}
-
-	// 应该有一个端口状态更新
-	if fr.upserts != 1 {
-		t.Fatalf("expected 1 port upsert, got %d", fr.upserts)
+	if evSink.last.Type != coremodel.EventSessionEnded {
+		t.Fatalf("expected EventSessionEnded, got %v", evSink.last.Type)
 	}
-
-	// 检查端口状态为空闲（BKV idle=0x09）
-	if fr.lastStatus != 0x09 {
-		t.Fatalf("expected status 0x09 (idle), got %d", fr.lastStatus)
+	if evSink.last.SessionEnded == nil {
+		t.Fatalf("expected SessionEnded payload")
 	}
 }
 
 func TestHandlers_ChargingEnd_BKV(t *testing.T) {
 	fr := newFakeRepo()
-	h := &Handlers{Repo: fr}
+	evSink := &testEventSink{}
+	h := &Handlers{
+		Repo:       fr,
+		CoreEvents: evSink,
+	}
 
 	// 先创建一个简单的BKV载荷来测试IsChargingEnd
 	payload := &BKVPayload{
@@ -376,15 +423,28 @@ func TestHandlers_ChargingEnd_BKV(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	// 应该有一个日志：SettleOrder
-	if fr.logs != 1 {
-		t.Fatalf("expected 1 log (settle), got %d", fr.logs)
+	// 应该上报一个 SessionEnded 事件
+	if evSink.last == nil {
+		t.Fatalf("expected one core event, got nil")
 	}
+	if evSink.last.Type != coremodel.EventSessionEnded {
+		t.Fatalf("expected EventSessionEnded, got %v", evSink.last.Type)
+	}
+	if evSink.last.SessionEnded == nil {
+		t.Fatalf("expected SessionEnded payload")
+	}
+	if evSink.last.SessionEnded.BusinessNo != coremodel.BusinessNo("0033") {
+		t.Fatalf("unexpected business no: %s", evSink.last.SessionEnded.BusinessNo)
+	}
+}
 
-	// 应该有一个端口状态更新
-	if fr.upserts != 1 {
-		t.Fatalf("expected 1 port upsert, got %d", fr.upserts)
-	}
+type testEventSink struct {
+	last *coremodel.CoreEvent
+}
+
+func (s *testEventSink) HandleCoreEvent(_ context.Context, ev *coremodel.CoreEvent) error {
+	s.last = ev
+	return nil
 }
 
 func TestHandlers_Generic(t *testing.T) {

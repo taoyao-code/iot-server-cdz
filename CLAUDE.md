@@ -22,4 +22,3 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 - [docs/架构/项目架构设计.md](docs/架构/项目架构设计.md) - 详细架构文档
 - [docs/协议/](docs/协议/) - 协议规范文档
 - [docs/api/](docs/api/) - HTTP API 文档
-- [docs/CI-CD-GUIDE.md](docs/CI-CD-GUIDE.md) - CI/CD 自动化部署

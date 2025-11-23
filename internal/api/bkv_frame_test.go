@@ -9,10 +9,8 @@ import (
 
 // TestFullBKVFrame 测试完整的BKV帧构造
 func TestFullBKVFrame(t *testing.T) {
-	h := &ThirdPartyHandler{}
-
 	// 1. 构造payload
-	payload := h.encodeStartControlPayload(1, 0, 1, 60, 0)
+	payload := bkv.EncodeStartControlPayload(1, 0, 1, 60, 0)
 	t.Logf("Payload (9字节): %s", hex.EncodeToString(payload))
 
 	// 2. 构造完整BKV帧

@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(git for-each-ref:*)",
-      "Bash(git config:*)"
+      "Bash(git config:*)",
+      "WebFetch(domain:doc.hummingbird.winc-link.com)",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__get-library-docs",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

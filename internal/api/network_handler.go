@@ -3,12 +3,11 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/taoyao-code/iot-server/internal/outbound"
-	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
-	redisstorage "github.com/taoyao-code/iot-server/internal/storage/redis"
+	"github.com/taoyao-code/iot-server/internal/coremodel"
 	"go.uber.org/zap"
 )
 
@@ -59,8 +58,18 @@ func (h *ThirdPartyHandler) ConfigureNetwork(c *gin.Context) {
 		zap.Int("channel", req.Channel),
 		zap.Int("node_count", len(req.Nodes)))
 
+	if h.driverCmd == nil {
+		c.JSON(http.StatusServiceUnavailable, StandardResponse{
+			Code:      503,
+			Message:   "command dispatcher unavailable",
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
 	// 1. 验证设备存在
-	devID, err := h.repo.EnsureDevice(ctx, devicePhyID)
+	_, err := h.repo.EnsureDevice(ctx, devicePhyID)
 	if err != nil {
 		h.logger.Error("failed to get device", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, StandardResponse{
@@ -72,73 +81,44 @@ func (h *ThirdPartyHandler) ConfigureNetwork(c *gin.Context) {
 		return
 	}
 
-	// 2. 构造组网命令（0x0005/0x08）
-	// 根据协议文档2.2.5格式
-	if h.outboundQ != nil {
-		msgID := uint32(time.Now().Unix() % 0xFFFFFFFF)
-
-		// 构造内层payload
-		// 格式：08(命令) + 信道(1) + [插座号(1)+MAC(6)]*N
-		innerPayload := make([]byte, 2+len(req.Nodes)*7)
-		innerPayload[0] = 0x08              // 08命令
-		innerPayload[1] = byte(req.Channel) // 信道
-
-		pos := 2
-		for _, node := range req.Nodes {
-			innerPayload[pos] = byte(node.SocketNo) // 插座编号
-			pos++
-
-			// 插座MAC（6字节）
-			macBytes, err := hexToBytes(node.SocketMAC)
-			if err != nil || len(macBytes) != 6 {
-				h.logger.Error("invalid socket MAC", zap.String("mac", node.SocketMAC))
-				c.JSON(http.StatusBadRequest, StandardResponse{
-					Code:      400,
-					Message:   fmt.Sprintf("invalid socket MAC: %s", node.SocketMAC),
-					RequestID: requestID,
-					Timestamp: time.Now().Unix(),
-				})
-				return
-			}
-			copy(innerPayload[pos:], macBytes)
-			pos += 6
-		}
-
-		// 添加长度字段
-		payload := make([]byte, 2+len(innerPayload))
-		payload[0] = byte(len(innerPayload) >> 8)
-		payload[1] = byte(len(innerPayload))
-		copy(payload[2:], innerPayload)
-
-		// 构造BKV帧
-		frame := bkv.Build(0x0005, msgID, devicePhyID, payload)
-
-		h.logger.Info("network config command generated",
-			zap.Int("frame_len", len(frame)),
-			zap.String("frame_hex", fmt.Sprintf("%x", frame)))
-
-		// 3. 下发组网命令
-		err = h.outboundQ.Enqueue(ctx, &redisstorage.OutboundMessage{
-			ID:        fmt.Sprintf("network_%d", msgID),
-			DeviceID:  devID,
-			PhyID:     devicePhyID,
-			Command:   frame,
-			Priority:  outbound.PriorityNormal, // P1-6: 组网配置=普通优先级
-			MaxRetry:  3,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-			Timeout:   10000,
-		})
-		if err != nil {
-			h.logger.Error("failed to enqueue network config", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, StandardResponse{
-				Code:      500,
-				Message:   "failed to send network config",
+	nodes := make([]coremodel.NetworkNodePayload, 0, len(req.Nodes))
+	for _, node := range req.Nodes {
+		if _, err := hexToBytes(node.SocketMAC); err != nil {
+			h.logger.Error("invalid socket MAC", zap.String("mac", node.SocketMAC))
+			c.JSON(http.StatusBadRequest, StandardResponse{
+				Code:      400,
+				Message:   fmt.Sprintf("invalid socket MAC: %s", node.SocketMAC),
 				RequestID: requestID,
 				Timestamp: time.Now().Unix(),
 			})
 			return
 		}
+		nodes = append(nodes, coremodel.NetworkNodePayload{
+			SocketNo:  int32(node.SocketNo),
+			SocketMAC: strings.ToLower(node.SocketMAC),
+		})
+	}
+
+	cmd := &coremodel.CoreCommand{
+		Type:      coremodel.CommandConfigureNetwork,
+		CommandID: fmt.Sprintf("network:%s:%d", devicePhyID, time.Now().UnixNano()),
+		DeviceID:  coremodel.DeviceID(devicePhyID),
+		IssuedAt:  time.Now(),
+		ConfigureNetwork: &coremodel.ConfigureNetworkPayload{
+			Channel: int32(req.Channel),
+			Nodes:   nodes,
+		},
+	}
+
+	if err := h.driverCmd.SendCoreCommand(ctx, cmd); err != nil {
+		h.logger.Error("failed to dispatch network config", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, StandardResponse{
+			Code:      500,
+			Message:   "failed to send network config",
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
 	}
 
 	// 4. 返回成功
