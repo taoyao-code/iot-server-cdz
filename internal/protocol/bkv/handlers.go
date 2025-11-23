@@ -32,12 +32,11 @@ type MetricsAPI interface {
 	GetChargeReportPowerGauge() *prometheus.GaugeVec
 	GetChargeReportCurrentGauge() *prometheus.GaugeVec
 	GetChargeReportEnergyTotal() *prometheus.CounterVec
-	GetPortStatusQueryResponseTotal() *prometheus.CounterVec // P1-4新增
+	GetPortStatusQueryResponseTotal() *prometheus.CounterVec
 }
 
 // Handlers BKV 协议处理器集合
 type Handlers struct {
-	Repo       repoAPI
 	Core       storage.CoreRepo
 	Reason     *ReasonMap
 	Outbound   OutboundSender         // Week5: 下行消息发送器

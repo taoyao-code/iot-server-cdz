@@ -11,7 +11,6 @@ import (
 // P0修复: 删除内存参数存储，直接使用数据库持久化。
 func NewHandlers(repo *pgstorage.Repository, core storage.CoreRepo, reason *ReasonMap, events driverapi.EventSink) *Handlers {
 	return &Handlers{
-		Repo:       repo,
 		Core:       core,
 		Reason:     reason,
 		Outbound:   nil,
@@ -24,7 +23,6 @@ func NewHandlers(repo *pgstorage.Repository, core storage.CoreRepo, reason *Reas
 // v2.1: 添加EventQueue和Deduper支持。
 func NewHandlersWithServices(repo *pgstorage.Repository, core storage.CoreRepo, reason *ReasonMap, _ interface{}, outbound OutboundSender, eventQueue *thirdparty.EventQueue, deduper *thirdparty.Deduper, events driverapi.EventSink) *Handlers {
 	return &Handlers{
-		Repo:       repo,
 		Core:       core,
 		Reason:     reason,
 		Outbound:   outbound,

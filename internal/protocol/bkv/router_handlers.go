@@ -134,10 +134,9 @@ func RegisterHandlers(adapter *Adapter, handlers *Handlers) {
 }
 
 // NewBKVProtocol 创建完整的BKV协议实例
-func NewBKVProtocol(repo repoAPI, reasonMap *ReasonMap) *Adapter {
+func NewBKVProtocol(reasonMap *ReasonMap) *Adapter {
 	adapter := NewAdapter()
 	handlers := &Handlers{
-		Repo:       repo,
 		Reason:     reasonMap,
 		CoreEvents: &nopEventSink{},
 	}

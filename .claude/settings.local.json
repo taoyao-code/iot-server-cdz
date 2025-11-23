@@ -8,7 +8,8 @@
       "mcp__context7__get-library-docs",
       "Bash(find:*)",
       "Bash(openspec list:*)",
-      "Bash(openspec validate:*)"
+      "Bash(openspec validate:*)",
+      "Bash(openspec show:*)"
     ],
     "deny": [],
     "ask": []
