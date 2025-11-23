@@ -1479,7 +1479,7 @@ func (h *Handlers) handleCardSwipeUplink(ctx context.Context, f *Frame) error {
 
 // HandleOrderConfirm 处理订单确认 (0x0F)
 func (h *Handlers) HandleOrderConfirm(ctx context.Context, f *Frame) error {
-	if h == nil || h.Repo == nil {
+	if h == nil {
 		return nil
 	}
 
@@ -1488,18 +1488,7 @@ func (h *Handlers) HandleOrderConfirm(ctx context.Context, f *Frame) error {
 		return h.handleOrderConfirmUplink(ctx, f)
 	}
 
-	// 下行：平台回复确认（记录日志）
-	devicePhyID := f.GatewayID
-	if devicePhyID == "" {
-		return fmt.Errorf("missing gateway ID")
-	}
-
-	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		return err
-	}
-
-	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, true)
+	return nil
 }
 
 // handleOrderConfirmUplink 处理订单确认上行
@@ -1515,65 +1504,26 @@ func (h *Handlers) handleOrderConfirmUplink(ctx context.Context, f *Frame) error
 		return fmt.Errorf("missing gateway ID")
 	}
 
-	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		return err
-	}
-
-	// 记录订单确认日志
-	logData := []byte(fmt.Sprintf("OrderNo=%s, Status=%d, Reason=%s", conf.OrderNo, conf.Status, conf.Reason))
-	err = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
-	if err != nil {
-		return err
-	}
-
-	// Week4: 调用CardService更新订单状态
-	if h.CardService != nil {
-		err = h.CardService.HandleOrderConfirmation(ctx, conf)
-		if err != nil {
-			// 更新订单失败，记录错误
-			errLog := []byte(fmt.Sprintf("OrderConfirm failed: %v", err))
-			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, errLog, false)
-			return fmt.Errorf("order confirmation error: %w", err)
+	if h.CoreEvents != nil {
+		portNo := int32(0)
+		biz := coremodel.BusinessNo(conf.OrderNo)
+		status := fmt.Sprintf("%d", conf.Status)
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventSessionStarted,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			PortNo:     (*coremodel.PortNo)(&portNo),
+			BusinessNo: &biz,
+			OccurredAt: time.Now(),
+			SessionStarted: &coremodel.SessionStartedPayload{
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				PortNo:     coremodel.PortNo(portNo),
+				BusinessNo: biz,
+				Mode:       "order_confirm",
+				Metadata:   map[string]string{"status": status, "reason": conf.Reason},
+				StartedAt:  time.Now(),
+			},
 		}
-
-		// Week5: 下发确认回复到设备
-		result := uint8(0) // 0=成功
-		if err := h.sendOrderConfirmReply(f.GatewayID, f.MsgID, conf.OrderNo, result); err != nil {
-			// 发送失败，记录错误（但不影响业务流程）
-			errLog := []byte(fmt.Sprintf("Send order confirm reply failed: %v", err))
-			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, errLog, false)
-			// 不返回错误，因为订单已更新成功
-		}
-
-		// v2.1: 推送订单确认事件
-		if h.EventQueue != nil {
-			resultStr := "success"
-			failReason := conf.Reason
-			if conf.Status != 0 {
-				resultStr = "failed"
-			}
-			h.pushOrderConfirmedEvent(
-				ctx,
-				devicePhyID,
-				conf.OrderNo,
-				0, // portNo从订单中获取，这里简化
-				resultStr,
-				failReason,
-				nil, // logger可选
-			)
-
-			// v2.1.2: 如果订单确认成功，推送充电开始事件
-			if conf.Status == 0 {
-				h.pushChargingStartedEvent(
-					ctx,
-					devicePhyID,
-					conf.OrderNo,
-					0,   // portNo从订单中获取，这里简化
-					nil, // logger可选
-				)
-			}
-		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
 	}
 
 	return nil
@@ -1581,7 +1531,7 @@ func (h *Handlers) handleOrderConfirmUplink(ctx context.Context, f *Frame) error
 
 // HandleChargeEnd 处理充电结束 (0x0C)
 func (h *Handlers) HandleChargeEnd(ctx context.Context, f *Frame) error {
-	if h == nil || h.Repo == nil {
+	if h == nil {
 		return nil
 	}
 
@@ -1590,18 +1540,7 @@ func (h *Handlers) HandleChargeEnd(ctx context.Context, f *Frame) error {
 		return h.handleChargeEndUplink(ctx, f)
 	}
 
-	// 下行：平台确认（记录日志）
-	devicePhyID := f.GatewayID
-	if devicePhyID == "" {
-		return fmt.Errorf("missing gateway ID")
-	}
-
-	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		return err
-	}
-
-	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, true)
+	return nil
 }
 
 // handleChargeEndUplink 处理充电结束上行
@@ -1617,70 +1556,31 @@ func (h *Handlers) handleChargeEndUplink(ctx context.Context, f *Frame) error {
 		return fmt.Errorf("missing gateway ID")
 	}
 
-	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		return err
-	}
-
-	// 记录充电结束日志
-	logData := []byte(fmt.Sprintf("OrderNo=%s, CardNo=%s, Duration=%d, Energy=%d, Amount=%d",
-		report.OrderNo, report.CardNo, report.Duration, report.Energy, report.Amount))
-	err = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
-	if err != nil {
-		return err
-	}
-
-	// Week4: 调用CardService完成订单和扣款
-	if h.CardService != nil {
-		err = h.CardService.HandleChargeEnd(ctx, report)
-		if err != nil {
-			// 扣款失败，记录错误
-			errLog := []byte(fmt.Sprintf("ChargeEnd failed: %v", err))
-			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, errLog, false)
-			return fmt.Errorf("charge end error: %w", err)
+	if h.CoreEvents != nil {
+		biz := coremodel.BusinessNo(report.OrderNo)
+		port := coremodel.PortNo(0)
+		amount := int64(report.Amount)
+		kwh01 := int32(report.Energy / 10)
+		duration := int32(report.Duration * 60)
+		rawReason := int32(report.EndReason)
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventSessionEnded,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			PortNo:     &port,
+			BusinessNo: &biz,
+			OccurredAt: time.Now(),
+			SessionEnded: &coremodel.SessionEndedPayload{
+				DeviceID:    coremodel.DeviceID(devicePhyID),
+				PortNo:      port,
+				BusinessNo:  biz,
+				EnergyKWh01: kwh01,
+				DurationSec: duration,
+				AmountCent:  &amount,
+				RawReason:   &rawReason,
+				OccurredAt:  time.Now(),
+			},
 		}
-
-		// Week5: 下发结束确认到设备
-		result := uint8(0) // 0=成功
-		if err := h.sendChargeEndReply(f.GatewayID, f.MsgID, report.OrderNo, result); err != nil {
-			// 发送失败，记录错误（但不影响业务流程）
-			errLog := []byte(fmt.Sprintf("Send charge end reply failed: %v", err))
-			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, errLog, false)
-			// 不返回错误，因为订单已完成
-		}
-
-		// v2.1: 推送订单完成事件
-		if h.EventQueue != nil {
-			totalKwh := float64(report.Energy) / 100.0    // 转换为kWh
-			totalAmount := float64(report.Amount) / 100.0 // 转换为元
-			h.pushOrderCompletedEvent(
-				ctx,
-				devicePhyID,
-				report.OrderNo,
-				0, // portNo简化
-				int(report.Duration),
-				totalKwh,
-				0, // peakPower
-				0, // avgPower
-				totalAmount,
-				"normal", // endReason
-				"充电完成",   // endReasonMsg
-				nil,      // logger可选
-			)
-
-			// 同时推送充电结束事件
-			h.pushChargingEndedEvent(
-				ctx,
-				devicePhyID,
-				report.OrderNo,
-				0, // portNo简化
-				int(report.Duration),
-				totalKwh,
-				"normal",
-				"充电完成",
-				nil, // logger可选
-			)
-		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
 	}
 
 	return nil
@@ -1688,7 +1588,7 @@ func (h *Handlers) handleChargeEndUplink(ctx context.Context, f *Frame) error {
 
 // HandleBalanceQuery 处理余额查询 (0x1A)
 func (h *Handlers) HandleBalanceQuery(ctx context.Context, f *Frame) error {
-	if h == nil || h.Repo == nil {
+	if h == nil {
 		return nil
 	}
 
@@ -1697,18 +1597,7 @@ func (h *Handlers) HandleBalanceQuery(ctx context.Context, f *Frame) error {
 		return h.handleBalanceQueryUplink(ctx, f)
 	}
 
-	// 下行：平台响应余额（记录日志）
-	devicePhyID := f.GatewayID
-	if devicePhyID == "" {
-		return fmt.Errorf("missing gateway ID")
-	}
-
-	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		return err
-	}
-
-	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, true)
+	return nil
 }
 
 // handleBalanceQueryUplink 处理余额查询上行
@@ -1724,35 +1613,24 @@ func (h *Handlers) handleBalanceQueryUplink(ctx context.Context, f *Frame) error
 		return fmt.Errorf("missing gateway ID")
 	}
 
-	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		return err
-	}
-
-	// 记录余额查询日志
-	logData := []byte(fmt.Sprintf("CardNo=%s", query.CardNo))
-	err = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
-	if err != nil {
-		return err
-	}
-
-	// Week4: 调用CardService查询余额
-	if h.CardService != nil {
-		resp, err := h.CardService.HandleBalanceQuery(ctx, query)
-		if err != nil {
-			// 查询失败，记录错误
-			errLog := []byte(fmt.Sprintf("BalanceQuery failed: %v", err))
-			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, errLog, false)
-			return fmt.Errorf("balance query error: %w", err)
+	if h.CoreEvents != nil {
+		port := coremodel.PortNo(0)
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventExceptionReported,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			PortNo:     &port,
+			OccurredAt: time.Now(),
+			Exception: &coremodel.ExceptionPayload{
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				PortNo:     &port,
+				Code:       "BalanceQuery",
+				Message:    fmt.Sprintf("card=%s", query.CardNo),
+				Severity:   "info",
+				OccurredAt: time.Now(),
+				Metadata:   map[string]string{"card_no": query.CardNo},
+			},
 		}
-
-		// Week5: 下发余额响应到设备
-		if err := h.sendBalanceResponse(f.GatewayID, f.MsgID, resp); err != nil {
-			// 发送失败，记录错误
-			errLog := []byte(fmt.Sprintf("Send balance response failed: %v", err))
-			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, errLog, false)
-			return fmt.Errorf("send balance response error: %w", err)
-		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
 	}
 
 	return nil
