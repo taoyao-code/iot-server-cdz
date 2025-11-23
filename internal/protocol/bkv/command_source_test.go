@@ -111,6 +111,35 @@ func TestCommandSource_StopCharge(t *testing.T) {
 	}
 }
 
+func TestCommandSource_CancelSession(t *testing.T) {
+	sender := &mockOutboundSender{}
+	cs := NewCommandSource(sender, zaptest.NewLogger(t))
+
+	biz := coremodel.BusinessNo("0x44")
+	cmd := &coremodel.CoreCommand{
+		Type:     coremodel.CommandCancelSession,
+		DeviceID: coremodel.DeviceID("82200520004869"),
+		PortNo:   2,
+		BusinessNo: func() *coremodel.BusinessNo {
+			return &biz
+		}(),
+		IssuedAt: time.Now(),
+		CancelSession: &coremodel.CancelSessionPayload{
+			Reason: "unit_test_cancel",
+		},
+	}
+
+	if err := cs.SendCoreCommand(context.Background(), cmd); err != nil {
+		t.Fatalf("SendCoreCommand failed: %v", err)
+	}
+	if sender.lastCmd != 0x0015 {
+		t.Fatalf("unexpected command: %x", sender.lastCmd)
+	}
+	if sender.calls != 1 {
+		t.Fatalf("expected outbound call")
+	}
+}
+
 func TestCommandSource_QueryPortStatus(t *testing.T) {
 	sender := &mockOutboundSender{}
 	cs := NewCommandSource(sender, zaptest.NewLogger(t))

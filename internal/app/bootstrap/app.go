@@ -106,7 +106,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	handlerSet := &ap3000.Handlers{Repo: repo, Pusher: pusher, PushURL: pushURL, Metrics: appm}
 
 	// DriverCore: 协议驱动 -> 核心的事件收敛入口
-	driverCore := app.NewDriverCore(coreRepo, log)
+	driverCore := app.NewDriverCore(coreRepo, eventQueue, nil, log)
 
 	// P1修复: 使用NewHandlersWithServices完整初始化BKV处理器
 	// P1-2修复: 注入CardService，启用订单确认ACK验证
@@ -190,7 +190,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	app.StartEventQueueWorkers(ctx, eventQueue, cfg.Thirdparty.Push.WorkerCount, log)
 
 	// ========== 阶段7.6: 启动订单监控器(检测卡死订单)==========
-	orderMonitor := app.NewOrderMonitor(repo, log)
+	orderMonitor := app.NewOrderMonitor(repo, driverCommandSource, log)
 	go orderMonitor.Start(ctx)
 	log.Info("order monitor started",
 		zap.Duration("check_interval", 1*time.Minute),
@@ -199,7 +199,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 
 	// ========== 阶段7.7: P1-4启动端口状态同步器(检测端口状态不一致)==========
 	// 修复：注入SessionManager用于实时在线判断
-	portSyncer := app.NewPortStatusSyncer(repo, sess, redisQueue, appm, log)
+	portSyncer := app.NewPortStatusSyncer(repo, sess, driverCommandSource, appm, log)
 	go portSyncer.Start(ctx)
 	log.Info("P1-4: port status syncer started",
 		zap.Duration("check_interval", 5*time.Minute))

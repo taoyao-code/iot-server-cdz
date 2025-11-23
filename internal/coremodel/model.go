@@ -83,34 +83,46 @@ type SessionEndedPayload struct {
 	DurationSec   int32
 	EndReasonCode EndReason
 	InstantPowerW *int32
+	AmountCent    *int64
 	OccurredAt    time.Time
 	// RawReason 可选保存协议原始结束原因，便于诊断
 	RawReason      *int32
 	NextPortStatus *int32
+	RawStatus      *int32
 }
 
 // SessionStartedPayload 充电开始载荷
 type SessionStartedPayload struct {
-	DeviceID    DeviceID
-	PortNo      PortNo
-	BusinessNo  BusinessNo
-	SessionID   *SessionID
-	Mode        string
-	StartedAt   time.Time
-	TargetSec   *int32
-	TargetKWh01 *int32
+	DeviceID     DeviceID
+	PortNo       PortNo
+	BusinessNo   BusinessNo
+	SessionID    *SessionID
+	Mode         string
+	ModeCode     *int32
+	StartedAt    time.Time
+	TargetSec    *int32
+	TargetKWh01  *int32
+	TargetPowerW *int32
+	MaxFeeCent   *int64
+	CardNo       *string
+	Metadata     map[string]string
 }
 
 // SessionProgressPayload 充电进度载荷
 type SessionProgressPayload struct {
-	DeviceID    DeviceID
-	PortNo      PortNo
-	BusinessNo  BusinessNo
-	SessionID   *SessionID
-	EnergyKWh01 *int32
-	DurationSec *int32
-	PowerW      *int32
-	OccurredAt  time.Time
+	DeviceID     DeviceID
+	PortNo       PortNo
+	BusinessNo   BusinessNo
+	SessionID    *SessionID
+	EnergyKWh01  *int32
+	DurationSec  *int32
+	PowerW       *int32
+	VoltageV     *int32
+	CurrentmA    *int32
+	TemperatureC *int32
+	AmountCent   *int64
+	RawStatus    *int32
+	OccurredAt   time.Time
 }
 
 // ExceptionPayload 协议异常/硬件告警载荷
@@ -119,6 +131,9 @@ type ExceptionPayload struct {
 	PortNo     *PortNo
 	Code       string
 	Message    string
+	Severity   string
+	RawStatus  *int32
+	Metadata   map[string]string
 	OccurredAt time.Time
 }
 
@@ -132,6 +147,10 @@ const (
 	EventSessionProgress   CoreEventType = "SessionProgress"
 	EventSessionEnded      CoreEventType = "SessionEnded"
 	EventExceptionReported CoreEventType = "ExceptionReported"
+	EventParamResult       CoreEventType = "ParamResult"
+	EventParamSync         CoreEventType = "ParamSync"
+	EventOTAProgress       CoreEventType = "OTAProgress"
+	EventNetworkTopology   CoreEventType = "NetworkTopology"
 )
 
 // CoreEvent 驱动 -> 核心 的标准事件
@@ -148,7 +167,53 @@ type CoreEvent struct {
 	SessionProgress *SessionProgressPayload
 	SessionEnded    *SessionEndedPayload
 	Exception       *ExceptionPayload
+	ParamResult     *ParamResultPayload
+	ParamSync       *ParamSyncPayload
+	OTAProgress     *OTAProgressPayload
+	NetworkTopology *NetworkTopologyPayload
 	// TODO: 后续可按需扩展 SessionStarted / Progress / Exception 等载荷
+}
+
+// ParamResultPayload 参数写入/重置结果
+type ParamResultPayload struct {
+	DeviceID   DeviceID
+	PortNo     *PortNo
+	Result     string
+	Message    string
+	Metadata   map[string]string
+	OccurredAt time.Time
+}
+
+// ParamSyncPayload 参数同步进度
+type ParamSyncPayload struct {
+	DeviceID   DeviceID
+	Progress   int32
+	Result     string
+	Message    string
+	Metadata   map[string]string
+	OccurredAt time.Time
+}
+
+// OTAProgressPayload OTA 进度/响应
+type OTAProgressPayload struct {
+	DeviceID   DeviceID
+	PortNo     *PortNo
+	Status     string
+	Progress   int32
+	Message    string
+	Metadata   map[string]string
+	OccurredAt time.Time
+}
+
+// NetworkTopologyPayload 组网变更
+type NetworkTopologyPayload struct {
+	DeviceID   DeviceID
+	Action     string
+	SocketNo   *int32
+	Result     string
+	Message    string
+	Metadata   map[string]string
+	OccurredAt time.Time
 }
 
 // CoreCommandType 核心 -> 驱动 的命令类型
@@ -171,10 +236,16 @@ type StartChargePayload struct {
 	TargetDurationSec *int32
 	MaxEnergyKWh01    *int32
 	MaxFeeCent        *int32
+	TargetPowerW      *int32
 }
 
 // StopChargePayload 停止充电命令载荷
 type StopChargePayload struct {
+	Reason string
+}
+
+// CancelSessionPayload 取消会话命令载荷
+type CancelSessionPayload struct {
 	Reason string
 }
 
@@ -227,6 +298,7 @@ type CoreCommand struct {
 	IssuedAt         time.Time
 	StartCharge      *StartChargePayload
 	StopCharge       *StopChargePayload
+	CancelSession    *CancelSessionPayload
 	QueryPortStatus  *QueryPortStatusPayload
 	SetParams        *SetParamsPayload
 	TriggerOTA       *TriggerOTAPayload

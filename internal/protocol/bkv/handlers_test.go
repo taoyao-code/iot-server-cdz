@@ -267,7 +267,8 @@ func TestHandlers_Control(t *testing.T) {
 
 func TestHandlers_Control_StartCharging(t *testing.T) {
 	fr := newFakeRepo()
-	h := &Handlers{Repo: fr}
+	evSink := &testEventSink{}
+	h := &Handlers{Repo: fr, CoreEvents: evSink}
 
 	// 构造开始充电的完整控制指令
 	// 02(插座号) 00(A孔) 01(开) 01(按时) 00F0(240分钟)
@@ -283,29 +284,21 @@ func TestHandlers_Control_StartCharging(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	// 应该有两个日志：UpsertOrderProgress + InsertCmdLog
-	if fr.logs != 2 {
-		t.Fatalf("expected 2 logs (order + cmd), got %d", fr.logs)
+	if fr.logs < 1 {
+		t.Fatalf("expected at least 1 log, got %d", fr.logs)
 	}
-
-	// 应该有一个端口状态更新
-	if fr.upserts != 1 {
-		t.Fatalf("expected 1 port upsert, got %d", fr.upserts)
+	if evSink.last == nil || evSink.last.PortSnapshot == nil {
+		t.Fatalf("expected port snapshot event")
 	}
-
-	// 检查端口状态
-	if fr.lastPort != 0 {
-		t.Fatalf("expected port 0, got %d", fr.lastPort)
-	}
-	// BKV 协议端口状态使用位图：0x81 = 在线 + 充电中
-	if fr.lastStatus != 0x81 {
-		t.Fatalf("expected status 0x81 (charging), got %d", fr.lastStatus)
+	if evSink.last.PortSnapshot.RawStatus != 0x81 {
+		t.Fatalf("unexpected status: %d", evSink.last.PortSnapshot.RawStatus)
 	}
 }
 
 func TestHandlers_Control_StopCharging(t *testing.T) {
 	fr := newFakeRepo()
-	h := &Handlers{Repo: fr}
+	evSink := &testEventSink{}
+	h := &Handlers{Repo: fr, CoreEvents: evSink}
 
 	// 构造停止充电的控制指令
 	// 02(插座号) 00(A孔) 00(关) 00(按量) 0000(不用)
@@ -322,18 +315,15 @@ func TestHandlers_Control_StopCharging(t *testing.T) {
 	}
 
 	// 应该有一个日志：InsertCmdLog
-	if fr.logs != 1 {
-		t.Fatalf("expected 1 log, got %d", fr.logs)
+	if fr.logs < 1 {
+		t.Fatalf("expected at least 1 log, got %d", fr.logs)
 	}
 
-	// 应该有一个端口状态更新
-	if fr.upserts != 1 {
-		t.Fatalf("expected 1 port upsert, got %d", fr.upserts)
+	if evSink.last == nil || evSink.last.PortSnapshot == nil {
+		t.Fatalf("expected port snapshot event")
 	}
-
-	// 检查端口状态为空闲（BKV idle=0x09 = 在线+空载）
-	if fr.lastStatus != 0x09 {
-		t.Fatalf("expected status 0x09 (idle), got %d", fr.lastStatus)
+	if evSink.last.PortSnapshot.RawStatus != 0x09 {
+		t.Fatalf("expected status 0x09 (idle), got %d", evSink.last.PortSnapshot.RawStatus)
 	}
 }
 

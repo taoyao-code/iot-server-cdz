@@ -5,22 +5,21 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/taoyao-code/iot-server/internal/coremodel"
+	"github.com/taoyao-code/iot-server/internal/driverapi"
 	"github.com/taoyao-code/iot-server/internal/metrics"
-	"github.com/taoyao-code/iot-server/internal/outbound"
-	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
-	redisstorage "github.com/taoyao-code/iot-server/internal/storage/redis"
 	"go.uber.org/zap"
 )
 
 // PortStatusSyncer P1-4: 端口状态定期同步器
 // 定期查询设备端口状态，确保与数据库一致
 type PortStatusSyncer struct {
-	repo      *pgstorage.Repository
-	sess      SessionManager // 会话管理器（用于实时在线判断）
-	outboundQ *redisstorage.OutboundQueue
-	metrics   *metrics.AppMetrics
-	logger    *zap.Logger
+	repo     *pgstorage.Repository
+	sess     SessionManager // 会话管理器（用于实时在线判断）
+	commands driverapi.CommandSource
+	metrics  *metrics.AppMetrics
+	logger   *zap.Logger
 
 	checkInterval time.Duration // 检查间隔
 	queryTimeout  time.Duration // 查询超时
@@ -41,14 +40,14 @@ type SessionManager interface {
 func NewPortStatusSyncer(
 	repo *pgstorage.Repository,
 	sess SessionManager,
-	outboundQ *redisstorage.OutboundQueue,
+	commands driverapi.CommandSource,
 	metrics *metrics.AppMetrics,
 	logger *zap.Logger,
 ) *PortStatusSyncer {
 	return &PortStatusSyncer{
 		repo:          repo,
 		sess:          sess,
-		outboundQ:     outboundQ,
+		commands:      commands,
 		metrics:       metrics,
 		logger:        logger,
 		checkInterval: 5 * time.Minute, // 每5分钟检查一次
@@ -159,30 +158,26 @@ func (s *PortStatusSyncer) queryOnlineDevicesPorts(ctx context.Context) {
 
 // queryDevicePort 查询单个设备的端口状态
 func (s *PortStatusSyncer) queryDevicePort(ctx context.Context, deviceID int64, phyID string, portNo int) error {
-	// 构造BKV 0x1D查询命令
-	// 根据协议文档：0x1D命令 + 插座号(1字节)
-	payload := []byte{byte(portNo)}
+	if s.commands == nil {
+		return fmt.Errorf("driver command source not configured")
+	}
 
-	// 生成消息ID
-	msgID := uint32(time.Now().Unix() & 0xFFFFFFFF)
+	socketNo := int32(portNo)
+	biz := coremodel.BusinessNo(fmt.Sprintf("SYNC-%d", time.Now().UnixNano()))
 
-	// 构造完整BKV帧
-	frame := bkv.Build(0x001D, msgID, phyID, payload)
+	cmd := &coremodel.CoreCommand{
+		Type:       coremodel.CommandQueryPortStatus,
+		DeviceID:   coremodel.DeviceID(phyID),
+		PortNo:     coremodel.PortNo(portNo),
+		BusinessNo: &biz,
+		IssuedAt:   time.Now(),
+		QueryPortStatus: &coremodel.QueryPortStatusPayload{
+			SocketNo: &socketNo,
+		},
+	}
 
-	// 入队下行命令
-	err := s.outboundQ.Enqueue(ctx, &redisstorage.OutboundMessage{
-		ID:        fmt.Sprintf("sync_%d_%d", deviceID, msgID),
-		DeviceID:  deviceID,
-		PhyID:     phyID,
-		Command:   frame,
-		Priority:  outbound.PriorityBackground, // P1-6: 同步查询=后台优先级
-		MaxRetry:  1,                           // 仅重试1次
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-		Timeout:   5000, // 5秒超时
-	})
-	if err != nil {
-		return fmt.Errorf("enqueue query command: %w", err)
+	if err := s.commands.SendCoreCommand(ctx, cmd); err != nil {
+		return fmt.Errorf("send driver query command: %w", err)
 	}
 
 	return nil

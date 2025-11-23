@@ -260,6 +260,19 @@ func (r *Repository) GetOrderByOrderNo(ctx context.Context, orderNo string) (*mo
 	return &order, err
 }
 
+// GetOrderByBusinessNo 根据 business_no 查询订单。
+func (r *Repository) GetOrderByBusinessNo(ctx context.Context, deviceID int64, businessNo int32) (*models.Order, error) {
+	var order models.Order
+	err := r.db.WithContext(ctx).
+		Where("device_id = ? AND business_no = ?", deviceID, businessNo).
+		Order("id DESC").
+		First(&order).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	return &order, err
+}
+
 // UpdateOrderStatus 更新订单状态。
 func (r *Repository) UpdateOrderStatus(ctx context.Context, orderID int64, status int32) error {
 	res := r.db.WithContext(ctx).
@@ -340,6 +353,35 @@ DO UPDATE SET end_time=NOW(), kwh_0p01=EXCLUDED.kwh_0p01, end_reason=EXCLUDED.en
 
 	res := r.db.WithContext(ctx).Exec(upsertByOrderNo, deviceID, portNo, orderHex, durationSec, kwh0p01, reason)
 	return res.Error
+}
+
+// UpsertOrderProgress 插入或更新订单进度。
+func (r *Repository) UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int32, orderNo string, businessNo *int32, durationSec int32, kwh0p01 int32, status int32, powerW01 *int32) error {
+	now := time.Now()
+	kwh := int64(kwh0p01)
+
+	record := &models.Order{
+		DeviceID:  deviceID,
+		PortNo:    portNo,
+		OrderNo:   orderNo,
+		StartTime: &now,
+		Status:    status,
+		Kwh0p01:   &kwh,
+	}
+	if businessNo != nil {
+		record.BusinessNo = *businessNo
+	}
+
+	return r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "order_no"}},
+			DoUpdates: clause.Assignments(map[string]interface{}{
+				"status":     gorm.Expr("excluded.status"),
+				"kwh_0p01":   gorm.Expr("excluded.kwh_0p01"),
+				"updated_at": gorm.Expr("NOW()"),
+			}),
+		}).
+		Create(record).Error
 }
 
 // AppendCmdLog 写入指令日志。

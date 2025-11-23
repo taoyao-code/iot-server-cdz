@@ -81,7 +81,7 @@ func TestNewOrderMonitor(t *testing.T) {
 	repo := setupMonitorTestRepo(t)
 	logger := zap.NewNop()
 
-	monitor := NewOrderMonitor(repo, logger)
+	monitor := NewOrderMonitor(repo, nil, logger)
 
 	assert.NotNil(t, monitor)
 	assert.Equal(t, 1*time.Minute, monitor.checkInterval)
@@ -94,7 +94,7 @@ func TestOrderMonitor_Stats(t *testing.T) {
 	repo := setupMonitorTestRepo(t)
 	logger := zap.NewNop()
 
-	monitor := NewOrderMonitor(repo, logger)
+	monitor := NewOrderMonitor(repo, nil, logger)
 	monitor.statsChecked = 10
 	monitor.statsPending = 2
 	monitor.statsChargingLong = 1
@@ -129,7 +129,7 @@ func TestOrderMonitor_CheckStalePendingOrders(t *testing.T) {
 
 	// 创建监控器
 	logger := zap.NewNop()
-	monitor := NewOrderMonitor(repo, logger)
+	monitor := NewOrderMonitor(repo, nil, logger)
 	monitor.pendingTimeout = 5 * time.Minute // 5分钟超时阈值
 
 	// 执行检查
@@ -161,7 +161,7 @@ func TestOrderMonitor_CheckLongChargingOrders(t *testing.T) {
 
 	// 创建监控器
 	logger := zap.NewNop()
-	monitor := NewOrderMonitor(repo, logger)
+	monitor := NewOrderMonitor(repo, nil, logger)
 	monitor.chargingTimeout = 2 * time.Hour // 2小时超时阈值
 
 	// 执行检查
@@ -191,7 +191,7 @@ func TestOrderMonitor_CleanupCancellingOrders(t *testing.T) {
 
 	// 创建监控器并执行清理
 	logger := zap.NewNop()
-	monitor := NewOrderMonitor(repo, logger)
+	monitor := NewOrderMonitor(repo, nil, logger)
 	monitor.cleanupCancellingOrders(ctx)
 
 	// 验证订单状态已变为cancelled（status=5）
@@ -221,7 +221,7 @@ func TestOrderMonitor_CleanupStoppingOrders(t *testing.T) {
 
 	// 创建监控器并执行清理
 	logger := zap.NewNop()
-	monitor := NewOrderMonitor(repo, logger)
+	monitor := NewOrderMonitor(repo, nil, logger)
 	monitor.cleanupStoppingOrders(ctx)
 
 	// 验证订单状态已变为stopped（status=7）
@@ -251,7 +251,7 @@ func TestOrderMonitor_CleanupInterruptedOrders(t *testing.T) {
 
 	// 创建监控器并执行清理
 	logger := zap.NewNop()
-	monitor := NewOrderMonitor(repo, logger)
+	monitor := NewOrderMonitor(repo, nil, logger)
 	monitor.cleanupInterruptedOrders(ctx)
 
 	// 验证订单状态已变为failed（status=6）
@@ -289,7 +289,7 @@ func TestOrderMonitor_Check(t *testing.T) {
 
 	// 创建监控器并执行检查
 	logger := zap.NewNop()
-	monitor := NewOrderMonitor(repo, logger)
+	monitor := NewOrderMonitor(repo, nil, logger)
 	monitor.check(ctx)
 
 	// 验证统计计数器
@@ -315,7 +315,7 @@ func TestOrderMonitor_Start_Shutdown(t *testing.T) {
 	repo := setupMonitorTestRepo(t)
 	logger := zap.NewNop()
 
-	monitor := NewOrderMonitor(repo, logger)
+	monitor := NewOrderMonitor(repo, nil, logger)
 	monitor.checkInterval = 100 * time.Millisecond // 缩短检查间隔加快测试
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)

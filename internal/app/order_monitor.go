@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/taoyao-code/iot-server/internal/api"
+	"github.com/taoyao-code/iot-server/internal/coremodel"
+	"github.com/taoyao-code/iot-server/internal/driverapi"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"go.uber.org/zap"
 )
@@ -12,8 +14,11 @@ import (
 // OrderMonitor 订单状态监控器
 // 定期检查pending订单超时、charging订单异常等情况
 type OrderMonitor struct {
-	repo   *pgstorage.Repository
-	logger *zap.Logger
+	repo      *pgstorage.Repository
+	commands  driverapi.CommandSource
+	logger    *zap.Logger
+	nowFunc   func() time.Time
+	sendLimit int
 
 	checkInterval   time.Duration // 检查间隔
 	pendingTimeout  time.Duration // pending订单超时阈值
@@ -26,13 +31,17 @@ type OrderMonitor struct {
 }
 
 // NewOrderMonitor 创建订单监控器
-func NewOrderMonitor(repo *pgstorage.Repository, logger *zap.Logger) *OrderMonitor {
+func NewOrderMonitor(repo *pgstorage.Repository, commands driverapi.CommandSource, logger *zap.Logger) *OrderMonitor {
 	return &OrderMonitor{
 		repo:            repo,
+		commands:        commands,
 		logger:          logger,
 		checkInterval:   1 * time.Minute, // 每分钟检查一次
 		pendingTimeout:  5 * time.Minute, // pending超过5分钟告警
 		chargingTimeout: 2 * time.Hour,   // charging超过2小时告警
+		nowFunc:         time.Now,
+		// 避免每轮过多下行命令导致队列拥塞
+		sendLimit: 50,
 	}
 }
 
@@ -63,6 +72,7 @@ func (m *OrderMonitor) Start(ctx context.Context) {
 // check 执行一次检查
 func (m *OrderMonitor) check(ctx context.Context) {
 	m.statsChecked++
+	m.sendLimit = 50
 
 	// 检查pending订单超时
 	m.checkStalePendingOrders(ctx)
@@ -89,7 +99,7 @@ func (m *OrderMonitor) checkStalePendingOrders(ctx context.Context) {
 	      ORDER BY o.created_at ASC
 	      LIMIT 100`
 
-	cutoff := time.Now().Add(-m.pendingTimeout)
+	cutoff := m.nowFunc().Add(-m.pendingTimeout)
 	rows, err := m.repo.Pool.Query(ctx, q, cutoff)
 	if err != nil {
 		m.logger.Error("query stale pending orders failed", zap.Error(err))
@@ -121,10 +131,7 @@ func (m *OrderMonitor) checkStalePendingOrders(ctx context.Context) {
 			zap.Duration("age", age),
 			zap.String("action", "需要人工介入或自动取消"))
 
-		// TODO: 可选操作
-		// 1. 自动取消订单: m.repo.CancelOrderByPort(ctx, deviceID, portNo)
-		// 2. 重发充电指令 (如果outbound队列支持)
-		// 3. 推送告警到运维系统
+		m.maybeQueryPort(ctx, phyID, portNo, orderNo)
 	}
 }
 
@@ -142,7 +149,7 @@ func (m *OrderMonitor) checkLongChargingOrders(ctx context.Context) {
 	      ORDER BY o.start_time ASC
 	      LIMIT 100`
 
-	cutoff := time.Now().Add(-m.chargingTimeout)
+	cutoff := m.nowFunc().Add(-m.chargingTimeout)
 	rows, err := m.repo.Pool.Query(ctx, q, cutoff)
 	if err != nil {
 		m.logger.Error("query long charging orders failed", zap.Error(err))
@@ -186,10 +193,35 @@ func (m *OrderMonitor) checkLongChargingOrders(ctx context.Context) {
 			zap.Float64("kwh_used", kwhUsed),
 			zap.String("action", "建议检查设备状态或手动结算"))
 
-		// TODO: 可选操作
-		// 1. 查询设备在线状态,如果离线则自动结算订单
-		// 2. 主动发送查询指令获取最新充电数据
-		// 3. 推送告警到运维系统
+		m.maybeQueryPort(ctx, phyID, portNo, orderNo)
+	}
+}
+
+func (m *OrderMonitor) maybeQueryPort(ctx context.Context, phyID string, portNo int, orderNo string) {
+	if m.commands == nil || m.sendLimit <= 0 {
+		return
+	}
+	m.sendLimit--
+
+	socketNo := int32(portNo)
+	biz := coremodel.BusinessNo(orderNo)
+	cmd := &coremodel.CoreCommand{
+		Type:       coremodel.CommandQueryPortStatus,
+		DeviceID:   coremodel.DeviceID(phyID),
+		PortNo:     coremodel.PortNo(portNo),
+		BusinessNo: &biz,
+		IssuedAt:   m.nowFunc(),
+		QueryPortStatus: &coremodel.QueryPortStatusPayload{
+			SocketNo: &socketNo,
+		},
+	}
+
+	if err := m.commands.SendCoreCommand(ctx, cmd); err != nil {
+		m.logger.Warn("order monitor: query port status failed",
+			zap.String("phy_id", phyID),
+			zap.Int("port_no", portNo),
+			zap.String("order_no", orderNo),
+			zap.Error(err))
 	}
 }
 

@@ -45,6 +45,8 @@ func (c *CommandSource) SendCoreCommand(ctx context.Context, cmd *coremodel.Core
 		return c.handleStartCharge(ctx, cmd)
 	case coremodel.CommandStopCharge:
 		return c.handleStopCharge(ctx, cmd)
+	case coremodel.CommandCancelSession:
+		return c.handleCancelSession(ctx, cmd)
 	case coremodel.CommandQueryPortStatus:
 		return c.handleQueryPortStatus(ctx, cmd)
 	case coremodel.CommandSetParams:
@@ -128,6 +130,22 @@ func (c *CommandSource) handleStopCharge(ctx context.Context, cmd *coremodel.Cor
 			zap.Uint16("business_no", biz))
 	}
 	return nil
+}
+
+func (c *CommandSource) handleCancelSession(ctx context.Context, cmd *coremodel.CoreCommand) error {
+	// 复用停止命令编码，但记录取消原因便于诊断
+	if cmd.CancelSession != nil && c.log != nil {
+		biz := ""
+		if cmd.BusinessNo != nil {
+			biz = string(*cmd.BusinessNo)
+		}
+		c.log.Info("bkv command source: cancel session requested",
+			zap.String("device_id", string(cmd.DeviceID)),
+			zap.Int("port_no", int(cmd.PortNo)),
+			zap.String("business_no", biz),
+			zap.String("reason", cmd.CancelSession.Reason))
+	}
+	return c.handleStopCharge(ctx, cmd)
 }
 
 func (c *CommandSource) handleQueryPortStatus(ctx context.Context, cmd *coremodel.CoreCommand) error {
