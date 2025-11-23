@@ -14,6 +14,8 @@ import (
 	"github.com/taoyao-code/iot-server/internal/outbound"
 	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 	"github.com/taoyao-code/iot-server/internal/session"
+	"github.com/taoyao-code/iot-server/internal/storage"
+	"github.com/taoyao-code/iot-server/internal/storage/models"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	redisstorage "github.com/taoyao-code/iot-server/internal/storage/redis"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
@@ -23,6 +25,7 @@ import (
 // ThirdPartyHandler 第三方API处理器
 type ThirdPartyHandler struct {
 	repo       *pgstorage.Repository
+	core       storage.CoreRepo
 	sess       session.SessionManager
 	outboundQ  *redisstorage.OutboundQueue
 	eventQueue *thirdparty.EventQueue
@@ -33,6 +36,7 @@ type ThirdPartyHandler struct {
 // NewThirdPartyHandler 创建第三方API处理器
 func NewThirdPartyHandler(
 	repo *pgstorage.Repository,
+	core storage.CoreRepo,
 	sess session.SessionManager,
 	outboundQ *redisstorage.OutboundQueue,
 	eventQueue *thirdparty.EventQueue,
@@ -41,11 +45,51 @@ func NewThirdPartyHandler(
 ) *ThirdPartyHandler {
 	return &ThirdPartyHandler{
 		repo:       repo,
+		core:       core,
 		sess:       sess,
 		outboundQ:  outboundQ,
 		eventQueue: eventQueue,
 		metrics:    metrics,
 		logger:     logger,
+	}
+}
+
+// portBusyError 表示端口已被占用（存在活跃订单）
+type portBusyError struct {
+	orderNo        string
+	portStatus     int
+	portStatusText string
+}
+
+func (e *portBusyError) Error() string { return "port busy" }
+
+// portInconsistentError 表示端口状态与订单状态不一致（例如端口charging但无活跃订单）
+type portInconsistentError struct {
+	portStatus int
+}
+
+func (e *portInconsistentError) Error() string { return "port state inconsistent" }
+
+// portFaultError 表示端口处于故障状态
+type portFaultError struct {
+	portStatus int
+}
+
+func (e *portFaultError) Error() string { return "port in fault state" }
+
+// mapPortStatusText 将端口状态枚举映射为可读文案（保持与历史实现一致）
+func mapPortStatusText(status int) string {
+	switch status {
+	case 0:
+		return "free"
+	case 1:
+		return "occupied"
+	case 2:
+		return "charging"
+	case 3:
+		return "fault"
+	default:
+		return fmt.Sprintf("unknown(%d)", status)
 	}
 }
 
@@ -116,10 +160,10 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		zap.Int("charge_mode", req.ChargeMode),
 		zap.Int("amount", req.Amount))
 
-	// 1. 验证设备存在
-	devID, err := h.repo.EnsureDevice(ctx, devicePhyID)
+	// 1. 验证设备存在（使用 CoreRepo 作为核心存储）
+	device, err := h.core.EnsureDevice(ctx, devicePhyID)
 	if err != nil {
-		h.logger.Error("failed to get device", zap.Error(err))
+		h.logger.Error("failed to ensure device via core repo", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, StandardResponse{
 			Code: 500,
 			// EN: failed to get device
@@ -129,6 +173,7 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		})
 		return
 	}
+	devID := device.ID
 
 	// 2. P0-1修复: 强制检查设备在线状态
 	isOnline := h.sess.IsOnline(devicePhyID, time.Now())
@@ -149,18 +194,21 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		return
 	}
 
-	// 3. 清理超时的pending订单（超过5分钟自动取消）
-	cleanupSQL := `
-		UPDATE orders 
-		SET status = 3, updated_at = NOW()
-		WHERE device_id = $1 AND status = 0 
-		  AND created_at < NOW() - INTERVAL '5 minutes'
-	`
-	cleanupResult, _ := h.repo.Pool.Exec(ctx, cleanupSQL, devID)
-	if cleanupResult.RowsAffected() > 0 {
-		h.logger.Info("cleaned up stale pending orders",
-			zap.String("device_phy_id", devicePhyID),
-			zap.Int64("count", cleanupResult.RowsAffected()))
+	// 3. 清理超时的pending订单（超过5分钟自动取消），使用 CoreRepo 实现
+	if cleaner, ok := h.core.(interface {
+		CleanupPendingOrders(ctx context.Context, deviceID int64, before time.Time) (int64, error)
+	}); ok {
+		before := time.Now().Add(-5 * time.Minute)
+		cleaned, err := cleaner.CleanupPendingOrders(ctx, devID, before)
+		if err != nil {
+			h.logger.Warn("failed to cleanup stale pending orders via core repo",
+				zap.String("device_phy_id", devicePhyID),
+				zap.Error(err))
+		} else if cleaned > 0 {
+			h.logger.Info("cleaned up stale pending orders",
+				zap.String("device_phy_id", devicePhyID),
+				zap.Int64("count", cleaned))
+		}
 	}
 
 	// 3.5. P1-4修复: 验证端口状态一致性
@@ -192,189 +240,147 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		return
 	}
 
-	// 4. P1-3修复: 使用事务+行锁检查端口并创建订单
-	tx, err := h.repo.Pool.Begin(ctx)
-	if err != nil {
-		h.logger.Error("failed to begin transaction", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code: 500,
-			// EN: database error
-			Message:   "数据库错误",
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
-		return
-	}
-	defer tx.Rollback(ctx)
+	// 4. P1-3修复: 使用 CoreRepo 的事务 + 行锁检查端口并创建订单
+	// 5. 生成订单号并派生业务号（BKV要求）
+	orderNo := fmt.Sprintf("THD%d%03d", time.Now().Unix(), req.PortNo)
+	businessNo := deriveBusinessNo(orderNo)
 
-	// 4.1. 同时锁定orders和ports表（P1-3完整方案：防止跨表状态不一致）
-	// 🔥 关键修复: 使用SKIP LOCKED快速失败，锁定所有活跃订单
-	// 注意：这里需要包含过渡状态（8,9,10），因为正在stopping/cancelling的订单仍然占用端口
-	// 应该等待过渡状态完成后才能创建新订单
-	var existingOrderNo string
-	checkPortSQL := `
-		SELECT order_no FROM orders
-		WHERE device_id = $1 AND port_no = $2
-		  AND status IN (0, 1, 2, 8, 9, 10)  -- pending, confirmed, charging, cancelling, stopping, interrupted
-		ORDER BY created_at DESC
-		FOR UPDATE SKIP LOCKED
-	`
-	rows, err := tx.Query(ctx, checkPortSQL, devID, req.PortNo)
-	if err != nil {
-		tx.Rollback(ctx)
-		h.logger.Error("failed to check port", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code: 500,
-			// EN: database error
-			Message:   "数据库错误",
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
+	// 6. 在同一事务中完成活跃订单检查、端口锁定与订单创建
+	err = h.core.WithTx(ctx, func(repo storage.CoreRepo) error {
+		// 扩展接口：需要锁定订单和端口的能力
+		lockRepo, ok := repo.(interface {
+			LockActiveOrderForPort(ctx context.Context, deviceID int64, portNo int32) (*models.Order, bool, error)
+			LockOrCreatePort(ctx context.Context, deviceID int64, portNo int32) (*models.Port, error)
 		})
-		return
-	}
-	defer rows.Close()
+		if !ok {
+			return fmt.Errorf("core repo does not support locking operations")
+		}
 
-	// 检查是否有活跃订单
-	if rows.Next() {
-		if err := rows.Scan(&existingOrderNo); err == nil {
-			// 端口已被占用，查询真实的端口状态
+		// 4.1 锁定活跃订单，防止跨表状态不一致
+		existingOrder, exists, err := lockRepo.LockActiveOrderForPort(ctx, devID, int32(req.PortNo))
+		if err != nil {
+			h.logger.Error("failed to check port via core repo", zap.Error(err))
+			return err
+		}
+		if exists && existingOrder != nil {
+			// 端口已被占用，查询真实的端口状态（在同一事务中读取端口快照）
 			var actualPortStatus int
-			portStatusQuery := `SELECT status FROM ports WHERE device_id = $1 AND port_no = $2`
-			portStatusErr := h.repo.Pool.QueryRow(ctx, portStatusQuery, devID, req.PortNo).Scan(&actualPortStatus)
-
-			portStatusText := "unknown"
-			if portStatusErr == nil {
-				// 转换端口状态为可读文本
-				switch actualPortStatus {
-				case 0:
-					portStatusText = "free"
-				case 1:
-					portStatusText = "occupied"
-				case 2:
-					portStatusText = "charging"
-				case 3:
-					portStatusText = "fault"
-				default:
-					portStatusText = fmt.Sprintf("unknown(%d)", actualPortStatus)
-				}
+			if port, err := repo.GetPort(ctx, devID, int32(req.PortNo)); err == nil {
+				actualPortStatus = int(port.Status)
 			}
+			portStatusText := mapPortStatusText(actualPortStatus)
 
-			tx.Rollback(ctx)
 			h.logger.Warn("port already in use",
 				zap.String("device_phy_id", devicePhyID),
 				zap.Int("port_no", req.PortNo),
-				zap.String("existing_order", existingOrderNo),
+				zap.String("existing_order", existingOrder.OrderNo),
 				zap.Int("actual_port_status", actualPortStatus),
 				zap.String("port_status_text", portStatusText))
+
+			return &portBusyError{
+				orderNo:        existingOrder.OrderNo,
+				portStatus:     actualPortStatus,
+				portStatusText: portStatusText,
+			}
+		}
+
+		// 4.2 行锁定端口记录，若不存在则初始化
+		port, err := lockRepo.LockOrCreatePort(ctx, devID, int32(req.PortNo))
+		if err != nil {
+			h.logger.Error("failed to lock or create port via core repo", zap.Error(err))
+			return err
+		}
+		lockedPortStatus := int(port.Status)
+
+		// 4.3 验证端口状态是否可用（保持与历史业务枚举语义一致）
+		if lockedPortStatus == 2 {
+			// 端口状态为charging但没有活跃订单，数据不一致
+			h.logger.Error("P1-3: port state mismatch - charging status without active order",
+				zap.String("device_phy_id", devicePhyID),
+				zap.Int("port_no", req.PortNo),
+				zap.Int("port_status", lockedPortStatus))
+			return &portInconsistentError{portStatus: lockedPortStatus}
+		}
+		if lockedPortStatus == 3 {
+			// 端口故障
+			h.logger.Warn("port is in fault state",
+				zap.String("device_phy_id", devicePhyID),
+				zap.Int("port_no", req.PortNo))
+			return &portFaultError{portStatus: lockedPortStatus}
+		}
+
+		// 6. 创建订单记录
+		amountCent := int64(req.Amount)
+		order := &models.Order{
+			DeviceID:   devID,
+			PortNo:     int32(req.PortNo),
+			OrderNo:    orderNo,
+			BusinessNo: int32(businessNo),
+			Status:     0,
+			ChargeMode: int32(req.ChargeMode),
+			AmountCent: &amountCent,
+		}
+
+		if err := repo.CreateOrder(ctx, order); err != nil {
+			h.logger.Error("failed to create order via core repo", zap.Error(err))
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		switch e := err.(type) {
+		case *portBusyError:
 			c.JSON(http.StatusConflict, StandardResponse{
 				Code: 409,
 				// EN: port is busy
 				Message: "端口正在使用中",
 				Data: map[string]interface{}{
-					"current_order": existingOrderNo,
-					"port_status":   portStatusText,
+					"current_order": e.orderNo,
+					"port_status":   e.portStatusText,
 				},
 				RequestID: requestID,
 				Timestamp: time.Now().Unix(),
 			})
 			return
+		case *portInconsistentError:
+			c.JSON(http.StatusConflict, StandardResponse{
+				Code: 40903, // PORT_STATE_INCONSISTENT
+				// EN: port state inconsistent, please retry
+				Message: "端口状态不一致，请重试",
+				Data: map[string]interface{}{
+					"port_no":     req.PortNo,
+					"port_status": e.portStatus,
+					"error_code":  "PORT_STATE_INCONSISTENT",
+				},
+				RequestID: requestID,
+				Timestamp: time.Now().Unix(),
+			})
+			return
+		case *portFaultError:
+			c.JSON(http.StatusServiceUnavailable, StandardResponse{
+				Code: 503,
+				// EN: port is in fault state
+				Message: "端口故障",
+				Data: map[string]interface{}{
+					"port_no": req.PortNo,
+					"status":  "fault",
+				},
+				RequestID: requestID,
+				Timestamp: time.Now().Unix(),
+			})
+			return
+		default:
+			h.logger.Error("failed to create order in transaction", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, StandardResponse{
+				Code: 500,
+				// EN: database error
+				Message:   "数据库错误",
+				RequestID: requestID,
+				Timestamp: time.Now().Unix(),
+			})
+			return
 		}
-	}
-
-	// 4.2. P1-3: 同时锁定ports表，防止端口状态被其他事务修改
-	lockPortSQL := `
-		SELECT status FROM ports
-		WHERE device_id = $1 AND port_no = $2
-		FOR UPDATE
-	`
-	var lockedPortStatus int
-	err = tx.QueryRow(ctx, lockPortSQL, devID, req.PortNo).Scan(&lockedPortStatus)
-	if err != nil {
-		// 端口不存在，需要先初始化
-		initPortSQL := `
-			INSERT INTO ports (device_id, port_no, status, updated_at)
-			VALUES ($1, $2, 0, NOW())
-			ON CONFLICT (device_id, port_no) DO NOTHING
-		`
-		_, _ = tx.Exec(ctx, initPortSQL, devID, req.PortNo)
-		lockedPortStatus = 0
-	}
-
-	// 4.3. P1-3: 验证端口状态是否可用
-	if lockedPortStatus == 2 {
-		// 端口状态为charging但没有活跃订单，数据不一致
-		tx.Rollback(ctx)
-		h.logger.Error("P1-3: port state mismatch - charging status without active order",
-			zap.String("device_phy_id", devicePhyID),
-			zap.Int("port_no", req.PortNo),
-			zap.Int("port_status", lockedPortStatus))
-		c.JSON(http.StatusConflict, StandardResponse{
-			Code: 40903, // PORT_STATE_INCONSISTENT
-			// EN: port state inconsistent, please retry
-			Message: "端口状态不一致，请重试",
-			Data: map[string]interface{}{
-				"port_no":     req.PortNo,
-				"port_status": lockedPortStatus,
-				"error_code":  "PORT_STATE_INCONSISTENT",
-			},
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
-		return
-	} else if lockedPortStatus == 3 {
-		// 端口故障
-		tx.Rollback(ctx)
-		h.logger.Warn("port is in fault state",
-			zap.String("device_phy_id", devicePhyID),
-			zap.Int("port_no", req.PortNo))
-		c.JSON(http.StatusServiceUnavailable, StandardResponse{
-			Code: 503,
-			// EN: port is in fault state
-			Message: "端口故障",
-			Data: map[string]interface{}{
-				"port_no": req.PortNo,
-				"status":  "fault",
-			},
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
-		return
-	}
-
-	// 5. 生成订单号并派生业务号（BKV要求）
-	orderNo := fmt.Sprintf("THD%d%03d", time.Now().Unix(), req.PortNo)
-	businessNo := deriveBusinessNo(orderNo)
-
-	// 6. 在同一事务中创建订单记录
-	insertOrderSQL := `
-		INSERT INTO orders (device_id, order_no, business_no, amount_cent, status, port_no, charge_mode, created_at)
-		VALUES ($1, $2, $3, $4, 0, $5, $6, NOW())
-	`
-	_, err = tx.Exec(ctx, insertOrderSQL, devID, orderNo, businessNo, req.Amount, req.PortNo, req.ChargeMode)
-	if err != nil {
-		tx.Rollback(ctx)
-		h.logger.Error("failed to create order", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code: 500,
-			// EN: failed to create order
-			Message:   "创建订单失败",
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
-		return
-	}
-
-	// 7. 提交事务
-	if err := tx.Commit(ctx); err != nil {
-		h.logger.Error("failed to commit transaction", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code: 500,
-			// EN: database error
-			Message:   "数据库错误",
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
-		return
 	}
 
 	h.logger.Info("P1-3: order created with port locked",
@@ -1984,7 +1990,28 @@ func isBKVChargingStatus(status int) bool {
 // verifyPortStatus P1-4: 验证端口状态与订单状态一致
 // 返回: (isConsistent bool, portStatus int, err error)
 func (h *ThirdPartyHandler) verifyPortStatus(ctx context.Context, deviceID int64, portNo int) (bool, int, error) {
-	// 查询数据库中的端口状态
+	// 优先通过 CoreRepo (GORM) 读取端口快照，避免在核心路径中直接拼接 SQL。
+	if h.core != nil {
+		port, err := h.core.GetPort(ctx, deviceID, int32(portNo))
+		if err != nil {
+			// 端口不存在或查询失败
+			return false, -1, err
+		}
+		dbPortStatus := int(port.Status)
+
+		// 验证端口状态：charging(2)表示端口被占用，free(0)或occupied(1)表示可用
+		if dbPortStatus == 2 {
+			h.logger.Warn("P1-4: port status indicates charging",
+				zap.Int64("device_id", deviceID),
+				zap.Int("port_no", portNo),
+				zap.Int("status", dbPortStatus))
+			return false, dbPortStatus, nil
+		}
+
+		return true, dbPortStatus, nil
+	}
+
+	// 回退路径：直接使用 pgxpool 查询（兼容旧实现）
 	var dbPortStatus int
 	queryPortSQL := `
 SELECT status FROM ports 

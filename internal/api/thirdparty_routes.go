@@ -5,6 +5,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/api/middleware"
 	"github.com/taoyao-code/iot-server/internal/metrics"
 	"github.com/taoyao-code/iot-server/internal/session"
+	"github.com/taoyao-code/iot-server/internal/storage"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	redisstorage "github.com/taoyao-code/iot-server/internal/storage/redis"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
@@ -15,6 +16,7 @@ import (
 func RegisterThirdPartyRoutes(
 	r *gin.Engine,
 	repo *pgstorage.Repository,
+	coreRepo storage.CoreRepo,
 	sess session.SessionManager,
 	outboundQ *redisstorage.OutboundQueue,
 	eventQueue *thirdparty.EventQueue,
@@ -23,7 +25,7 @@ func RegisterThirdPartyRoutes(
 	logger *zap.Logger,
 ) {
 	// 创建处理器
-	handler := NewThirdPartyHandler(repo, sess, outboundQ, eventQueue, metrics, logger)
+	handler := NewThirdPartyHandler(repo, coreRepo, sess, outboundQ, eventQueue, metrics, logger)
 
 	// 第三方API路由组
 	// 使用第三方认证中间件（与内部API认证分开）

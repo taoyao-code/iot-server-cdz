@@ -1,5 +1,39 @@
 # 更新日志
 
+## [v2.4.0] - 2025-11-22 - 移除 devices.online 冗余字段 🧹
+
+### 🔄 Schema 变更
+
+**变更ID**: `remove-devices-online-column`  
+**完成率**: 100% (11/11 任务)
+
+- 从 `devices` 表中移除历史遗留的 `online` 布尔列，避免与 SessionManager 在线状态真相源产生冲突。
+- 更新 `db/migrations/full_schema.sql` 与 `db/public.sql`，保证初始化 Schema 与迁移后结构一致。
+- 新增迁移 `019_remove_devices_online_column.sql`，在列存在时安全删除，支持回滚。
+
+### 📐 一致性规范与文档
+
+- 在 `consistency-lifecycle` 规范中明确：设备在线状态仅由 `SessionManager.IsOnline` + `devices.last_seen_at` 组合提供，数据库不再存储额外布尔在线字段。
+- 更新 `docs/协议/充电数据分析.txt`：
+  - 删除对 `devices.online` 的依赖和“清理候选”表述；
+  - 强调在线状态单一真相源与最小必要数据集。
+
+### ✅ 验证
+
+- `go test ./...` 全量通过（包含 BKV 协议、API、存储层和集成测试）。
+- 在测试环境执行迁移并对关键监控指标进行观察，未发现异常行为。
+- 发布说明中标记为 Schema 级变更，并提醒外部报表/自助查询从 `devices.online` 迁移到 `SessionManager.IsOnline`/`devices.last_seen_at`。
+
+### 🧱 中间件核心结构对齐（refactor-middleware-core）
+
+- 明确 IOT Server 作为协议无关中间件的核心职责边界：设备/端口状态、订单生命周期、下行队列和事件投递。  
+- 基于现有模块划分，梳理 API 层、协议适配层（BKV/GN）、核心模块（SessionManager/CoreRepo/一致性任务）及辅助工具的职责。  
+- 在 `docs/middleware-core.md` 中落地“middleware-core” 设计说明，并通过 OpenSpec `iot-middleware-core` 规范约束：  
+  - 协议适配层只做帧解析与核心事件转换，不直接拼接 SQL 或引入上游业务逻辑；  
+  - 在线状态只依赖 `SessionManager` 与 `devices.last_seen_at`，端口状态统一使用 BKV 位图；  
+  - 历史一次性补丁代码从主执行路径中剥离或文档化。  
+- 运行 `go test ./...`，确认重构后核心行为与既有 E2E/集成测试一致。
+
 ## [v2.3.1] - 2025-11-20 - 修复测试控制台静态文件404问题 🐛
 
 ### 🐛 Bug 修复

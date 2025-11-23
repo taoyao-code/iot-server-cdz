@@ -57,7 +57,7 @@ WHERE gateway_id IS NOT NULL;
 COMMENT ON INDEX idx_devices_gateway_id IS '优化网关设备查询';
 
 -- 5. 添加字段注释
-COMMENT ON COLUMN devices.online IS '设备在线状态（由会话管理器维护）';
+-- 注意：online 字段后续已通过单独的 OpenSpec 变更删除，当前仅保留 phy_id 注释
 COMMENT ON COLUMN devices.phy_id IS '设备物理ID（唯一标识）';
 
 -- 6. 验证修复

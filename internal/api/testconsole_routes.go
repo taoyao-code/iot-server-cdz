@@ -5,6 +5,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/api/middleware"
 	"github.com/taoyao-code/iot-server/internal/metrics"
 	"github.com/taoyao-code/iot-server/internal/session"
+	"github.com/taoyao-code/iot-server/internal/storage"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	redisstorage "github.com/taoyao-code/iot-server/internal/storage/redis"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
@@ -16,6 +17,7 @@ import (
 func RegisterTestConsoleRoutes(
 	r *gin.Engine,
 	repo *pgstorage.Repository,
+	coreRepo storage.CoreRepo,
 	sess session.SessionManager,
 	outboundQ *redisstorage.OutboundQueue,
 	eventQueue *thirdparty.EventQueue,
@@ -31,7 +33,7 @@ func RegisterTestConsoleRoutes(
 	}
 
 	// 创建处理器
-	handler := NewTestConsoleHandler(repo, sess, outboundQ, eventQueue, metrics, logger)
+	handler := NewTestConsoleHandler(repo, coreRepo, sess, outboundQ, eventQueue, metrics, logger)
 
 	// 内部测试控制台路由组
 	// 使用更严格的认证策略

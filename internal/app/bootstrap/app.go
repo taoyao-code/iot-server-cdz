@@ -58,6 +58,14 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 		return err // P0修复: 数据库失败直接返回，不继续启动
 	}
 	defer dbpool.Close()
+
+	coreRepo, coreSQLDB, err := app.NewCoreRepo(cfg.Database, log)
+	if err != nil {
+		log.Error("gorm core repo initialization failed", zap.Error(err))
+		return err
+	}
+	defer coreSQLDB.Close()
+
 	ready.SetDBReady(true)
 	log.Info("database ready", zap.String("dsn", maskDSN(cfg.Database.DSN)))
 
@@ -136,11 +144,11 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 		log.Info("third party api authentication config",
 			zap.Int("api_keys_count", len(thirdpartyAuthCfg.APIKeys)),
 			zap.Bool("enabled", thirdpartyAuthCfg.Enabled))
-		api.RegisterThirdPartyRoutes(r, repo, sess, redisQueue, eventQueue, appm, thirdpartyAuthCfg, log)
+		api.RegisterThirdPartyRoutes(r, repo, coreRepo, sess, redisQueue, eventQueue, appm, thirdpartyAuthCfg, log)
 
 		// 注册内部测试控制台路由（仅在启用时）
 		enableTestConsole := cfg.API.Auth.Enabled && len(cfg.API.Auth.APIKeys) > 0
-		api.RegisterTestConsoleRoutes(r, repo, sess, redisQueue, eventQueue, appm, authCfg, log, enableTestConsole)
+		api.RegisterTestConsoleRoutes(r, repo, coreRepo, sess, redisQueue, eventQueue, appm, authCfg, log, enableTestConsole)
 
 		// 注册静态文件服务（测试控制台前端）
 		if enableTestConsole {

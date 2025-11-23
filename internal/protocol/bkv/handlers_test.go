@@ -254,8 +254,9 @@ func TestHandlers_Control_StartCharging(t *testing.T) {
 	if fr.lastPort != 0 {
 		t.Fatalf("expected port 0, got %d", fr.lastPort)
 	}
-	if fr.lastStatus != 1 {
-		t.Fatalf("expected status 1 (charging), got %d", fr.lastStatus)
+	// BKV 协议端口状态使用位图：0x81 = 在线 + 充电中
+	if fr.lastStatus != 0x81 {
+		t.Fatalf("expected status 0x81 (charging), got %d", fr.lastStatus)
 	}
 }
 

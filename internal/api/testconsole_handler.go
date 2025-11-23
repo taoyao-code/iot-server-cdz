@@ -15,6 +15,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/metrics"
 	"github.com/taoyao-code/iot-server/internal/service"
 	"github.com/taoyao-code/iot-server/internal/session"
+	"github.com/taoyao-code/iot-server/internal/storage"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	redisstorage "github.com/taoyao-code/iot-server/internal/storage/redis"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
@@ -36,6 +37,7 @@ type TestConsoleHandler struct {
 // NewTestConsoleHandler 创建测试控制台处理器
 func NewTestConsoleHandler(
 	repo *pgstorage.Repository,
+	core storage.CoreRepo,
 	sess session.SessionManager,
 	outboundQ *redisstorage.OutboundQueue,
 	eventQueue *thirdparty.EventQueue,
@@ -47,7 +49,7 @@ func NewTestConsoleHandler(
 		sess:            sess,
 		outboundQ:       outboundQ,
 		eventQueue:      eventQueue,
-		thirdPartyH:     NewThirdPartyHandler(repo, sess, outboundQ, eventQueue, metrics, logger),
+		thirdPartyH:     NewThirdPartyHandler(repo, core, sess, outboundQ, eventQueue, metrics, logger),
 		timelineService: service.NewTimelineService(repo, logger),
 		logger:          logger,
 	}
