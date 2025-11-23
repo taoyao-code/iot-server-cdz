@@ -106,7 +106,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	handlerSet := &ap3000.Handlers{Repo: repo, Pusher: pusher, PushURL: pushURL, Metrics: appm}
 
 	// DriverCore: 协议驱动 -> 核心的事件收敛入口
-	driverCore := app.NewDriverCore(coreRepo, eventQueue, nil, log)
+	driverCore := app.NewDriverCore(coreRepo, eventQueue, log)
 
 	// P1修复: 使用NewHandlersWithServices完整初始化BKV处理器
 	// P1-2修复: 注入CardService，启用订单确认ACK验证

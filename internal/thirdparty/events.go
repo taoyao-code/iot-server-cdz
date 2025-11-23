@@ -44,6 +44,15 @@ const (
 
 	// EventOTAProgressUpdate OTA升级进度更新事件
 	EventOTAProgressUpdate EventType = "ota.progress_update"
+
+	// EventParamResult 参数结果事件
+	EventParamResult EventType = "device.param_result"
+
+	// EventParamSync 参数同步事件
+	EventParamSync EventType = "device.param_sync"
+
+	// EventNetworkTopology 组网拓扑事件
+	EventNetworkTopology EventType = "device.network_topology"
 )
 
 // StandardEvent 标准事件结构

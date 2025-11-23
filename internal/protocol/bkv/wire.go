@@ -20,9 +20,9 @@ func NewHandlers(repo *pgstorage.Repository, core storage.CoreRepo, reason *Reas
 	}
 }
 
-// NewHandlersWithServices 构造 BKV 处理集合（包含CardService和Outbound）Week5。
+// NewHandlersWithServices 构造 BKV 处理集合（包含 Outbound 等）Week5。
 // v2.1: 添加EventQueue和Deduper支持。
-func NewHandlersWithServices(repo *pgstorage.Repository, core storage.CoreRepo, reason *ReasonMap, cardService CardServiceAPI, outbound OutboundSender, eventQueue *thirdparty.EventQueue, deduper *thirdparty.Deduper, events driverapi.EventSink) *Handlers {
+func NewHandlersWithServices(repo *pgstorage.Repository, core storage.CoreRepo, reason *ReasonMap, _ interface{}, outbound OutboundSender, eventQueue *thirdparty.EventQueue, deduper *thirdparty.Deduper, events driverapi.EventSink) *Handlers {
 	return &Handlers{
 		Repo:       repo,
 		Core:       core,

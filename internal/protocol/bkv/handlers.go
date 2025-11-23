@@ -10,61 +10,11 @@ import (
 	"github.com/taoyao-code/iot-server/internal/coremodel"
 	"github.com/taoyao-code/iot-server/internal/driverapi"
 	"github.com/taoyao-code/iot-server/internal/storage"
-	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
 )
 
-// repoAPI 抽象（与 ap3000 对齐一部分能力）
-// P0修复: 扩展接口支持参数持久化
-type repoAPI interface {
-	EnsureDevice(ctx context.Context, phyID string) (int64, error)
-	TouchDeviceLastSeen(ctx context.Context, phyID string, at time.Time) error
-	InsertCmdLog(ctx context.Context, deviceID int64, msgID int, cmd int, direction int16, payload []byte, success bool) error
-	UpsertPortState(ctx context.Context, deviceID int64, portNo int, status int, powerW *int) error
-	UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, status int, powerW01 *int) error
-	SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, reason int) error
-	AckOutboundByMsgID(ctx context.Context, deviceID int64, msgID int, ok bool, errCode *int) error
-	ListPortsByPhyID(ctx context.Context, phyID string) ([]pgstorage.Port, error) // P1-4修复: 查询设备端口
-
-	// P0修复: 参数持久化方法（数据库存储）
-	StoreParamWrite(ctx context.Context, deviceID int64, paramID int, value []byte, msgID int) error
-	GetParamWritePending(ctx context.Context, deviceID int64, paramID int) ([]byte, int, error) // value, msgID, error
-	ConfirmParamWrite(ctx context.Context, deviceID int64, paramID int, msgID int) error
-	FailParamWrite(ctx context.Context, deviceID int64, paramID int, msgID int, errMsg string) error
-
-	// Week 6: 组网管理方法
-	UpsertGatewaySocket(ctx context.Context, socket *pgstorage.GatewaySocket) error
-	DeleteGatewaySocket(ctx context.Context, gatewayID string, socketNo int) error
-	GetGatewaySockets(ctx context.Context, gatewayID string) ([]pgstorage.GatewaySocket, error)
-
-	// Week 7: OTA升级方法
-	CreateOTATask(ctx context.Context, task *pgstorage.OTATask) (int64, error)
-	GetOTATask(ctx context.Context, taskID int64) (*pgstorage.OTATask, error)
-	UpdateOTATaskStatus(ctx context.Context, taskID int64, status int, errorMsg *string) error
-	UpdateOTATaskProgress(ctx context.Context, taskID int64, progress int, status int) error
-	GetDeviceOTATasks(ctx context.Context, deviceID int64, limit int) ([]pgstorage.OTATask, error)
-
-	// P0修复: 订单状态管理方法
-	GetPendingOrderByPort(ctx context.Context, deviceID int64, portNo int) (*pgstorage.Order, error)
-	UpdateOrderToCharging(ctx context.Context, orderNo string, startTime time.Time) error
-	CancelOrderByPort(ctx context.Context, deviceID int64, portNo int) error
-	GetChargingOrderByPort(ctx context.Context, deviceID int64, portNo int) (*pgstorage.Order, error)
-	GetOrderByBusinessNo(ctx context.Context, deviceID int64, businessNo uint16) (*pgstorage.Order, error)
-	CompleteOrderByPort(ctx context.Context, deviceID int64, portNo int, endTime time.Time, reason int) error
-
-	// P0-2修复: interrupted订单恢复方法
-	GetInterruptedOrders(ctx context.Context, deviceID int64) ([]pgstorage.Order, error)
-	RecoverOrder(ctx context.Context, orderNo string) error
-	FailOrder(ctx context.Context, orderNo, reason string) error
-}
-
-// CardServiceAPI 刷卡充电服务接口
-type CardServiceAPI interface {
-	HandleCardSwipe(ctx context.Context, req *CardSwipeRequest) (*ChargeCommand, error)
-	HandleOrderConfirmation(ctx context.Context, conf *OrderConfirmation) error
-	HandleChargeEnd(ctx context.Context, report *ChargeEndReport) error
-	HandleBalanceQuery(ctx context.Context, query *BalanceQuery) (*BalanceResponse, error)
-}
+// repoAPI 占位（保持构造函数兼容），驱动侧不直接写库。
+type repoAPI interface{}
 
 // OutboundSender Week5: 下行消息发送接口
 type OutboundSender interface {
@@ -85,23 +35,15 @@ type MetricsAPI interface {
 	GetPortStatusQueryResponseTotal() *prometheus.CounterVec // P1-4新增
 }
 
-const (
-	orderStatusPending   = 0
-	orderStatusConfirmed = 1
-	orderStatusCharging  = 2
-	orderStatusStopping  = 9
-)
-
 // Handlers BKV 协议处理器集合
 type Handlers struct {
-	Repo        repoAPI
-	Core        storage.CoreRepo
-	Reason      *ReasonMap
-	CardService CardServiceAPI         // Week4: 刷卡充电服务
-	Outbound    OutboundSender         // Week5: 下行消息发送器
-	EventQueue  *thirdparty.EventQueue // v2.1: 事件队列（第三方推送）
-	Deduper     *thirdparty.Deduper    // v2.1: 去重器
-	Metrics     MetricsAPI             // v2.1: 监控指标（Prometheus）
+	Repo       repoAPI
+	Core       storage.CoreRepo
+	Reason     *ReasonMap
+	Outbound   OutboundSender         // Week5: 下行消息发送器
+	EventQueue *thirdparty.EventQueue // v2.1: 事件队列（第三方推送）
+	Deduper    *thirdparty.Deduper    // v2.1: 去重器
+	Metrics    MetricsAPI             // v2.1: 监控指标（Prometheus）
 
 	// CoreEvents 为驱动 -> 核心 的事件上报入口
 	CoreEvents driverapi.EventSink
@@ -109,7 +51,7 @@ type Handlers struct {
 
 // HandleHeartbeat 处理心跳帧 (cmd=0x0000 或 BKV cmd=0x1017)
 func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
-	if h == nil || h.Repo == nil {
+	if h == nil {
 		return nil
 	}
 
@@ -119,15 +61,9 @@ func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
 		devicePhyID = "BKV-UNKNOWN"
 	}
 
-	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		return err
-	}
-
 	now := time.Now()
 
 	// 通过 CoreEvents 报告心跳，让核心更新 last_seen 等状态；若未注入则回退到直接触库。
-	updateViaCore := false
 	if h.CoreEvents != nil && devicePhyID != "" {
 		hb := &coremodel.CoreEvent{
 			Type:       coremodel.EventDeviceHeartbeat,
@@ -140,29 +76,7 @@ func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
 			},
 		}
 		if err := h.CoreEvents.HandleCoreEvent(ctx, hb); err == nil {
-			updateViaCore = true
-		}
-	}
-	if !updateViaCore {
-		_ = h.Repo.TouchDeviceLastSeen(ctx, devicePhyID, now)
-	}
-
-	// P1-4修复: 初始化默认端口（仅在端口不存在时）
-	// BKV设备可能只发送心跳不发送状态报告，导致ports表为空
-	// 在此处确保设备至少有默认的2个端口（A/B），避免API返回空数组
-	ports, err := h.Repo.ListPortsByPhyID(ctx, devicePhyID)
-	if err == nil && len(ports) == 0 {
-		// 创建默认端口A (port_no=0, status=0x01-在线)
-		initStatus := 0x01 // 0x01 = bit0(在线)
-		if err := h.Repo.UpsertPortState(ctx, devID, 0, initStatus, nil); err != nil {
-			// 端口初始化失败不应中断心跳处理，仅记录错误
-			_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0xFFFF, 0,
-				[]byte(fmt.Sprintf("failed to init port 0: %v", err)), false)
-		}
-		// 创建默认端口B (port_no=1, status=0x01-在线)
-		if err := h.Repo.UpsertPortState(ctx, devID, 1, initStatus, nil); err != nil {
-			_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0xFFFF, 0,
-				[]byte(fmt.Sprintf("failed to init port 1: %v", err)), false)
+			// no-op
 		}
 	}
 
@@ -170,10 +84,6 @@ func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
 	// 注意：这里简化处理，实际应该在首次注册时才推送
 	// 可以通过检查设备是否是新创建来判断（比如检查created_at和updated_at是否相同）
 	// 这里为了示例，暂时不推送（避免每次心跳都推送注册事件）
-
-	// 记录心跳日志
-	success := true
-	err = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, success)
 
 	// v2.1: 推送设备心跳事件（采样推送，避免过于频繁）
 	// 使用msgID进行采样，每10次心跳推送1次
@@ -197,14 +107,7 @@ func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
 		_ = h.Outbound.SendDownlink(devicePhyID, 0x0000, f.MsgID, ackPayload)
 	}
 
-	// P0-2修复: 检查是否有interrupted订单需要恢复
-	if err := h.checkInterruptedOrdersRecovery(ctx, devicePhyID, devID); err != nil {
-		// 恢复失败不影响心跳处理,仅记录错误
-		_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0xFFFF, 0,
-			[]byte(fmt.Sprintf("interrupted recovery failed: %v", err)), false)
-	}
-
-	return err
+	return nil
 }
 
 // encodeHeartbeatAck 构造心跳ACK的payload（当前时间）
@@ -241,7 +144,7 @@ func encodeHeartbeatAck(gatewayID string) []byte {
 
 // HandleBKVStatus 处理BKV插座状态上报 (cmd=0x1000 with BKV payload)
 func (h *Handlers) HandleBKVStatus(ctx context.Context, f *Frame) error {
-	if h == nil || h.Repo == nil {
+	if h == nil {
 		return nil
 	}
 
@@ -260,41 +163,31 @@ func (h *Handlers) HandleBKVStatus(ctx context.Context, f *Frame) error {
 		devicePhyID = "BKV-UNKNOWN"
 	}
 
-	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		return err
-	}
-
-	// 记录命令日志
-	if err := h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, true); err != nil {
-		return err
-	}
-
 	// 如果是状态上报，尝试解析并更新端口状态，并按协议回ACK
 	if payload.IsStatusReport() {
-		err = h.handleSocketStatusUpdate(ctx, devID, payload)
+		err := h.handleSocketStatusUpdate(ctx, payload)
 		h.sendStatusAck(ctx, f, payload, err == nil)
 		return err
 	}
 
 	// 如果是充电结束上报，处理订单结算
 	if payload.IsChargingEnd() {
-		return h.handleBKVChargingEnd(ctx, devID, f, payload)
+		return h.handleBKVChargingEnd(ctx, f, payload)
 	}
 
 	// 如果是异常事件上报，处理异常信息
 	if payload.IsExceptionReport() {
-		return h.handleExceptionEvent(ctx, devID, f, payload)
+		return h.handleExceptionEvent(ctx, f, payload)
 	}
 
 	// 如果是参数查询，记录参数信息
 	if payload.IsParameterQuery() {
-		return h.handleParameterQuery(ctx, devID, payload)
+		return h.handleParameterQuery(ctx, payload)
 	}
 
 	// 如果是控制命令，转发到控制处理器
 	if payload.IsControlCommand() {
-		return h.handleBKVControlCommand(ctx, devID, payload)
+		return h.handleBKVControlCommand(ctx, payload)
 	}
 
 	return nil
@@ -308,7 +201,6 @@ func (h *Handlers) sendStatusAck(ctx context.Context, f *Frame, payload *BKVPayl
 
 	data, err := EncodeBKVStatusAck(payload, success)
 	if err != nil {
-		h.logAckIssue(ctx, f, payload, "status ack encode failed", err)
 		return
 	}
 
@@ -334,7 +226,6 @@ func (h *Handlers) sendChargingEndAck(ctx context.Context, f *Frame, payload *BK
 
 	data, err := EncodeBKVChargingEndAck(payload, socketPtr, portPtr, success)
 	if err != nil {
-		h.logAckIssue(ctx, f, payload, "charging-end ack encode failed", err)
 		return
 	}
 
@@ -354,7 +245,6 @@ func (h *Handlers) sendExceptionAck(ctx context.Context, f *Frame, payload *BKVP
 
 	data, err := EncodeBKVExceptionAck(payload, socketPtr, success)
 	if err != nil {
-		h.logAckIssue(ctx, f, payload, "exception ack encode failed", err)
 		return
 	}
 
@@ -376,242 +266,63 @@ func (h *Handlers) deliverBKVAck(ctx context.Context, f *Frame, payload *BKVPayl
 	}
 
 	if err := h.Outbound.SendDownlink(targetGateway, 0x1000, f.MsgID, data); err != nil {
-		h.logAckIssue(ctx, f, payload, fmt.Sprintf("%s ack send failed", label), err)
+		_ = err
 	}
 }
-
-func (h *Handlers) logAckIssue(ctx context.Context, f *Frame, payload *BKVPayload, label string, ackErr error) {
-	if h == nil || h.Repo == nil || ackErr == nil {
-		return
+func (h *Handlers) handleSocketStatusUpdate(ctx context.Context, payload *BKVPayload) error {
+	if h == nil || h.CoreEvents == nil {
+		return nil
 	}
 
-	gateway := ""
-	if payload != nil {
-		gateway = payload.GatewayID
-	}
-	if gateway == "" && f != nil {
-		gateway = f.GatewayID
-	}
-	if gateway == "" {
-		return
-	}
-
-	devID, err := h.Repo.EnsureDevice(ctx, gateway)
-	if err != nil {
-		return
-	}
-
-	msgID := 0
-	if f != nil {
-		msgID = int(f.MsgID)
-	}
-
-	msg := []byte(fmt.Sprintf("%s: %v", label, ackErr))
-	_ = h.Repo.InsertCmdLog(ctx, devID, msgID, 0xFFFF, 0, msg, false)
-}
-
-// handleSocketStatusUpdate 处理插座状态更新
-// P0修复: 增强订单状态同步和事件推送
-func (h *Handlers) handleSocketStatusUpdate(ctx context.Context, deviceID int64, payload *BKVPayload) error {
-	// 使用GetSocketStatus方法解析完整的插座状态
 	socketStatus, err := payload.GetSocketStatus()
 	if err != nil {
-		// 如果解析失败，回退到简化解析
-		return h.handleSocketStatusUpdateSimple(ctx, deviceID, payload)
+		return fmt.Errorf("parse socket status: %w", err)
 	}
 
 	devicePhyID := payload.GatewayID
-
-	// 更新端口A状态并检查订单
-	if socketStatus.PortA != nil {
-		if err := h.updatePortAndOrder(ctx, deviceID, devicePhyID, socketStatus.PortA); err != nil {
-			return fmt.Errorf("failed to update port A: %w", err)
-		}
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
 	}
 
-	// 更新端口B状态并检查订单
-	if socketStatus.PortB != nil {
-		if err := h.updatePortAndOrder(ctx, deviceID, devicePhyID, socketStatus.PortB); err != nil {
-			return fmt.Errorf("failed to update port B: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// updatePortAndOrder 更新端口状态并同步订单状态
-// P0修复: 核心逻辑 - 当端口开始充电时自动更新订单状态
-func (h *Handlers) updatePortAndOrder(ctx context.Context, deviceID int64, devicePhyID string, port *PortStatus) error {
-	status := int(port.Status)
-	var powerW *int
-	if port.Power > 0 {
-		power := int(port.Power) / 10 // 从0.1W转换为W
-		powerW = &power
-	}
-
-	// 1. 更新端口状态：通过 CoreEvents 上报 PortSnapshot 事件，由核心持久化。
-	if h.CoreEvents == nil || devicePhyID == "" {
-		return fmt.Errorf("core events sink not configured for port snapshot")
-	}
-
-	var power32 *int32
-	if powerW != nil {
-		p := int32(*powerW)
-		power32 = &p
-	}
-	evPort := coremodel.PortNo(port.PortNo)
-
-	ev := &coremodel.CoreEvent{
-		Type:       coremodel.EventPortSnapshot,
-		DeviceID:   coremodel.DeviceID(devicePhyID),
-		PortNo:     &evPort,
-		OccurredAt: time.Now(),
-		PortSnapshot: &coremodel.PortSnapshot{
-			DeviceID:  coremodel.DeviceID(devicePhyID),
-			PortNo:    coremodel.PortNo(port.PortNo),
-			Status:    coremodel.PortStatusUnknown,
-			RawStatus: int32(status),
-			PowerW:    power32,
-			At:        time.Now(),
-		},
-	}
-
-	if err := h.CoreEvents.HandleCoreEvent(ctx, ev); err != nil {
-		return fmt.Errorf("emit port snapshot event failed: %w", err)
-	}
-
-	// 2. P0修复: 检查是否需要更新订单状态
-	if port.IsCharging() && port.BusinessNo > 0 {
-		// 端口正在充电且有业务号，查找对应的pending订单
-		order, err := h.Repo.GetPendingOrderByPort(ctx, deviceID, int(port.PortNo))
-		if err != nil {
-			// 订单不存在或查询失败，只记录警告
-			// 不返回错误，因为端口状态已成功更新
+	emit := func(port *PortStatus) error {
+		if port == nil {
 			return nil
 		}
-
-		// 3. 如果订单存在且是pending状态，更新为charging
-		if order != nil && order.Status == 0 {
-			startTime := time.Now()
-			if err := h.Repo.UpdateOrderToCharging(ctx, order.OrderNo, startTime); err != nil {
-				return fmt.Errorf("update order to charging: %w", err)
-			}
-
-			// 4. P0修复: 推送charging.started事件
-			if h.EventQueue != nil {
-				h.pushChargingStartedEventWithPort(
-					ctx,
-					devicePhyID,
-					order.OrderNo,
-					port,
-					startTime,
-				)
-			}
+		rawStatus := int32(port.Status)
+		var power *int32
+		if port.Power > 0 {
+			p := int32(port.Power) / 10 // 0.1W → W
+			power = &p
 		}
-
-		// 5. P0修复: 如果订单已经是charging状态，推送progress事件
-		if order != nil && order.Status == 1 {
-			if h.EventQueue != nil {
-				h.pushChargingProgressEvent(
-					ctx,
-					devicePhyID,
-					order.OrderNo,
-					port,
-				)
-			}
+		portNo := coremodel.PortNo(port.PortNo)
+		now := time.Now()
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventPortSnapshot,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			PortNo:     &portNo,
+			OccurredAt: now,
+			PortSnapshot: &coremodel.PortSnapshot{
+				DeviceID:  coremodel.DeviceID(devicePhyID),
+				PortNo:    portNo,
+				RawStatus: rawStatus,
+				PowerW:    power,
+				At:        now,
+			},
 		}
+		return h.CoreEvents.HandleCoreEvent(ctx, ev)
 	}
 
-	return nil
-}
-
-// handleSocketStatusUpdateSimple 简化的插座状态更新（回退方案）
-func (h *Handlers) handleSocketStatusUpdateSimple(ctx context.Context, deviceID int64, payload *BKVPayload) error {
-	// 原有的简化解析逻辑作为回退方案
-	var portAStatus, portBStatus int = 0, 0
-	var portAPower, portBPower *int
-
-	// 简化的字段解析
-	for _, field := range payload.Fields {
-		switch field.Tag {
-		case 0x03:
-			// 插座相关字段，暂时使用默认状态
-		case 0x00:
-			if len(field.Value) >= 3 && field.Value[1] == 0x09 {
-				// 插座状态字段
-				portAStatus = int(field.Value[2])
-			}
-		}
+	if err := emit(socketStatus.PortA); err != nil {
+		return err
 	}
-
-	// 更新端口A/B状态：通过 CoreEvents 上报快照事件，由核心持久化。
-	if h.CoreEvents == nil || payload.GatewayID == "" {
-		return fmt.Errorf("core events sink not configured for port snapshot")
+	if err := emit(socketStatus.PortB); err != nil {
+		return err
 	}
-
-	now := time.Now()
-	devID := coremodel.DeviceID(payload.GatewayID)
-
-	powerA32 := func() *int32 {
-		if portAPower == nil {
-			return nil
-		}
-		p := int32(*portAPower)
-		return &p
-	}()
-	powerB32 := func() *int32 {
-		if portBPower == nil {
-			return nil
-		}
-		p := int32(*portBPower)
-		return &p
-	}()
-
-	// A口
-	portA := coremodel.PortNo(0)
-	evA := &coremodel.CoreEvent{
-		Type:       coremodel.EventPortSnapshot,
-		DeviceID:   devID,
-		PortNo:     &portA,
-		OccurredAt: now,
-		PortSnapshot: &coremodel.PortSnapshot{
-			DeviceID:  devID,
-			PortNo:    portA,
-			Status:    coremodel.PortStatusUnknown,
-			RawStatus: int32(portAStatus),
-			PowerW:    powerA32,
-			At:        now,
-		},
-	}
-	if err := h.CoreEvents.HandleCoreEvent(ctx, evA); err != nil {
-		return fmt.Errorf("failed to emit port A snapshot event: %w", err)
-	}
-
-	// B口
-	portB := coremodel.PortNo(1)
-	evB := &coremodel.CoreEvent{
-		Type:       coremodel.EventPortSnapshot,
-		DeviceID:   devID,
-		PortNo:     &portB,
-		OccurredAt: now,
-		PortSnapshot: &coremodel.PortSnapshot{
-			DeviceID:  devID,
-			PortNo:    portB,
-			Status:    coremodel.PortStatusUnknown,
-			RawStatus: int32(portBStatus),
-			PowerW:    powerB32,
-			At:        now,
-		},
-	}
-	if err := h.CoreEvents.HandleCoreEvent(ctx, evB); err != nil {
-		return fmt.Errorf("failed to emit port B snapshot event: %w", err)
-	}
-
 	return nil
 }
 
 // handleBKVChargingEnd 处理BKV格式的充电结束上报
-func (h *Handlers) handleBKVChargingEnd(ctx context.Context, deviceID int64, f *Frame, payload *BKVPayload) error {
+func (h *Handlers) handleBKVChargingEnd(ctx context.Context, f *Frame, payload *BKVPayload) error {
 	var socketNo int = -1
 	var portNo int = -1
 	var orderID int
@@ -710,7 +421,7 @@ func (h *Handlers) handleBKVChargingEnd(ctx context.Context, deviceID int64, f *
 
 // HandleControl 处理控制指令 (cmd=0x0015)
 func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
-	if h == nil || h.Repo == nil {
+	if h == nil || h.CoreEvents == nil {
 		return nil
 	}
 
@@ -719,291 +430,74 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 		devicePhyID = "BKV-UNKNOWN"
 	}
 
-	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		return err
-	}
-
-	success := true
-
-	// 只处理上行：设备回复
 	if f.IsUplink() {
-		// 2.2.4 查询插座状态响应 (cmd=0x0015, 子命令0x1D)
-		// 数据结构: [lenH][lenL][0x1D][SocketStatePayload...]
-		// 其中 SocketStatePayload 与 ParseSocketStateResponse 解析格式保持一致。
-		if len(f.Data) >= 3 && f.Data[2] == 0x1D {
-			innerLen := int(binary.BigEndian.Uint16(f.Data[0:2]))
-			if innerLen <= 0 || len(f.Data) < 3+innerLen {
-				logMsg := fmt.Sprintf("SocketStatusQueryResponse(0x0015/0x1D) invalid length: declared=%d actual=%d payload=%x",
-					innerLen, len(f.Data)-3, f.Data)
-				_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), []byte(logMsg), false)
-				return nil
-			}
-
-			inner := f.Data[3 : 3+innerLen]
-			// 复用 HandleSocketStateResponse 的解析与端口状态更新逻辑
-			innerFrame := &Frame{
-				Cmd:       0x001D,
-				MsgID:     f.MsgID,
-				Direction: f.Direction,
-				GatewayID: f.GatewayID,
-				Data:      inner,
-			}
-			return h.HandleSocketStateResponse(ctx, innerFrame)
-		}
-
-		// 优先识别「充电结束上报」帧（长度型 payload，子命令=0x02/0x18），并转换为核心事件
-		// 避免被下面的「控制ACK」分支误吞掉导致不结算订单/不收敛端口状态。
-		if len(f.Data) >= 18 && len(f.Data) >= 3 && (f.Data[2] == 0x02 || f.Data[2] == 0x18) {
-			endReport, err := ParseBKVChargingEnd(f.Data)
-			if err == nil {
-				orderHex := fmt.Sprintf("%04X", endReport.BusinessNo)
-				durationSec := int(endReport.ChargingTime) * 60 // 分钟转秒
-				kwhUsed := int(endReport.EnergyUsed)            // 已经是0.01kWh单位
-
-				// 映射结束原因到平台统一原因码
-				var platformReason int // 默认正常结束
-				if h.Reason != nil {
-					if reason, ok := h.Reason.Translate(int(endReport.EndReason)); ok {
-						platformReason = reason
-					}
-				}
-
-				if h.CoreEvents == nil || devicePhyID == "" {
-					success = false
-				} else {
-					idleStatus := int32(0x09) // 0x09 = bit0(在线) + bit3(空载)
-					rawReason := int32(platformReason)
-					evPort := coremodel.PortNo(endReport.Port)
-					evBiz := coremodel.BusinessNo(orderHex)
-
-					ev := &coremodel.CoreEvent{
-						Type:       coremodel.EventSessionEnded,
-						DeviceID:   coremodel.DeviceID(devicePhyID),
-						PortNo:     &evPort,
-						BusinessNo: &evBiz,
-						OccurredAt: time.Now(),
-						SessionEnded: &coremodel.SessionEndedPayload{
-							DeviceID:       coremodel.DeviceID(devicePhyID),
-							PortNo:         coremodel.PortNo(endReport.Port),
-							BusinessNo:     coremodel.BusinessNo(orderHex),
-							EnergyKWh01:    int32(kwhUsed),
-							DurationSec:    int32(durationSec),
-							EndReasonCode:  "",
-							InstantPowerW:  nil,
-							OccurredAt:     time.Now(),
-							RawReason:      &rawReason,
-							NextPortStatus: &idleStatus,
-						},
-					}
-
-					if err := h.CoreEvents.HandleCoreEvent(ctx, ev); err != nil {
-						success = false
-					}
-				}
-
-				// 按协议2.2.9/2.2.2，设备上报充电结束后平台需返回确认帧。
-				// 采用与 minimal_bkv_service 一致的最小ACK数据格式：0002 0c 01 01
-				if h.Outbound != nil && devicePhyID != "" {
-					ackData := []byte{0x00, 0x02, 0x0c, 0x01, 0x01}
-					_ = h.Outbound.SendDownlink(devicePhyID, 0x0015, f.MsgID, ackData)
-				}
-			} else {
-				// 解析失败则标记失败，方便后续排查，但仍记录原始payload
-				success = false
-			}
-		} else if len(f.Data) >= 2 && len(f.Data) < 64 {
-			// 上行：设备控制ACK回复（长度型payload，子命令=0x07）
+		if len(f.Data) >= 2 && len(f.Data) < 64 {
 			innerLen := (int(f.Data[0]) << 8) | int(f.Data[1])
 			totalLen := 2 + innerLen
 			if innerLen >= 5 && len(f.Data) >= totalLen {
 				inner := f.Data[2:totalLen]
 				if len(inner) >= 5 && inner[0] == 0x07 {
 					result := inner[1]
-					socketNo := inner[2]
-					portNo := inner[3]
+					portNo := int(inner[3])
 					var businessNo uint16
 					if len(inner) >= 6 {
 						businessNo = binary.BigEndian.Uint16(inner[4:6])
-					} else {
-						businessNo = uint16(inner[4])
 					}
-
-					subCmd := inner[0]
-					ackLog := fmt.Sprintf("0x0015控制回复: 子命令=0x%02X 插座=%d 插孔=%d 结果=%d(1=成功,0=失败) 业务号=0x%04X 长度=%d",
-						subCmd, socketNo, portNo, result, businessNo, innerLen)
-					_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), []byte(ackLog), result == 0x01)
-
-					protocolPortNo := int(portNo)
-
-					var (
-						orderByBiz   *pgstorage.Order
-						bizLookupErr error
-					)
-					if businessNo != 0 {
-						orderByBiz, bizLookupErr = h.Repo.GetOrderByBusinessNo(ctx, devID, businessNo)
-						if bizLookupErr != nil {
-							warn := fmt.Sprintf("⚠️查询业务号订单失败: business_no=0x%04X err=%v", businessNo, bizLookupErr)
-							_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(warn), false)
-						}
-					}
-
-					var pendingOrder *pgstorage.Order
-					var chargingOrder *pgstorage.Order
-					if orderByBiz != nil {
-						if orderByBiz.PortNo != protocolPortNo {
-							mismatch := fmt.Sprintf("⚠️业务号端口不一致: business_no=0x%04X ack_port=%d order_port=%d", businessNo, protocolPortNo, orderByBiz.PortNo)
-							_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(mismatch), false)
-						}
-						switch orderByBiz.Status {
-						case orderStatusPending, orderStatusConfirmed:
-							pendingOrder = orderByBiz
-						case orderStatusCharging, orderStatusStopping:
-							chargingOrder = orderByBiz
-						}
-					}
-
-					if chargingOrder == nil {
-						if fallbackCharging, err := h.Repo.GetChargingOrderByPort(ctx, devID, protocolPortNo); err != nil {
-							errorLog := fmt.Sprintf("⚠️查询charging订单失败: port=%d err=%v", protocolPortNo, err)
-							_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(errorLog), false)
-						} else {
-							chargingOrder = fallbackCharging
-						}
-					}
-					if pendingOrder == nil {
-						if fallbackPending, err := h.Repo.GetPendingOrderByPort(ctx, devID, protocolPortNo); err != nil {
-							errorLog := fmt.Sprintf("⚠️查询pending订单失败: port=%d err=%v", protocolPortNo, err)
-							_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(errorLog), false)
-						} else {
-							pendingOrder = fallbackPending
-						}
-					}
-
+					status := int32(0x09)
 					if result == 0x01 {
-						if chargingOrder != nil {
-							endTime := time.Now()
-							endReason := 1 // 用户主动停止
-							if err := h.Repo.CompleteOrderByPort(ctx, devID, protocolPortNo, endTime, endReason); err == nil {
-								completeLog := fmt.Sprintf("✅订单已完成: %s (插孔%d, business_no=0x%04X)", chargingOrder.OrderNo, portNo, businessNo)
-								_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(completeLog), true)
-
-								// 同步更新端口状态为空闲 (0x09 = bit0在线 + bit3空载)
-								idleStatus := 0x09
-								var upsertErr error
-								if h.Core != nil {
-									upsertErr = h.Core.UpsertPortSnapshot(ctx, devID, int32(protocolPortNo), int32(idleStatus), nil, time.Now())
-								} else {
-									upsertErr = h.Repo.UpsertPortState(ctx, devID, protocolPortNo, idleStatus, nil)
-								}
-								if upsertErr != nil {
-									_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()),
-										[]byte(fmt.Sprintf("⚠️更新端口状态失败: port=%d err=%v", protocolPortNo, upsertErr)), false)
-								}
-
-								if h.EventQueue != nil {
-									h.pushChargingCompletedEvent(ctx, devicePhyID, chargingOrder.OrderNo, protocolPortNo, endReason, nil)
-								}
-							} else {
-								errorLog := fmt.Sprintf("❌完成订单失败: %s err=%v", chargingOrder.OrderNo, err)
-								_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(errorLog), false)
-							}
-						} else if pendingOrder != nil {
-							startTime := time.Now()
-							if updateErr := h.Repo.UpdateOrderToCharging(ctx, pendingOrder.OrderNo, startTime); updateErr == nil {
-								updateLog := fmt.Sprintf("✅订单状态已更新: %s -> charging (business_no=0x%04X)", pendingOrder.OrderNo, businessNo)
-								_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(updateLog), true)
-
-								// 同步更新端口状态为充电中 (0x81 = bit0在线 + bit7充电)
-								chargingStatus := 0x81
-								var upsertErr error
-								if h.Core != nil {
-									upsertErr = h.Core.UpsertPortSnapshot(ctx, devID, int32(protocolPortNo), int32(chargingStatus), nil, time.Now())
-								} else {
-									upsertErr = h.Repo.UpsertPortState(ctx, devID, protocolPortNo, chargingStatus, nil)
-								}
-								if upsertErr != nil {
-									_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()),
-										[]byte(fmt.Sprintf("⚠️更新端口状态失败: port=%d err=%v", protocolPortNo, upsertErr)), false)
-								}
-
-								if h.EventQueue != nil {
-									h.pushChargingStartedEvent(ctx, devicePhyID, pendingOrder.OrderNo, protocolPortNo, nil)
-								}
-							} else {
-								errorLog := fmt.Sprintf("❌更新订单状态失败: %s err=%v", pendingOrder.OrderNo, updateErr)
-								_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(errorLog), false)
-							}
-						} else {
-							warnLog := fmt.Sprintf("⚠️收到控制成功ACK但未找到订单: 插孔%d business_no=0x%04X", portNo, businessNo)
-							_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(warnLog), false)
-						}
-					} else {
-						failLog := fmt.Sprintf("❌设备拒绝充电: 插座=%d 插孔=%d 业务号=0x%04X", socketNo, portNo, businessNo)
-						_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()), []byte(failLog), false)
-
-						if pendingOrder != nil && pendingOrder.Status == orderStatusPending {
-							if err := h.Repo.CancelOrderByPort(ctx, devID, protocolPortNo); err != nil {
-								_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()),
-									[]byte(fmt.Sprintf("❌取消订单失败: port=%d err=%v", protocolPortNo, err)), false)
-							} else {
-								_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0x0015, getDirection(f.IsUplink()),
-									[]byte(fmt.Sprintf("✅已自动取消pending订单: business_no=0x%04X", businessNo)), true)
-							}
-						}
+						status = 0x81
 					}
+					evPort := coremodel.PortNo(portNo)
+					evBiz := coremodel.BusinessNo(fmt.Sprintf("%04X", businessNo))
+					ev := &coremodel.CoreEvent{
+						Type:       coremodel.EventPortSnapshot,
+						DeviceID:   coremodel.DeviceID(devicePhyID),
+						PortNo:     &evPort,
+						BusinessNo: &evBiz,
+						OccurredAt: time.Now(),
+						PortSnapshot: &coremodel.PortSnapshot{
+							DeviceID:  coremodel.DeviceID(devicePhyID),
+							PortNo:    evPort,
+							Status:    coremodel.PortStatusUnknown,
+							RawStatus: status,
+							At:        time.Now(),
+						},
+					}
+					_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
 				}
 			}
 		}
-	} else if f.IsDownlink() {
-		// 下行：平台控制指令，用于同步端口状态（测试控制台/E2E使用）
+	} else {
 		if cmd, err := ParseBKVControlCommand(f.Data); err == nil {
 			portNo := int(cmd.Port)
-
+			status := int32(0x09)
 			if cmd.Switch == SwitchOn {
-				// 充电启动：预先标记端口状态，便于内部测试实时观察
-				durationSec := int(cmd.Duration) * 60
-				kwh01 := int(cmd.Energy)
-				orderHex := fmt.Sprintf("BKV-%08X", f.MsgID)
-
-				if err := h.Repo.UpsertOrderProgress(ctx, devID, portNo, orderHex, durationSec, kwh01, orderStatusCharging, nil); err != nil {
-					success = false
-				}
-
-				// 使用与正式协议一致的BKV位图：0x81 = bit0在线 + bit7充电中
-				chargingStatus := 0x81
-				if h.Core != nil {
-					if err := h.Core.UpsertPortSnapshot(ctx, devID, int32(portNo), int32(chargingStatus), nil, time.Now()); err != nil {
-						success = false
-					}
-				} else {
-					if err := h.Repo.UpsertPortState(ctx, devID, portNo, chargingStatus, nil); err != nil {
-						success = false
-					}
-				}
-			} else {
-				// 停止充电：同步为空闲状态（0x09 = bit0在线 + bit3空载）
-				idleStatus := 0x09
-				if h.Core != nil {
-					if err := h.Core.UpsertPortSnapshot(ctx, devID, int32(portNo), int32(idleStatus), nil, time.Now()); err != nil {
-						success = false
-					}
-				} else {
-					if err := h.Repo.UpsertPortState(ctx, devID, portNo, idleStatus, nil); err != nil {
-						success = false
-					}
-				}
+				status = 0x81
 			}
+			evPort := coremodel.PortNo(portNo)
+			ev := &coremodel.CoreEvent{
+				Type:       coremodel.EventPortSnapshot,
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				PortNo:     &evPort,
+				OccurredAt: time.Now(),
+				PortSnapshot: &coremodel.PortSnapshot{
+					DeviceID:  coremodel.DeviceID(devicePhyID),
+					PortNo:    evPort,
+					Status:    coremodel.PortStatusUnknown,
+					RawStatus: status,
+					At:        time.Now(),
+				},
+			}
+			_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
 		}
 	}
 
-	// 记录控制指令日志
-	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, success)
+	return nil
 }
 
 // HandleChargingEnd 处理充电结束上报 (cmd=0x0015 上行，特定格式)
 func (h *Handlers) HandleChargingEnd(ctx context.Context, f *Frame) error {
-	if h == nil || h.Repo == nil {
+	if h == nil {
 		return nil
 	}
 
@@ -1011,13 +505,6 @@ func (h *Handlers) HandleChargingEnd(ctx context.Context, f *Frame) error {
 	if devicePhyID == "" {
 		devicePhyID = "BKV-UNKNOWN"
 	}
-
-	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		return err
-	}
-
-	success := true
 
 	// 只处理上行的充电结束上报
 	if f.IsUplink() && len(f.Data) >= 10 {
@@ -1063,7 +550,7 @@ func (h *Handlers) HandleChargingEnd(ctx context.Context, f *Frame) error {
 
 			// 📊 采集充电上报指标（2025-10-31新增）
 			if h.Metrics != nil {
-				deviceIDStr := fmt.Sprintf("%d", devID)
+				deviceIDStr := devicePhyID
 				portNoStr := fmt.Sprintf("%d", portNo+1) // API端口=协议插孔+1
 
 				// 状态统计
@@ -1090,9 +577,7 @@ func (h *Handlers) HandleChargingEnd(ctx context.Context, f *Frame) error {
 			}
 
 			// 使用 CoreEvents 将充电结束标准化为核心事件，由中间件核心完成订单结算和端口更新。
-			if h.CoreEvents == nil || devicePhyID == "" {
-				success = false
-			} else {
+			if h.CoreEvents != nil && devicePhyID != "" {
 				nextStatus := int32(0x09) // 0x09 = bit0(在线) + bit3(空载)
 				rawReason := int32(reason)
 				evPort := coremodel.PortNo(portNo)
@@ -1118,15 +603,12 @@ func (h *Handlers) HandleChargingEnd(ctx context.Context, f *Frame) error {
 					},
 				}
 
-				if err := h.CoreEvents.HandleCoreEvent(ctx, ev); err != nil {
-					success = false
-				}
+				_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
 			}
 		}
 	}
 
-	// 记录充电结束日志
-	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, success)
+	return nil
 }
 
 // extractEndReason 从插座状态中提取结束原因（简化版本）
@@ -1144,7 +626,7 @@ func extractEndReason(status uint8) int {
 
 // HandleGeneric 通用处理器，记录所有其他指令
 func (h *Handlers) HandleGeneric(ctx context.Context, f *Frame) error {
-	if h == nil || h.Repo == nil {
+	if h == nil || h.CoreEvents == nil {
 		return nil
 	}
 
@@ -1153,14 +635,24 @@ func (h *Handlers) HandleGeneric(ctx context.Context, f *Frame) error {
 		devicePhyID = "BKV-UNKNOWN"
 	}
 
-	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		return err
+	now := time.Now()
+	ev := &coremodel.CoreEvent{
+		Type:       coremodel.EventExceptionReported,
+		DeviceID:   coremodel.DeviceID(devicePhyID),
+		OccurredAt: now,
+		Exception: &coremodel.ExceptionPayload{
+			DeviceID: coremodel.DeviceID(devicePhyID),
+			Code:     "generic_cmd",
+			Message:  fmt.Sprintf("cmd=0x%04X", f.Cmd),
+			Severity: "info",
+			Metadata: map[string]string{
+				"payload": fmt.Sprintf("%x", f.Data),
+			},
+			OccurredAt: now,
+		},
 	}
-
-	// 记录通用指令日志
-	success := true
-	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, success)
+	_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
+	return nil
 }
 
 // HandleNetworkList 处理0x0005 网络节点列表相关指令（2.2.5/2.2.6 ACK）
@@ -1168,7 +660,7 @@ func (h *Handlers) HandleGeneric(ctx context.Context, f *Frame) error {
 // - 2.2.5 下发网络节点列表-刷新列表 设备回复
 // - 2.2.6 下发网络节点列表-添加单个插座 设备回复
 func (h *Handlers) HandleNetworkList(ctx context.Context, f *Frame) error {
-	if h == nil || h.Repo == nil {
+	if h == nil {
 		return nil
 	}
 
@@ -1177,58 +669,63 @@ func (h *Handlers) HandleNetworkList(ctx context.Context, f *Frame) error {
 		devicePhyID = "BKV-UNKNOWN"
 	}
 
-	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		return err
+	if h.CoreEvents == nil {
+		return nil
 	}
 
+	now := time.Now()
 	d := f.Data
-	success := true
-	var msg string
+	action := "network_ack"
+	result := "unknown"
+	msg := fmt.Sprintf("NetworkCmd0005: short payload len=%d payload=%x", len(d), d)
+	metadata := map[string]string{
+		"cmd": fmt.Sprintf("0x%04X", f.Cmd),
+	}
 
 	if len(d) >= 4 {
 		subCmd := d[2]
-		result := d[3]
+		rawResult := d[3]
+		metadata["sub_cmd"] = fmt.Sprintf("0x%02X", subCmd)
+		metadata["raw_result"] = fmt.Sprintf("%d", rawResult)
 
 		switch subCmd {
 		case 0x08:
-			// 2.2.5 刷新列表 ACK: 长度(2) + 0x08 + 结果(1=OK,0=失败)
-			status := "OK"
-			if result != 0x01 {
-				status = "FAIL"
-				success = false
-			}
-			msg = fmt.Sprintf("NetworkRefreshAck: sub=0x%02X result=%d(%s)", subCmd, result, status)
+			action = "refresh_ack"
 		case 0x09:
-			// 2.2.6 添加单个插座 ACK: 长度(2) + 0x09 + 结果(1=OK,0=失败)
-			status := "OK"
-			if result != 0x01 {
-				status = "FAIL"
-				success = false
-			}
-			msg = fmt.Sprintf("NetworkAddNodeAck: sub=0x%02X result=%d(%s)", subCmd, result, status)
+			action = "add_ack"
 		default:
-			// 其他子命令暂时只记录原始payload
-			msg = fmt.Sprintf("NetworkCmd0005: sub=0x%02X payload=%x", subCmd, d)
+			action = "network_ack"
 		}
-	} else {
-		msg = fmt.Sprintf("NetworkCmd0005: short payload len=%d payload=%x", len(d), d)
+
+		result = "ok"
+		if rawResult != 0x01 {
+			result = "failed"
+		}
+
+		msg = fmt.Sprintf("%s result=%d", action, rawResult)
 	}
 
-	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), []byte(msg), success)
-}
-
-// getDirection 获取数据方向标识
-func getDirection(isUplink bool) int16 {
-	if isUplink {
-		return 1 // 上行
+	ev := &coremodel.CoreEvent{
+		Type:       coremodel.EventNetworkTopology,
+		DeviceID:   coremodel.DeviceID(devicePhyID),
+		OccurredAt: now,
+		NetworkTopology: &coremodel.NetworkTopologyPayload{
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			Action:     action,
+			Result:     result,
+			Message:    msg,
+			Metadata:   metadata,
+			OccurredAt: now,
+		},
 	}
-	return 0 // 下行
+
+	_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
+	return nil
 }
 
 // HandleParam 处理参数读写指令 (完整的写入→回读校验实现)
 func (h *Handlers) HandleParam(ctx context.Context, f *Frame) error {
-	if h == nil || h.Repo == nil {
+	if h == nil {
 		return nil
 	}
 
@@ -1237,88 +734,52 @@ func (h *Handlers) HandleParam(ctx context.Context, f *Frame) error {
 		devicePhyID = "BKV-UNKNOWN"
 	}
 
-	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		return err
+	if h.CoreEvents == nil {
+		return nil
 	}
 
-	success := true
+	now := time.Now()
+	result := "param"
+	msg := "param message"
+	metadata := map[string]string{
+		"cmd":     fmt.Sprintf("0x%04X", f.Cmd),
+		"payload": fmt.Sprintf("%x", f.Data),
+	}
 
 	switch f.Cmd {
 	case 0x83, 0x84: // 参数写入
-		if !f.IsUplink() {
-			// 下行参数写入：存储待验证的参数值
-			if len(f.Data) > 0 {
-				param := DecodeParamWrite(f.Data)
-				if err := h.Repo.StoreParamWrite(ctx, devID, param.ParamID, param.Value, int(f.MsgID)); err != nil {
-					success = false
-				}
-			} else {
-				success = false
-			}
-		} else {
-			// 上行参数写入响应：仅确认收到
-			if err := h.Repo.AckOutboundByMsgID(ctx, devID, int(f.MsgID), len(f.Data) > 0, nil); err != nil {
-				success = false
-			}
-		}
-
+		result = "write_ack"
+		msg = "param write ack"
 	case 0x85: // 参数回读
-		if f.IsUplink() {
-			// 上行参数回读：验证值是否与写入一致
-			if len(f.Data) > 0 {
-				readback := DecodeParamReadback(f.Data)
-
-				// 获取之前写入的参数值进行比较
-				expectedValue, msgID, err := h.Repo.GetParamWritePending(ctx, devID, readback.ParamID)
-				if err == nil && expectedValue != nil {
-					// 比较回读值与期望值
-					if len(readback.Value) == len(expectedValue) {
-						match := true
-						for i, v := range readback.Value {
-							if v != expectedValue[i] {
-								match = false
-								break
-							}
-						}
-
-						if match {
-							// 校验成功：确认参数写入完成
-							if err := h.Repo.AckOutboundByMsgID(ctx, devID, msgID, true, nil); err != nil {
-								success = false
-							}
-						} else {
-							// 校验失败：参数值不匹配
-							errCode := 1 // 参数校验失败
-							if err := h.Repo.AckOutboundByMsgID(ctx, devID, msgID, false, &errCode); err != nil {
-								success = false
-							}
-							success = false
-						}
-					} else {
-						// 校验失败：长度不匹配
-						errCode := 2 // 参数长度错误
-						if err := h.Repo.AckOutboundByMsgID(ctx, devID, msgID, false, &errCode); err != nil {
-							success = false
-						}
-						success = false
-					}
-				}
-			} else {
-				success = false
-			}
+		result = "readback"
+		if len(f.Data) > 0 {
+			readback := DecodeParamReadback(f.Data)
+			metadata["param_id"] = fmt.Sprintf("%d", readback.ParamID)
+			metadata["value_hex"] = fmt.Sprintf("%x", readback.Value)
 		}
-
 	default:
-		// 其他参数相关命令
-		success = len(f.Data) > 0
+		result = "param"
 	}
 
-	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, success)
+	ev := &coremodel.CoreEvent{
+		Type:       coremodel.EventParamResult,
+		DeviceID:   coremodel.DeviceID(devicePhyID),
+		OccurredAt: now,
+		ParamResult: &coremodel.ParamResultPayload{
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			Result:     result,
+			Message:    msg,
+			Metadata:   metadata,
+			OccurredAt: now,
+		},
+	}
+
+	_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
+	return nil
 }
 
 // handleExceptionEvent 处理异常事件上报
-func (h *Handlers) handleExceptionEvent(ctx context.Context, deviceID int64, f *Frame, payload *BKVPayload) error {
+func (h *Handlers) handleExceptionEvent(ctx context.Context, f *Frame, payload *BKVPayload) error {
 	event, err := ParseBKVExceptionEvent(payload)
 	if err != nil {
 		h.sendExceptionAck(ctx, f, payload, -1, false)
@@ -1334,12 +795,38 @@ func (h *Handlers) handleExceptionEvent(ctx context.Context, deviceID int64, f *
 		h.sendExceptionAck(ctx, f, payload, socket, success)
 	}()
 
-	// 这里可以根据异常类型进行不同的处理
-	// 例如：更新设备状态、发送告警、记录异常日志等
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = payload.GatewayID
+	}
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
 
-	// 记录异常事件到日志（可以扩展为专门的异常事件表）
-	if err := h.Repo.InsertCmdLog(ctx, deviceID, 0, int(payload.Cmd), 1, []byte(fmt.Sprintf("Exception: Socket=%d, Reason=%d", event.SocketNo, event.SocketEventReason)), true); err != nil {
-		return err
+	if h.CoreEvents != nil {
+		now := time.Now()
+		port := coremodel.PortNo(event.SocketNo)
+		rawStatus := int32(event.SocketEventStatus)
+		meta := map[string]string{
+			"reason": fmt.Sprintf("%d", event.SocketEventReason),
+		}
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventExceptionReported,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			PortNo:     &port,
+			OccurredAt: now,
+			Exception: &coremodel.ExceptionPayload{
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				PortNo:     &port,
+				Code:       fmt.Sprintf("socket_event_%d", event.SocketEventReason),
+				Message:    fmt.Sprintf("status=%d", event.SocketEventStatus),
+				Severity:   "error",
+				RawStatus:  &rawStatus,
+				Metadata:   meta,
+				OccurredAt: now,
+			},
+		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
 	}
 
 	success = true
@@ -1347,53 +834,115 @@ func (h *Handlers) handleExceptionEvent(ctx context.Context, deviceID int64, f *
 }
 
 // handleParameterQuery 处理参数查询
-func (h *Handlers) handleParameterQuery(ctx context.Context, deviceID int64, payload *BKVPayload) error {
+func (h *Handlers) handleParameterQuery(ctx context.Context, payload *BKVPayload) error {
 	param, err := ParseBKVParameterQuery(payload)
 	if err != nil {
 		return fmt.Errorf("failed to parse parameter query: %w", err)
 	}
 
-	// 这里可以保存设备参数信息到数据库
-	// 或者与之前设置的参数进行比较验证
+	if h.CoreEvents == nil {
+		return nil
+	}
 
-	// 记录参数查询结果
-	success := true
-	return h.Repo.InsertCmdLog(ctx, deviceID, 0, int(payload.Cmd), 1, []byte(fmt.Sprintf("Params: Socket=%d, Power=%d, Temp=%d", param.SocketNo, param.PowerLimit, param.HighTempThreshold)), success)
+	devicePhyID := payload.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
+
+	now := time.Now()
+	meta := map[string]string{
+		"socket_no": fmt.Sprintf("%d", param.SocketNo),
+		"power":     fmt.Sprintf("%d", param.PowerLimit),
+		"temp":      fmt.Sprintf("%d", param.HighTempThreshold),
+	}
+	ev := &coremodel.CoreEvent{
+		Type:       coremodel.EventParamResult,
+		DeviceID:   coremodel.DeviceID(devicePhyID),
+		OccurredAt: now,
+		ParamResult: &coremodel.ParamResultPayload{
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			Result:     "query",
+			Message:    "parameter query",
+			Metadata:   meta,
+			OccurredAt: now,
+		},
+	}
+	_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
+
+	return nil
 }
 
 // handleBKVControlCommand 处理BKV控制命令
-func (h *Handlers) handleBKVControlCommand(ctx context.Context, deviceID int64, payload *BKVPayload) error {
-	// BKV控制命令可能包含刷卡充电、远程控制等
-	// 这里实现基础的控制逻辑
-
-	// 检查是否为刷卡充电相关
+func (h *Handlers) handleBKVControlCommand(ctx context.Context, payload *BKVPayload) error {
 	if payload.IsCardCharging() {
-		return h.handleCardCharging(ctx, deviceID, payload)
+		return h.handleCardCharging(ctx, payload)
 	}
 
-	// 其他控制命令的通用处理
-	success := true
-	return h.Repo.InsertCmdLog(ctx, deviceID, 0, int(payload.Cmd), 1, []byte("BKV Control Command"), success)
+	if h.CoreEvents == nil {
+		return nil
+	}
+
+	devicePhyID := payload.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
+
+	now := time.Now()
+	meta := map[string]string{
+		"cmd": fmt.Sprintf("0x%02X", payload.Cmd),
+	}
+
+	ev := &coremodel.CoreEvent{
+		Type:       coremodel.EventExceptionReported,
+		DeviceID:   coremodel.DeviceID(devicePhyID),
+		OccurredAt: now,
+		Exception: &coremodel.ExceptionPayload{
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			Code:       "control_command",
+			Message:    "control command received",
+			Severity:   "info",
+			Metadata:   meta,
+			OccurredAt: now,
+		},
+	}
+	_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
+	return nil
 }
 
 // handleCardCharging 处理刷卡充电
-func (h *Handlers) handleCardCharging(ctx context.Context, deviceID int64, payload *BKVPayload) error {
-	// 解析刷卡相关信息
-	// 这里可以实现刷卡充电的完整流程：
-	// 1. 验证卡片有效性
-	// 2. 检查余额
-	// 3. 创建充电订单
-	// 4. 更新端口状态
+func (h *Handlers) handleCardCharging(ctx context.Context, payload *BKVPayload) error {
+	if h.CoreEvents == nil {
+		return nil
+	}
 
-	success := true
-	return h.Repo.InsertCmdLog(ctx, deviceID, 0, int(payload.Cmd), 1, []byte("Card Charging"), success)
+	devicePhyID := payload.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
+
+	now := time.Now()
+	ev := &coremodel.CoreEvent{
+		Type:       coremodel.EventExceptionReported,
+		DeviceID:   coremodel.DeviceID(devicePhyID),
+		OccurredAt: now,
+		Exception: &coremodel.ExceptionPayload{
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			Code:       "card_charging_control",
+			Message:    "card charging control command",
+			Severity:   "info",
+			OccurredAt: now,
+		},
+	}
+	_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
+
+	return nil
 }
 
 // ============ Week4: 刷卡充电处理函数 ============
 
 // HandleCardSwipe 处理刷卡上报 (0x0B)
 func (h *Handlers) HandleCardSwipe(ctx context.Context, f *Frame) error {
-	if h == nil || h.Repo == nil {
+	if h == nil {
 		return nil
 	}
 
@@ -1402,18 +951,7 @@ func (h *Handlers) HandleCardSwipe(ctx context.Context, f *Frame) error {
 		return h.handleCardSwipeUplink(ctx, f)
 	}
 
-	// 下行：下发充电指令（通常由业务层触发，这里记录日志）
-	devicePhyID := f.GatewayID
-	if devicePhyID == "" {
-		return fmt.Errorf("missing gateway ID")
-	}
-
-	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		return err
-	}
-
-	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), getDirection(f.IsUplink()), f.Data, true)
+	return nil
 }
 
 // handleCardSwipeUplink 处理刷卡上报上行
@@ -1429,49 +967,26 @@ func (h *Handlers) handleCardSwipeUplink(ctx context.Context, f *Frame) error {
 		devicePhyID = req.PhyID
 	}
 
-	devID, err := h.Repo.EnsureDevice(ctx, devicePhyID)
-	if err != nil {
-		return err
-	}
-
-	// 记录刷卡日志
-	logData := []byte(fmt.Sprintf("CardNo=%s, PhyID=%s, Balance=%d", req.CardNo, req.PhyID, req.Balance))
-	err = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
-	if err != nil {
-		return err
-	}
-
-	// Week4: 调用CardService处理刷卡业务
-	if h.CardService != nil {
-		cmd, err := h.CardService.HandleCardSwipe(ctx, req)
-		if err != nil {
-			// 业务处理失败，记录错误日志
-			errLog := []byte(fmt.Sprintf("CardSwipe failed: %v", err))
-			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, errLog, false)
-			return fmt.Errorf("card service error: %w", err)
+	if h.CoreEvents != nil {
+		portNo := coremodel.PortNo(0)
+		biz := coremodel.BusinessNo(req.CardNo)
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventSessionStarted,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			PortNo:     &portNo,
+			BusinessNo: &biz,
+			OccurredAt: time.Now(),
+			SessionStarted: &coremodel.SessionStartedPayload{
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				PortNo:     portNo,
+				BusinessNo: biz,
+				Mode:       "card_swipe",
+				CardNo:     &req.CardNo,
+				Metadata:   map[string]string{"balance": fmt.Sprintf("%d", req.Balance)},
+				StartedAt:  time.Now(),
+			},
 		}
-
-		// Week5: 下发充电指令到设备
-		if err := h.sendChargeCommand(f.GatewayID, f.MsgID, cmd); err != nil {
-			// 发送失败，记录错误
-			errLog := []byte(fmt.Sprintf("Send charge command failed: %v", err))
-			h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, errLog, false)
-			return fmt.Errorf("send charge command error: %w", err)
-		}
-
-		// v2.1: 推送订单创建事件
-		if cmd != nil && h.EventQueue != nil {
-			h.pushOrderCreatedEvent(
-				ctx,
-				devicePhyID,
-				cmd.OrderNo,
-				1, // portNo - 从订单中获取，暂时使用默认值
-				string(cmd.ChargeMode),
-				int(cmd.Duration),
-				float64(cmd.PricePerKwh)/100.0, // 转换为元/kWh
-				nil,                            // logger可选
-			)
-		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
 	}
 
 	return nil
@@ -1640,143 +1155,305 @@ func (h *Handlers) handleBalanceQueryUplink(ctx context.Context, f *Frame) error
 
 // HandleNetworkRefresh 处理刷新插座列表响应（上行）
 func (h *Handlers) HandleNetworkRefresh(ctx context.Context, f *Frame) error {
-	// 解析刷新响应
+	if h == nil {
+		return nil
+	}
+
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
+
 	resp, err := ParseNetworkRefreshResponse(f.Data)
+	result := "ok"
+	msg := "network refresh"
+	metadata := map[string]string{
+		"cmd": fmt.Sprintf("0x%04X", f.Cmd),
+	}
+
 	if err != nil {
-		return fmt.Errorf("parse refresh response: %w", err)
+		result = "failed"
+		msg = err.Error()
+		metadata["raw_payload"] = fmt.Sprintf("%x", f.Data)
+	} else {
+		metadata["socket_count"] = fmt.Sprintf("%d", len(resp.Sockets))
 	}
 
-	// 更新数据库中的插座列表
-	now := time.Now()
-	for _, socket := range resp.Sockets {
-		signal := int(socket.SignalStrength)
-		lastSeen := now
-
-		gatewaySocket := &pgstorage.GatewaySocket{
-			GatewayID:      f.GatewayID,
-			SocketNo:       int(socket.SocketNo),
-			SocketMAC:      socket.SocketMAC,
-			SocketUID:      socket.SocketUID,
-			Channel:        int(socket.Channel),
-			Status:         int(socket.Status),
-			SignalStrength: &signal,
-			LastSeenAt:     &lastSeen,
+	if h.CoreEvents != nil {
+		now := time.Now()
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventNetworkTopology,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			OccurredAt: now,
+			NetworkTopology: &coremodel.NetworkTopologyPayload{
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				Action:     "refresh",
+				Result:     result,
+				Message:    msg,
+				Metadata:   metadata,
+				OccurredAt: now,
+			},
 		}
-
-		if err := h.Repo.UpsertGatewaySocket(ctx, gatewaySocket); err != nil {
-			return fmt.Errorf("upsert socket %d: %w", socket.SocketNo, err)
-		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
 	}
 
-	return nil
+	return err
 }
 
 // HandleNetworkAddNode 处理添加插座响应（上行）
 func (h *Handlers) HandleNetworkAddNode(ctx context.Context, f *Frame) error {
-	// 解析添加响应
-	resp, err := ParseNetworkAddNodeResponse(f.Data)
-	if err != nil {
-		return fmt.Errorf("parse add node response: %w", err)
+	if h == nil {
+		return nil
 	}
 
-	// 根据结果更新插座状态
-	if resp.Result == 0 {
-		// 成功：插座应该已经在刷新列表时更新了
-		// 这里可以记录日志或发送通知
-		return nil
-	} else {
-		// 失败：记录错误原因
-		return fmt.Errorf("add socket %d failed: %s", resp.SocketNo, resp.Reason)
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
 	}
+
+	resp, err := ParseNetworkAddNodeResponse(f.Data)
+	result := "ok"
+	msg := "add socket success"
+	metadata := map[string]string{
+		"cmd": fmt.Sprintf("0x%04X", f.Cmd),
+	}
+	var socketPtr *int32
+
+	if err != nil {
+		result = "failed"
+		msg = err.Error()
+		metadata["raw_payload"] = fmt.Sprintf("%x", f.Data)
+	} else {
+		socket := int32(resp.SocketNo)
+		socketPtr = &socket
+		metadata["raw_result"] = fmt.Sprintf("%d", resp.Result)
+		if resp.Result != 0 {
+			result = "failed"
+			if resp.Reason != "" {
+				msg = resp.Reason
+			} else {
+				msg = "add socket failed"
+			}
+		}
+	}
+
+	if h.CoreEvents != nil {
+		now := time.Now()
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventNetworkTopology,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			OccurredAt: now,
+			NetworkTopology: &coremodel.NetworkTopologyPayload{
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				Action:     "add_node",
+				SocketNo:   socketPtr,
+				Result:     result,
+				Message:    msg,
+				Metadata:   metadata,
+				OccurredAt: now,
+			},
+		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
+	}
+
+	return err
 }
 
 // HandleNetworkDeleteNode 处理删除插座响应（上行）
 func (h *Handlers) HandleNetworkDeleteNode(ctx context.Context, f *Frame) error {
-	// 解析删除响应
-	resp, err := ParseNetworkDeleteNodeResponse(f.Data)
-	if err != nil {
-		return fmt.Errorf("parse delete node response: %w", err)
+	if h == nil {
+		return nil
 	}
 
-	// 根据结果处理
-	if resp.Result == 0 {
-		// 成功：从数据库删除插座
-		if err := h.Repo.DeleteGatewaySocket(ctx, f.GatewayID, int(resp.SocketNo)); err != nil {
-			return fmt.Errorf("delete socket %d: %w", resp.SocketNo, err)
-		}
-		return nil
-	} else {
-		// 失败：记录错误原因
-		return fmt.Errorf("delete socket %d failed: %s", resp.SocketNo, resp.Reason)
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
 	}
+
+	resp, err := ParseNetworkDeleteNodeResponse(f.Data)
+	result := "ok"
+	msg := "delete socket success"
+	metadata := map[string]string{
+		"cmd": fmt.Sprintf("0x%04X", f.Cmd),
+	}
+	var socketPtr *int32
+
+	if err != nil {
+		result = "failed"
+		msg = err.Error()
+		metadata["raw_payload"] = fmt.Sprintf("%x", f.Data)
+	} else {
+		socket := int32(resp.SocketNo)
+		socketPtr = &socket
+		metadata["raw_result"] = fmt.Sprintf("%d", resp.Result)
+		if resp.Result != 0 {
+			result = "failed"
+			if resp.Reason != "" {
+				msg = resp.Reason
+			} else {
+				msg = "delete socket failed"
+			}
+		}
+	}
+
+	if h.CoreEvents != nil {
+		now := time.Now()
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventNetworkTopology,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			OccurredAt: now,
+			NetworkTopology: &coremodel.NetworkTopologyPayload{
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				Action:     "delete_node",
+				SocketNo:   socketPtr,
+				Result:     result,
+				Message:    msg,
+				Metadata:   metadata,
+				OccurredAt: now,
+			},
+		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
+	}
+
+	return err
 }
 
 // ===== Week 7: OTA升级处理器 =====
 
 // HandleOTAResponse 处理OTA升级响应（上行）
 func (h *Handlers) HandleOTAResponse(ctx context.Context, f *Frame) error {
-	// 解析OTA响应
-	resp, err := ParseOTAResponse(f.Data)
-	if err != nil {
-		return fmt.Errorf("parse OTA response: %w", err)
+	if h == nil {
+		return nil
 	}
 
-	// TODO: 根据响应结果更新任务状态
-	// 这里需要通过MsgID关联到对应的OTA任务
-	// 暂时只记录日志
-	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
 
-	logData := []byte(fmt.Sprintf("OTA Response: target=%d, socket=%d, result=%d, reason=%s",
-		resp.TargetType, resp.SocketNo, resp.Result, resp.Reason))
-	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, resp.Result == 0)
+	resp, err := ParseOTAResponse(f.Data)
+	status := "failed"
+	msg := "ota response failed"
+	metadata := map[string]string{
+		"cmd": fmt.Sprintf("0x%04X", f.Cmd),
+	}
+	var socketPtr *coremodel.PortNo
 
-	return nil
+	if err != nil {
+		msg = err.Error()
+		metadata["raw_payload"] = fmt.Sprintf("%x", f.Data)
+	} else {
+		if resp.SocketNo > 0 {
+			socket := coremodel.PortNo(resp.SocketNo)
+			socketPtr = &socket
+		}
+		metadata["target_type"] = fmt.Sprintf("%d", resp.TargetType)
+		metadata["raw_result"] = fmt.Sprintf("%d", resp.Result)
+		if resp.Result == 0 {
+			status = "accepted"
+			msg = "ota accepted"
+		} else if resp.Reason != "" {
+			msg = resp.Reason
+		}
+	}
+
+	if h.CoreEvents != nil {
+		now := time.Now()
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventOTAProgress,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			PortNo:     nil,
+			OccurredAt: now,
+			OTAProgress: &coremodel.OTAProgressPayload{
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				PortNo:     socketPtr,
+				Status:     status,
+				Progress:   0,
+				Message:    msg,
+				Metadata:   metadata,
+				OccurredAt: now,
+			},
+		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
+	}
+
+	return err
 }
 
 // HandleOTAProgress 处理OTA升级进度上报（上行）
 func (h *Handlers) HandleOTAProgress(ctx context.Context, f *Frame) error {
-	// 解析OTA进度
+	if h == nil {
+		return nil
+	}
+
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
+
 	progress, err := ParseOTAProgress(f.Data)
+	status := "in_progress"
+	msg := "ota in progress"
+	metadata := map[string]string{
+		"cmd": fmt.Sprintf("0x%04X", f.Cmd),
+	}
+	var socketPtr *coremodel.PortNo
+	var progressVal int32
+
 	if err != nil {
-		return fmt.Errorf("parse OTA progress: %w", err)
-	}
-
-	// TODO: 更新任务进度
-	// 这里需要找到对应的OTA任务并更新进度
-	// 暂时只记录日志
-	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
-
-	logData := []byte(fmt.Sprintf("OTA Progress: target=%d, socket=%d, progress=%d%%, status=%d",
-		progress.TargetType, progress.SocketNo, progress.Progress, progress.Status))
-	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
-
-	// v2.1: 推送OTA进度事件
-	if h.EventQueue != nil {
-		status := "in_progress"
-		statusMsg := "OTA升级进行中"
-		errorMsg := ""
-		if progress.Status == 2 {
-			status = "completed"
-			statusMsg = "OTA升级完成"
-		} else if progress.Status == 3 {
-			status = "failed"
-			statusMsg = "OTA升级失败"
-			errorMsg = "设备上报失败"
+		status = "failed"
+		msg = err.Error()
+		metadata["raw_payload"] = fmt.Sprintf("%x", f.Data)
+	} else {
+		if progress.SocketNo > 0 {
+			socket := coremodel.PortNo(progress.SocketNo)
+			socketPtr = &socket
 		}
-		h.pushOTAProgressEvent(
-			ctx,
-			f.GatewayID,
-			0,  // taskID需要从数据库查询获取
-			"", // version - 从任务中获取
-			int(progress.Progress),
-			status,
-			statusMsg,
-			errorMsg,
-			nil, // logger可选
-		)
+		progressVal = int32(progress.Progress)
+		metadata["target_type"] = fmt.Sprintf("%d", progress.TargetType)
+		metadata["status_code"] = fmt.Sprintf("%d", progress.Status)
+		if progress.Progress <= 100 {
+			metadata["progress"] = fmt.Sprintf("%d", progress.Progress)
+		}
+		switch progress.Status {
+		case 0:
+			status = "downloading"
+		case 1:
+			status = "installing"
+		case 2:
+			status = "completed"
+			msg = "ota completed"
+		case 3:
+			status = "failed"
+			if progress.ErrorMsg != "" {
+				msg = progress.ErrorMsg
+			} else {
+				msg = "ota failed"
+			}
+		}
 	}
 
-	return nil
+	if h.CoreEvents != nil {
+		now := time.Now()
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventOTAProgress,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			PortNo:     nil,
+			OccurredAt: now,
+			OTAProgress: &coremodel.OTAProgressPayload{
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				PortNo:     socketPtr,
+				Status:     status,
+				Progress:   progressVal,
+				Message:    msg,
+				Metadata:   metadata,
+				OccurredAt: now,
+			},
+		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
+	}
+
+	return err
 }
 
 // ===== Week 8: 按功率分档充电处理器 =====
@@ -1789,15 +1466,38 @@ func (h *Handlers) HandlePowerLevelEnd(ctx context.Context, f *Frame) error {
 		return fmt.Errorf("parse power level end report: %w", err)
 	}
 
-	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
 
-	// 记录充电结束日志
-	logData := []byte(fmt.Sprintf("PowerLevelEnd: port=%d, duration=%dm, energy=%.2fkWh, amount=%.2f元, reason=%d",
-		report.PortNo, report.TotalDuration, float64(report.TotalEnergy)/100, float64(report.TotalAmount)/100, report.EndReason))
-	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+	if h.CoreEvents != nil {
+		now := time.Now()
+		port := coremodel.PortNo(report.PortNo)
+		rawReason := int32(report.EndReason)
+		duration := int32(report.TotalDuration) * 60
+		energy := int32(report.TotalEnergy)
+		amount := int64(report.TotalAmount)
 
-	// TODO: 更新订单信息，记录各档位使用情况
-	// 目前先返回确认
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventSessionEnded,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			PortNo:     &port,
+			OccurredAt: now,
+			SessionEnded: &coremodel.SessionEndedPayload{
+				DeviceID:    coremodel.DeviceID(devicePhyID),
+				PortNo:      port,
+				BusinessNo:  "",
+				DurationSec: duration,
+				EnergyKWh01: energy,
+				AmountCent:  &amount,
+				RawReason:   &rawReason,
+				OccurredAt:  now,
+			},
+		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
+	}
+
 	reply := EncodePowerLevelEndReply(report.PortNo, 0) // 0=确认成功
 
 	// 发送确认回复（下行），使用cmd=0x0018以匹配上行命令
@@ -1812,104 +1512,274 @@ func (h *Handlers) HandlePowerLevelEnd(ctx context.Context, f *Frame) error {
 
 // HandleParamReadResponse 处理批量读取参数响应（上行）
 func (h *Handlers) HandleParamReadResponse(ctx context.Context, f *Frame) error {
+	if h == nil {
+		return nil
+	}
+
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
+
 	resp, err := ParseParamReadResponse(f.Data)
+	result := "ok"
+	msg := "param read response"
+	metadata := map[string]string{
+		"cmd": fmt.Sprintf("0x%04X", f.Cmd),
+	}
+
 	if err != nil {
-		return fmt.Errorf("parse param read response: %w", err)
+		result = "failed"
+		msg = err.Error()
+		metadata["raw_payload"] = fmt.Sprintf("%x", f.Data)
+	} else {
+		metadata["param_count"] = fmt.Sprintf("%d", len(resp.Params))
 	}
 
-	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
-
-	// 记录参数读取日志
-	logData := []byte(fmt.Sprintf("ParamReadResponse: %d params", len(resp.Params)))
-	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
-
-	// TODO: 存储参数到数据库或缓存
-	for _, param := range resp.Params {
-		_ = param // 暂时忽略
+	if h.CoreEvents != nil {
+		now := time.Now()
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventParamResult,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			OccurredAt: now,
+			ParamResult: &coremodel.ParamResultPayload{
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				Result:     result,
+				Message:    msg,
+				Metadata:   metadata,
+				OccurredAt: now,
+			},
+		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
 	}
 
-	return nil
+	return err
 }
 
 // HandleParamWriteResponse 处理批量写入参数响应（上行）
 func (h *Handlers) HandleParamWriteResponse(ctx context.Context, f *Frame) error {
-	resp, err := ParseParamWriteResponse(f.Data)
-	if err != nil {
-		return fmt.Errorf("parse param write response: %w", err)
+	if h == nil {
+		return nil
 	}
 
-	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
 
-	// 记录参数写入日志
-	successCount := 0
-	for _, result := range resp.Results {
-		if result.Result == 0 {
-			successCount++
+	resp, err := ParseParamWriteResponse(f.Data)
+	result := "ok"
+	msg := "param write response"
+	metadata := map[string]string{
+		"cmd": fmt.Sprintf("0x%04X", f.Cmd),
+	}
+
+	if err != nil {
+		result = "failed"
+		msg = err.Error()
+		metadata["raw_payload"] = fmt.Sprintf("%x", f.Data)
+	} else {
+		successCount := 0
+		for _, r := range resp.Results {
+			if r.Result == 0 {
+				successCount++
+			}
+		}
+		metadata["param_count"] = fmt.Sprintf("%d", len(resp.Results))
+		metadata["success_count"] = fmt.Sprintf("%d", successCount)
+		if successCount != len(resp.Results) {
+			result = "partial"
 		}
 	}
 
-	logData := []byte(fmt.Sprintf("ParamWriteResponse: %d/%d success", successCount, len(resp.Results)))
-	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+	if h.CoreEvents != nil {
+		now := time.Now()
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventParamResult,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			OccurredAt: now,
+			ParamResult: &coremodel.ParamResultPayload{
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				Result:     result,
+				Message:    msg,
+				Metadata:   metadata,
+				OccurredAt: now,
+			},
+		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
+	}
 
-	return nil
+	return err
 }
 
 // HandleParamSyncResponse 处理参数同步响应（上行）
 func (h *Handlers) HandleParamSyncResponse(ctx context.Context, f *Frame) error {
-	resp, err := ParseParamSyncResponse(f.Data)
-	if err != nil {
-		return fmt.Errorf("parse param sync response: %w", err)
+	if h == nil {
+		return nil
 	}
 
-	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
 
-	// 记录同步状态
-	logData := []byte(fmt.Sprintf("ParamSyncResponse: result=%s, progress=%d%%",
-		GetParamSyncResultDescription(resp.Result), resp.Progress))
-	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+	resp, err := ParseParamSyncResponse(f.Data)
+	result := "ok"
+	msg := "param sync"
+	progress := int32(0)
+	metadata := map[string]string{
+		"cmd": fmt.Sprintf("0x%04X", f.Cmd),
+	}
 
-	return nil
+	if err != nil {
+		result = "failed"
+		msg = err.Error()
+		metadata["raw_payload"] = fmt.Sprintf("%x", f.Data)
+	} else {
+		progress = int32(resp.Progress)
+		metadata["raw_result"] = fmt.Sprintf("%d", resp.Result)
+		msg = GetParamSyncResultDescription(resp.Result)
+		if resp.Message != "" {
+			metadata["message"] = resp.Message
+		}
+		if resp.Result != 0 && resp.Result != 2 {
+			result = "in_progress"
+		}
+	}
+
+	if h.CoreEvents != nil {
+		now := time.Now()
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventParamSync,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			OccurredAt: now,
+			ParamSync: &coremodel.ParamSyncPayload{
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				Progress:   progress,
+				Result:     result,
+				Message:    msg,
+				Metadata:   metadata,
+				OccurredAt: now,
+			},
+		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
+	}
+
+	return err
 }
 
 // HandleParamResetResponse 处理参数重置响应（上行）
 func (h *Handlers) HandleParamResetResponse(ctx context.Context, f *Frame) error {
+	if h == nil {
+		return nil
+	}
+
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
+
 	resp, err := ParseParamResetResponse(f.Data)
+	result := "ok"
+	msg := "param reset success"
+	metadata := map[string]string{
+		"cmd": fmt.Sprintf("0x%04X", f.Cmd),
+	}
+
 	if err != nil {
-		return fmt.Errorf("parse param reset response: %w", err)
+		result = "failed"
+		msg = err.Error()
+		metadata["raw_payload"] = fmt.Sprintf("%x", f.Data)
+	} else {
+		metadata["raw_result"] = fmt.Sprintf("%d", resp.Result)
+		if resp.Result != 0 {
+			result = "failed"
+			if resp.Message != "" {
+				msg = resp.Message
+			} else {
+				msg = "param reset failed"
+			}
+		} else if resp.Message != "" {
+			msg = resp.Message
+		}
 	}
 
-	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
-
-	// 记录重置结果
-	status := "成功"
-	if resp.Result != 0 {
-		status = "失败"
+	if h.CoreEvents != nil {
+		now := time.Now()
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventParamResult,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			OccurredAt: now,
+			ParamResult: &coremodel.ParamResultPayload{
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				Result:     result,
+				Message:    msg,
+				Metadata:   metadata,
+				OccurredAt: now,
+			},
+		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
 	}
-	logData := []byte(fmt.Sprintf("ParamResetResponse: %s, message=%s", status, resp.Message))
-	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
 
-	return nil
+	return err
 }
 
 // ===== Week 10: 扩展功能处理器 =====
 
 // HandleVoiceConfigResponse 处理语音配置响应（上行）
 func (h *Handlers) HandleVoiceConfigResponse(ctx context.Context, f *Frame) error {
+	if h == nil {
+		return nil
+	}
+
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
+
 	resp, err := ParseVoiceConfigResponse(f.Data)
+	result := "ok"
+	msg := "voice config success"
+	metadata := map[string]string{
+		"cmd": fmt.Sprintf("0x%04X", f.Cmd),
+	}
+
 	if err != nil {
-		return fmt.Errorf("parse voice config response: %w", err)
+		result = "failed"
+		msg = err.Error()
+		metadata["raw_payload"] = fmt.Sprintf("%x", f.Data)
+	} else {
+		metadata["raw_result"] = fmt.Sprintf("%d", resp.Result)
+		if resp.Result != 0 {
+			result = "failed"
+			if resp.Message != "" {
+				msg = resp.Message
+			} else {
+				msg = "voice config failed"
+			}
+		} else if resp.Message != "" {
+			msg = resp.Message
+		}
 	}
 
-	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
-
-	status := "成功"
-	if resp.Result != 0 {
-		status = "失败"
+	if h.CoreEvents != nil {
+		now := time.Now()
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventParamResult,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			OccurredAt: now,
+			ParamResult: &coremodel.ParamResultPayload{
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				Result:     result,
+				Message:    msg,
+				Metadata:   metadata,
+				OccurredAt: now,
+			},
+		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
 	}
-	logData := []byte(fmt.Sprintf("VoiceConfig: %s, message=%s", status, resp.Message))
-	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
 
-	return nil
+	return err
 }
 
 // HandleSocketStateResponse 处理插座状态响应（上行）
@@ -1919,19 +1789,16 @@ func (h *Handlers) HandleSocketStateResponse(ctx context.Context, f *Frame) erro
 		return fmt.Errorf("parse socket state response: %w", err)
 	}
 
-	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
 
-	logData := []byte(fmt.Sprintf("SocketState: socket=%d, status=%s, voltage=%.1fV, current=%dmA, power=%dW",
-		resp.SocketNo, GetSocketStatusDescription(resp.Status),
-		float64(resp.Voltage)/10, resp.Current, resp.Power))
-	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
-
-	// 更新端口状态到数据库
 	// 为保持与 BKV 状态位图的一致性，这里将 0/1/2 的业务枚举映射为约定的位图值：
 	//   - 0: idle  → 0x09 (在线+空载)
 	//   - 1: charging → 0x81 (在线+充电)
 	//   - 2: fault → 0x00 (离线/故障，占位，不设置充电位)
-	var dbStatus int
+	var dbStatus int32
 	switch resp.Status {
 	case 0:
 		dbStatus = 0x09
@@ -1940,28 +1807,34 @@ func (h *Handlers) HandleSocketStateResponse(ctx context.Context, f *Frame) erro
 	case 2:
 		dbStatus = 0x00
 	default:
-		// 未知枚举，保守处理为故障/离线
 		dbStatus = 0x00
 	}
 
-	power := int(resp.Power) // W
-	var upsertErr error
-	if h.Core != nil {
-		p := int32(power)
-		upsertErr = h.Core.UpsertPortSnapshot(ctx, devID, int32(resp.SocketNo), int32(dbStatus), &p, time.Now())
-	} else {
-		upsertErr = h.Repo.UpsertPortState(ctx, devID, int(resp.SocketNo), dbStatus, &power)
-	}
-	if upsertErr != nil {
-		// 记录错误但不中断处理流程
-		errLog := []byte(fmt.Sprintf("❌failed to update port state: socket=%d err=%v", resp.SocketNo, upsertErr))
-		_ = h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), 0xFFFF, 0, errLog, false)
+	power := int32(resp.Power) // W
+
+	if h.CoreEvents != nil {
+		now := time.Now()
+		port := coremodel.PortNo(resp.SocketNo)
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventPortSnapshot,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			PortNo:     &port,
+			OccurredAt: now,
+			PortSnapshot: &coremodel.PortSnapshot{
+				DeviceID:  coremodel.DeviceID(devicePhyID),
+				PortNo:    port,
+				RawStatus: dbStatus,
+				PowerW:    &power,
+				At:        now,
+			},
+		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
 	}
 
 	// 更新指标
 	if h.Metrics != nil {
 		h.Metrics.GetPortStatusQueryResponseTotal().WithLabelValues(
-			f.GatewayID,
+			devicePhyID,
 			GetSocketStatusDescription(resp.Status),
 		).Inc()
 	}
@@ -1976,144 +1849,42 @@ func (h *Handlers) HandleServiceFeeEnd(ctx context.Context, f *Frame) error {
 		return fmt.Errorf("parse service fee end report: %w", err)
 	}
 
-	devID, _ := h.Repo.EnsureDevice(ctx, f.GatewayID)
+	devicePhyID := f.GatewayID
+	if devicePhyID == "" {
+		devicePhyID = "BKV-UNKNOWN"
+	}
 
-	logData := []byte(fmt.Sprintf("ServiceFeeEnd: port=%d, energy=%.2fkWh, electric=%.2f元, service=%.2f元, total=%.2f元",
-		report.PortNo, float64(report.TotalEnergy)/100,
-		float64(report.ElectricFee)/100, float64(report.ServiceFee)/100,
-		float64(report.TotalAmount)/100))
-	h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 1, logData, true)
+	if h.CoreEvents != nil {
+		now := time.Now()
+		port := coremodel.PortNo(report.PortNo)
+		rawReason := int32(report.EndReason)
+		duration := int32(report.TotalDuration) * 60
+		energy := int32(report.TotalEnergy)
+		total := int64(report.TotalAmount)
 
-	// TODO: 更新订单信息
+		ev := &coremodel.CoreEvent{
+			Type:       coremodel.EventSessionEnded,
+			DeviceID:   coremodel.DeviceID(devicePhyID),
+			PortNo:     &port,
+			OccurredAt: now,
+			SessionEnded: &coremodel.SessionEndedPayload{
+				DeviceID:    coremodel.DeviceID(devicePhyID),
+				PortNo:      port,
+				BusinessNo:  "",
+				DurationSec: duration,
+				EnergyKWh01: energy,
+				AmountCent:  &total,
+				RawReason:   &rawReason,
+				OccurredAt:  now,
+			},
+		}
+		_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
+	}
+
 	reply := EncodeServiceFeeEndReply(report.PortNo, 0)
-	_ = reply
 
-	return nil
-}
-
-// ===== P0修复: 充电事件推送适配方法 =====
-
-// pushChargingStartedEventWithPort 推送充电开始事件（带端口详情）
-// P0修复: 增强版本，包含电压、功率等详细信息
-func (h *Handlers) pushChargingStartedEventWithPort(
-	ctx context.Context,
-	devicePhyID string,
-	orderNo string,
-	port *PortStatus,
-	startTime time.Time,
-) {
-	// 使用已有的pushChargingStartedEvent方法，但需要先存储额外信息到data中
-	// 由于event_helpers.go中的方法签名较简单，这里直接构造完整事件
-	if h.EventQueue == nil {
-		return
-	}
-
-	eventData := map[string]interface{}{
-		"order_no":   orderNo,
-		"port_no":    int(port.PortNo),
-		"started_at": startTime.Unix(),
-		// P0修复: 新增详细充电参数
-		"voltage_v": float64(port.Voltage) / 10.0,   // 0.1V → V
-		"power_w":   float64(port.Power) / 10.0,     // 0.1W → W
-		"current_a": float64(port.Current) / 1000.0, // 0.001A → A
-	}
-
-	event := thirdparty.NewEvent(
-		thirdparty.EventChargingStarted,
-		devicePhyID,
-		eventData,
-	)
-
-	// 使用pushEvent统一推送（包含去重逻辑）
-	h.pushEvent(ctx, event, nil)
-}
-
-// pushChargingProgressEvent 推送充电进度事件
-// P0修复: 新增方法，用于推送充电进度更新
-func (h *Handlers) pushChargingProgressEvent(
-	ctx context.Context,
-	devicePhyID string,
-	orderNo string,
-	port *PortStatus,
-) {
-	if h.EventQueue == nil {
-		return
-	}
-
-	eventData := map[string]interface{}{
-		"order_no":     orderNo,
-		"port_no":      int(port.PortNo),
-		"duration_min": int(port.ChargingTime),         // 分钟
-		"energy_kwh":   float64(port.Energy) / 100.0,   // 0.01kWh → kWh
-		"power_w":      float64(port.Power) / 10.0,     // 0.1W → W
-		"current_a":    float64(port.Current) / 1000.0, // 0.001A → A
-		"voltage_v":    float64(port.Voltage) / 10.0,   // 0.1V → V
-	}
-
-	event := thirdparty.NewEvent(
-		thirdparty.EventChargingProgress,
-		devicePhyID,
-		eventData,
-	)
-
-	// 使用pushEvent统一推送（包含去重逻辑）
-	h.pushEvent(ctx, event, nil)
-}
-
-// P0-2修复: 检查interrupted订单恢复
-// 当设备心跳恢复时,检查是否有interrupted状态的订单需要恢复为charging
-func (h *Handlers) checkInterruptedOrdersRecovery(ctx context.Context, devicePhyID string, deviceID int64) error {
-	// 查询该设备的interrupted订单
-	orders, err := h.Repo.GetInterruptedOrders(ctx, deviceID)
-	if err != nil {
-		return fmt.Errorf("get interrupted orders failed: %w", err)
-	}
-
-	if len(orders) == 0 {
-		return nil
-	}
-
-	// 遍历处理每个interrupted订单
-	for _, order := range orders {
-		// 检查订单更新时间,超过60秒未恢复则标记为failed
-		if time.Since(*order.StartTime) > 60*time.Second {
-			if err := h.Repo.FailOrder(ctx, order.OrderNo, "device_offline_timeout"); err != nil {
-				continue
-			}
-
-			// 推送订单失败事件
-			if h.EventQueue != nil {
-				eventData := map[string]interface{}{
-					"order_no":       order.OrderNo,
-					"port_no":        order.PortNo,
-					"failure_reason": "device_offline_timeout",
-					"interrupted_at": order.StartTime.Unix(),
-				}
-				event := thirdparty.NewEvent(thirdparty.EventOrderFailed, devicePhyID, eventData)
-				h.pushEvent(ctx, event, nil)
-			}
-			continue
-		}
-
-		// TODO: 查询端口实时状态(0x1012命令)
-		// 简化实现: 假设设备恢复后端口仍在充电,直接恢复订单
-		// 完整实现需要等待P1-4端口状态查询功能完成
-
-		if err := h.Repo.RecoverOrder(ctx, order.OrderNo); err != nil {
-			continue
-		}
-
-		// 推送订单恢复事件
-		if h.EventQueue != nil {
-			eventData := map[string]interface{}{
-				"order_no":       order.OrderNo,
-				"port_no":        order.PortNo,
-				"interrupted_at": order.StartTime.Unix(),
-				"recovered_at":   time.Now().Unix(),
-			}
-			event := thirdparty.NewEvent("order.recovered", devicePhyID, eventData)
-			h.pushEvent(ctx, event, nil)
-		}
+	if h.Outbound != nil && devicePhyID != "" && len(reply) > 0 {
+		_ = h.Outbound.SendDownlink(devicePhyID, f.Cmd, f.MsgID, reply)
 	}
 
 	return nil

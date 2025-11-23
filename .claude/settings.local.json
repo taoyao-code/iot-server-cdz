@@ -6,7 +6,9 @@
       "WebFetch(domain:doc.hummingbird.winc-link.com)",
       "mcp__context7__resolve-library-id",
       "mcp__context7__get-library-docs",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(openspec list:*)",
+      "Bash(openspec validate:*)"
     ],
     "deny": [],
     "ask": []

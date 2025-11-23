@@ -16,10 +16,9 @@ import (
 // DriverCore 实现 driverapi.EventSink，将协议驱动上报的规范化事件
 // 映射到 CoreRepo / 一致性视图上。当前实现聚焦充电结束事件。
 type DriverCore struct {
-	core    storage.CoreRepo
-	events  *thirdparty.EventQueue
-	billing BillingHook
-	log     *zap.Logger
+	core   storage.CoreRepo
+	events *thirdparty.EventQueue
+	log    *zap.Logger
 }
 
 const (
@@ -33,12 +32,11 @@ const (
 	orderStatusInterrupted = 10
 )
 
-func NewDriverCore(core storage.CoreRepo, events *thirdparty.EventQueue, billing BillingHook, log *zap.Logger) *DriverCore {
+func NewDriverCore(core storage.CoreRepo, events *thirdparty.EventQueue, log *zap.Logger) *DriverCore {
 	return &DriverCore{
-		core:    core,
-		events:  events,
-		billing: billing,
-		log:     log,
+		core:   core,
+		events: events,
+		log:    log,
 	}
 }
 
@@ -61,6 +59,14 @@ func (d *DriverCore) HandleCoreEvent(ctx context.Context, ev *coremodel.CoreEven
 		return d.handlePortSnapshot(ctx, ev)
 	case coremodel.EventExceptionReported:
 		return d.handleException(ctx, ev)
+	case coremodel.EventParamResult:
+		return d.handleParamResult(ctx, ev)
+	case coremodel.EventParamSync:
+		return d.handleParamSync(ctx, ev)
+	case coremodel.EventOTAProgress:
+		return d.handleOTAProgress(ctx, ev)
+	case coremodel.EventNetworkTopology:
+		return d.handleNetworkTopology(ctx, ev)
 	default:
 		// 其他事件类型后续按需接入
 		return nil
@@ -122,9 +128,6 @@ func (d *DriverCore) handleSessionStarted(ctx context.Context, ev *coremodel.Cor
 			return err
 		}
 
-		if d.billing != nil {
-			_ = d.billing.OnSessionStarted(ctx, orderNo, portNo, payload.CardNo)
-		}
 		d.pushThirdpartyEvent(coremodel.EventSessionStarted, phyID, map[string]interface{}{
 			"order_no": orderNo,
 			"port_no":  portNo,
@@ -285,9 +288,6 @@ func (d *DriverCore) handleSessionEnded(ctx context.Context, ev *coremodel.CoreE
 			}
 		}
 
-		if d.billing != nil {
-			_ = d.billing.OnSessionEnded(ctx, orderNo, portNo, payload.AmountCent, payload.EnergyKWh01, payload.DurationSec)
-		}
 		d.pushThirdpartyEvent(coremodel.EventSessionEnded, phyID, map[string]interface{}{
 			"order_no": orderNo,
 			"port_no":  portNo,
@@ -346,6 +346,118 @@ func (d *DriverCore) handleException(ctx context.Context, ev *coremodel.CoreEven
 		}
 		return nil
 	})
+}
+
+func (d *DriverCore) handleParamResult(ctx context.Context, ev *coremodel.CoreEvent) error {
+	payload := ev.ParamResult
+	if payload == nil {
+		return nil
+	}
+
+	phyID := pickDeviceID(ev.DeviceID, payload.DeviceID)
+	if phyID == "" {
+		return nil
+	}
+
+	if d.core != nil {
+		_, _ = d.core.EnsureDevice(ctx, phyID)
+	}
+
+	data := map[string]interface{}{
+		"result":   payload.Result,
+		"message":  payload.Message,
+		"metadata": payload.Metadata,
+	}
+	if payload.PortNo != nil {
+		data["port_no"] = *payload.PortNo
+	}
+
+	d.pushThirdpartyEvent(coremodel.EventParamResult, phyID, data)
+	return nil
+}
+
+func (d *DriverCore) handleParamSync(ctx context.Context, ev *coremodel.CoreEvent) error {
+	payload := ev.ParamSync
+	if payload == nil {
+		return nil
+	}
+
+	phyID := pickDeviceID(ev.DeviceID, payload.DeviceID)
+	if phyID == "" {
+		return nil
+	}
+
+	if d.core != nil {
+		_, _ = d.core.EnsureDevice(ctx, phyID)
+	}
+
+	data := map[string]interface{}{
+		"progress": payload.Progress,
+		"result":   payload.Result,
+		"message":  payload.Message,
+		"metadata": payload.Metadata,
+	}
+
+	d.pushThirdpartyEvent(coremodel.EventParamSync, phyID, data)
+	return nil
+}
+
+func (d *DriverCore) handleOTAProgress(ctx context.Context, ev *coremodel.CoreEvent) error {
+	payload := ev.OTAProgress
+	if payload == nil {
+		return nil
+	}
+
+	phyID := pickDeviceID(ev.DeviceID, payload.DeviceID)
+	if phyID == "" {
+		return nil
+	}
+
+	if d.core != nil {
+		_, _ = d.core.EnsureDevice(ctx, phyID)
+	}
+
+	data := map[string]interface{}{
+		"status":   payload.Status,
+		"progress": payload.Progress,
+		"message":  payload.Message,
+		"metadata": payload.Metadata,
+	}
+	if payload.PortNo != nil {
+		data["port_no"] = *payload.PortNo
+	}
+
+	d.pushThirdpartyEvent(coremodel.EventOTAProgress, phyID, data)
+	return nil
+}
+
+func (d *DriverCore) handleNetworkTopology(ctx context.Context, ev *coremodel.CoreEvent) error {
+	payload := ev.NetworkTopology
+	if payload == nil {
+		return nil
+	}
+
+	phyID := pickDeviceID(ev.DeviceID, payload.DeviceID)
+	if phyID == "" {
+		return nil
+	}
+
+	if d.core != nil {
+		_, _ = d.core.EnsureDevice(ctx, phyID)
+	}
+
+	data := map[string]interface{}{
+		"action":   payload.Action,
+		"result":   payload.Result,
+		"message":  payload.Message,
+		"metadata": payload.Metadata,
+	}
+	if payload.SocketNo != nil {
+		data["socket_no"] = *payload.SocketNo
+	}
+
+	d.pushThirdpartyEvent(coremodel.EventNetworkTopology, phyID, data)
+	return nil
 }
 
 func (d *DriverCore) handleDeviceHeartbeat(ctx context.Context, ev *coremodel.CoreEvent) error {
@@ -478,6 +590,14 @@ func (d *DriverCore) pushThirdpartyEvent(eventType coremodel.CoreEventType, phyI
 		tpType = thirdparty.EventChargingEnded
 	case coremodel.EventExceptionReported:
 		tpType = thirdparty.EventDeviceAlarm
+	case coremodel.EventParamResult:
+		tpType = thirdparty.EventParamResult
+	case coremodel.EventParamSync:
+		tpType = thirdparty.EventParamSync
+	case coremodel.EventOTAProgress:
+		tpType = thirdparty.EventOTAProgressUpdate
+	case coremodel.EventNetworkTopology:
+		tpType = thirdparty.EventNetworkTopology
 	default:
 		return
 	}
@@ -535,10 +655,4 @@ func (d *DriverCore) handlePortSnapshot(ctx context.Context, ev *coremodel.CoreE
 	}
 
 	return nil
-}
-
-// BillingHook 核心侧计费/卡业务钩子
-type BillingHook interface {
-	OnSessionStarted(ctx context.Context, biz string, port int32, cardNo *string) error
-	OnSessionEnded(ctx context.Context, biz string, port int32, amountCent *int64, energyKwh01 int32, durationSec int32) error
 }
