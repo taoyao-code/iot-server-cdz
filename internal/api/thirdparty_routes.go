@@ -35,12 +35,13 @@ func RegisterThirdPartyRoutes(
 	}
 
 	// 设备控制API
+	api.GET("/devices", handler.ListDevices)                    // 查询设备列表
+	api.GET("/devices/:device_id", handler.GetDevice)           // 查询设备状态
 	api.POST("/devices/:device_id/charge", handler.StartCharge) // 启动充电
 	api.POST("/devices/:device_id/stop", handler.StopCharge)    // 停止充电
-	api.GET("/devices/:device_id", handler.GetDevice)           // 查询设备状态
 
 	// 组网管理API
 	api.POST("/devices/:device_id/network/configure", handler.ConfigureNetwork) // 配置组网
 
-	logger.Info("third party routes registered", zap.Int("endpoints", 10)) // P1-7: 9→10
+	logger.Info("third party routes registered", zap.Int("endpoints", 6))
 }

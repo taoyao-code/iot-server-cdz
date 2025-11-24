@@ -21,8 +21,12 @@ func ThirdPartyAuth(apiKeys []string, logger *zap.Logger) gin.HandlerFunc {
 	}
 
 	return func(c *gin.Context) {
-		// 获取API Key from Header
+		// 获取API Key from Header（支持两种格式以保持兼容性）
 		apiKey := c.GetHeader("X-Api-Key")
+		if apiKey == "" {
+			// 兼容标准格式（大写）
+			apiKey = c.GetHeader("X-API-Key")
+		}
 
 		if apiKey == "" {
 			logger.Warn("third party auth failed: missing api key",

@@ -594,26 +594,9 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 	h.logger.Info("get device requested", zap.String("device_phy_id", devicePhyID))
 
 	// 1. 从数据库获取设备信息
-	devID, err := h.repo.EnsureDevice(ctx, devicePhyID)
+	device, err := h.core.GetDeviceByPhyID(ctx, devicePhyID)
 	if err != nil {
 		h.logger.Error("failed to get device", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code: 500,
-			// EN: failed to get device
-			Message:   "获取设备失败",
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
-		return
-	}
-
-	// 2. 查询设备基本信息
-	var lastSeenAt time.Time
-	var createdAt time.Time
-	queryDeviceSQL := `SELECT created_at, last_seen_at FROM devices WHERE id = $1`
-	err = h.repo.Pool.QueryRow(ctx, queryDeviceSQL, devID).Scan(&createdAt, &lastSeenAt)
-	if err != nil {
-		h.logger.Error("failed to query device", zap.Error(err))
 		c.JSON(http.StatusNotFound, StandardResponse{
 			Code: 404,
 			// EN: device not found
@@ -624,28 +607,116 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 		return
 	}
 
-	// 3. 检查设备在线状态
+	// 2. 检查设备在线状态
 	isOnline := h.sess.IsOnline(devicePhyID, time.Now())
 
-	// 4. 查询当前活动订单（如果有）- 仅查询真正的活跃状态
-	var activeOrderNo *string
-	var activePortNo *int
-
-	// 5. 返回设备详情
-	deviceData := map[string]interface{}{
-		"device_id":     devicePhyID,
-		"device_db_id":  devID,
-		"online":        isOnline,
-		"status":        getDeviceStatus(isOnline, activeOrderNo),
-		"last_seen_at":  lastSeenAt.Unix(),
-		"registered_at": createdAt.Unix(),
+	// 3. 查询端口信息
+	ports, err := h.repo.ListPortsByPhyID(ctx, devicePhyID)
+	if err != nil {
+		h.logger.Warn("failed to list ports", zap.String("device_phy_id", devicePhyID), zap.Error(err))
+		ports = nil // 继续返回设备信息，即使端口查询失败
 	}
 
-	if activeOrderNo != nil {
-		deviceData["active_order"] = map[string]interface{}{
-			"order_no": *activeOrderNo,
-			"port_no":  *activePortNo,
+	// 4. 查询活跃订单（status IN (0,1,2) = pending/charging/ending）
+	activeOrders := []struct {
+		OrderNo string
+		PortNo  int
+	}{}
+
+	queryOrders := `
+		SELECT order_no, port_no
+		FROM orders
+		WHERE device_id = $1 AND status IN (0, 1, 2)
+		ORDER BY created_at DESC
+		LIMIT 10
+	`
+	rows, err := h.repo.Pool.Query(ctx, queryOrders, device.ID)
+	if err != nil {
+		h.logger.Warn("failed to query active orders", zap.Int64("device_id", device.ID), zap.Error(err))
+	} else {
+		defer rows.Close()
+		for rows.Next() {
+			var order struct {
+				OrderNo string
+				PortNo  int
+			}
+			if err := rows.Scan(&order.OrderNo, &order.PortNo); err == nil {
+				activeOrders = append(activeOrders, order)
+			}
 		}
+	}
+
+	// 构建端口号到订单号的映射
+	orderNoByPort := make(map[int]string)
+	for _, order := range activeOrders {
+		orderNoByPort[order.PortNo] = order.OrderNo
+	}
+
+	// 5. 构建端口列表
+	portList := []map[string]interface{}{}
+	hasChargingPort := false
+	for _, port := range ports {
+		powerW := 0
+		if port.PowerW != nil {
+			powerW = *port.PowerW
+		}
+
+		// 转换端口状态：协议位图 -> 业务枚举（0=空闲,1=充电中,2=故障）
+		statusEnum := 0 // 默认空闲
+		isCharging := (port.Status & 0x80) != 0
+		isPortOnline := (port.Status & 0x01) != 0
+
+		if !isPortOnline {
+			statusEnum = 2 // 故障
+		} else if isCharging {
+			statusEnum = 1 // 充电中
+			hasChargingPort = true
+		}
+
+		portData := map[string]interface{}{
+			"port_no": port.PortNo,
+			"status":  statusEnum,
+			"power":   powerW,
+		}
+
+		// 添加订单号（如果有）
+		if orderNo, exists := orderNoByPort[port.PortNo]; exists {
+			portData["order_no"] = orderNo
+		}
+
+		portList = append(portList, portData)
+	}
+
+	// 6. 确定设备整体状态
+	deviceStatus := "idle"
+	if !isOnline {
+		deviceStatus = "offline"
+	} else if hasChargingPort {
+		deviceStatus = "charging"
+	}
+
+	// 7. 构建活跃订单列表
+	activeOrderList := []map[string]interface{}{}
+	for _, order := range activeOrders {
+		orderData := map[string]interface{}{
+			"order_no": order.OrderNo,
+			"port_no":  order.PortNo,
+		}
+		activeOrderList = append(activeOrderList, orderData)
+	}
+
+	// 8. 返回设备详情
+	deviceData := map[string]interface{}{
+		"device_phy_id": devicePhyID,
+		"device_id":     device.ID,
+		"is_online":     isOnline,
+		"status":        deviceStatus,
+		"ports":         portList,
+		"active_orders": activeOrderList,
+		"registered_at": device.CreatedAt,
+	}
+	if device.LastSeenAt != nil {
+		deviceData["last_seen_at"] = *device.LastSeenAt
 	}
 
 	c.JSON(http.StatusOK, StandardResponse{
@@ -653,6 +724,158 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 		// EN: success
 		Message:   "成功",
 		Data:      deviceData,
+		RequestID: requestID,
+		Timestamp: time.Now().Unix(),
+	})
+}
+
+// ListDevices 查询设备列表
+// @Summary 查询设备列表
+// @Description 查询所有设备的基本信息和状态
+// @Tags 第三方API - 设备管理
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} StandardResponse "成功"
+// @Failure 500 {object} StandardResponse "服务器错误"
+// @Router /api/v1/third/devices [get]
+func (h *ThirdPartyHandler) ListDevices(c *gin.Context) {
+	ctx := c.Request.Context()
+	requestID := c.GetString("request_id")
+
+	h.logger.Info("list devices requested")
+
+	// 1. 查询所有设备（使用较大的 limit）
+	devices, err := h.repo.ListDevices(ctx, 1000, 0)
+	if err != nil {
+		h.logger.Error("failed to list devices", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, StandardResponse{
+			Code:      500,
+			Message:   "查询设备列表失败",
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
+	// 2. 构建设备列表
+	deviceList := []map[string]interface{}{}
+	for _, device := range devices {
+		// 检查在线状态
+		isOnline := h.sess.IsOnline(device.PhyID, time.Now())
+
+		// 查询端口信息
+		ports, err := h.repo.ListPortsByPhyID(ctx, device.PhyID)
+		if err != nil {
+			h.logger.Warn("failed to list ports", zap.String("device_phy_id", device.PhyID), zap.Error(err))
+			ports = nil
+		}
+
+		// 查询活跃订单
+		activeOrders := []struct {
+			OrderNo string
+			PortNo  int
+		}{}
+
+		queryOrders := `
+			SELECT order_no, port_no
+			FROM orders
+			WHERE device_id = $1 AND status IN (0, 1, 2)
+			ORDER BY created_at DESC
+			LIMIT 10
+		`
+		rows, err := h.repo.Pool.Query(ctx, queryOrders, device.ID)
+		if err != nil {
+			h.logger.Warn("failed to query active orders", zap.Int64("device_id", device.ID), zap.Error(err))
+		} else {
+			defer rows.Close()
+			for rows.Next() {
+				var order struct {
+					OrderNo string
+					PortNo  int
+				}
+				if err := rows.Scan(&order.OrderNo, &order.PortNo); err == nil {
+					activeOrders = append(activeOrders, order)
+				}
+			}
+		}
+
+		// 构建端口号到订单号的映射
+		orderNoByPort := make(map[int]string)
+		for _, order := range activeOrders {
+			orderNoByPort[order.PortNo] = order.OrderNo
+		}
+
+		// 构建端口列表
+		portList := []map[string]interface{}{}
+		hasChargingPort := false
+		for _, port := range ports {
+			powerW := 0
+			if port.PowerW != nil {
+				powerW = *port.PowerW
+			}
+
+			// 转换端口状态
+			statusEnum := 0
+			isCharging := (port.Status & 0x80) != 0
+			isPortOnline := (port.Status & 0x01) != 0
+
+			if !isPortOnline {
+				statusEnum = 2
+			} else if isCharging {
+				statusEnum = 1
+				hasChargingPort = true
+			}
+
+			portData := map[string]interface{}{
+				"port_no": port.PortNo,
+				"status":  statusEnum,
+				"power":   powerW,
+			}
+
+			if orderNo, exists := orderNoByPort[port.PortNo]; exists {
+				portData["order_no"] = orderNo
+			}
+
+			portList = append(portList, portData)
+		}
+
+		// 确定设备状态
+		deviceStatus := "idle"
+		if !isOnline {
+			deviceStatus = "offline"
+		} else if hasChargingPort {
+			deviceStatus = "charging"
+		}
+
+		// 构建活跃订单列表
+		activeOrderList := []map[string]interface{}{}
+		for _, order := range activeOrders {
+			orderData := map[string]interface{}{
+				"order_no": order.OrderNo,
+				"port_no":  order.PortNo,
+			}
+			activeOrderList = append(activeOrderList, orderData)
+		}
+
+		// 添加到设备列表
+		deviceData := map[string]interface{}{
+			"device_phy_id": device.PhyID,
+			"device_id":     device.ID,
+			"is_online":     isOnline,
+			"status":        deviceStatus,
+			"ports":         portList,
+			"active_orders": activeOrderList,
+		}
+		if device.LastSeenAt != nil {
+			deviceData["last_seen_at"] = *device.LastSeenAt
+		}
+		deviceList = append(deviceList, deviceData)
+	}
+
+	c.JSON(http.StatusOK, StandardResponse{
+		Code:      0,
+		Message:   "成功",
+		Data:      deviceList,
 		RequestID: requestID,
 		Timestamp: time.Now().Unix(),
 	})

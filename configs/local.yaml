@@ -81,6 +81,7 @@ thirdparty:
   auth:
     api_keys:
       - "sk_test_thirdparty_key_for_testing_12345678"
+      - "sk_test_admin_key_for_testing_12345678"  # Web 控制台使用
     require_hmac: true
   ip_whitelist: []
 

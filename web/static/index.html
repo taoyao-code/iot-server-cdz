@@ -294,8 +294,7 @@
                                     <option :value="null" disabled>请选择端口</option>
                                     <option v-for="port in selectedDevice.ports" :key="port.port_no"
                                         :value="port.port_no">
-                                        端口 {{ port.port_no }} - {{ getPortStatusText(port.status,
-                                        selectedDevice.consistency, selectedDevice.inconsistency) }}
+                                        端口 {{ port.port_no }} - {{ getPortStatusText(port.status) }}
                                     </option>
                                 </select>
                             </div>
@@ -348,8 +347,11 @@
                                 <!-- 两个按钮都不显示时的占位提示 -->
                                 <div v-if="!canStartCharge && !canStopCharge"
                                     class="col-span-2 p-3 rounded-lg bg-gray-800 text-gray-500 text-center text-sm border border-gray-700">
-                                    {{ selectedPort === null ? '请选择端口' : (selectedDevice?.is_online ? '端口状态未知' : '设备离线')
-                                    }}
+                                    <span v-if="selectedPort === null">请选择端口</span>
+                                    <span v-else-if="!selectedDevice?.is_online">设备离线</span>
+                                    <span v-else-if="!chargeParams.socket_uid">请输入插座 UID</span>
+                                    <span v-else-if="selectedPortStatus === 0">已就绪（空闲状态）</span>
+                                    <span v-else>端口状态: {{ getPortStatusText(selectedPortStatus) }}</span>
                                 </div>
                             </div>
 
@@ -377,8 +379,7 @@
                                                     'text-green-400': port.status === 0,
                                                     'text-blue-400': port.status === 1,
                                                     'text-red-400': port.status === 2
-                                                }">{{ getPortStatusText(port.status, selectedDevice.consistency,
-                                                    selectedDevice.inconsistency) }}</span>
+                                                }">{{ getPortStatusText(port.status) }}</span>
                                             </div>
                                         </div>
                                         <div class="text-right">
@@ -450,7 +451,7 @@
         </main>
     </div>
 
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v=20251124-3"></script>
 </body>
 
 </html>

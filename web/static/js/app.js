@@ -7,7 +7,7 @@ const API_BASE = '';  // 相对路径，自动使用当前域名
 const API_KEY = 'sk_test_admin_key_for_testing_12345678'; // 生产环境 API Key
 
 // 配置 axios 默认请求头
-axios.defaults.headers.common['X-Internal-API-Key'] = API_KEY;
+axios.defaults.headers.common['X-API-Key'] = API_KEY;  // 统一使用大写格式
 axios.defaults.headers.common['Content-Type'] = 'application/json';
 
 // --- Vue App ---
@@ -27,12 +27,12 @@ createApp({
 
         // 自动刷新配置
         const autoRefresh = ref(true);  // 自动刷新开关
-        const refreshIntervalSeconds = ref(5);  // 刷新间隔（秒）
+        const refreshIntervalSeconds = ref(15);  // 刷新间隔（秒）
         const refreshIntervalOptions = [3, 5, 10, 15, 30, 60];  // 可选的刷新间隔
 
         // Charge Parameters
         const chargeParams = ref({
-            socket_uid: '',
+            socket_uid: '301015011402415',
             charge_mode: 1,  // 默认按时长
             amount: 100,     // 默认100分
             duration_minutes: 1,  // 默认60分钟
@@ -101,21 +101,14 @@ createApp({
             }
         };
 
-        const getPortStatusText = (status, consistencyStatus, inconsistencyReason) => {
+        const getPortStatusText = (status) => {
             const statusMap = {
                 0: '空闲',
                 1: '充电中',
                 2: '故障'
             };
 
-            const baseStatus = statusMap[status] || '未知';
-
-            // 如果有不一致状态，在状态文本中体现
-            if (consistencyStatus === 'inconsistent') {
-                return `${baseStatus} (⚠️ 不一致)`;
-            }
-
-            return baseStatus;
+            return statusMap[status] || '未知';
         };
 
         const getDeviceStatusText = (device) => {
@@ -136,7 +129,7 @@ createApp({
         // API Calls
         const fetchDevices = async () => {
             try {
-                const response = await axios.get(`${API_BASE}/internal/test/devices`);
+                const response = await axios.get(`${API_BASE}/api/v1/third/devices`);
                 if (response.data.code === 0) {
                     apiConnected.value = true;
                     const devicesData = response.data.data || [];
@@ -168,7 +161,7 @@ createApp({
 
         const fetchDeviceDetail = async (devicePhyId) => {
             try {
-                const response = await axios.get(`${API_BASE}/internal/test/devices/${devicePhyId}`);
+                const response = await axios.get(`${API_BASE}/api/v1/third/devices/${devicePhyId}`);
                 if (response.data.code === 0) {
                     const deviceData = response.data.data;
                     return {
@@ -242,14 +235,18 @@ createApp({
             }
 
             loading.value = true;
-            addLog('信息', `正在启动充电: ${selectedDevice.value.device_phy_id} 端口 ${selectedPort.value}`);
+
+            // 生成订单号：THD + 时间戳（毫秒）
+            const orderNo = 'THD' + Date.now();
+            addLog('信息', `正在启动充电: ${selectedDevice.value.device_phy_id} 端口 ${selectedPort.value}，订单号: ${orderNo}`);
 
             try {
                 const requestBody = {
                     socket_uid: chargeParams.value.socket_uid,
                     port_no: selectedPort.value,
                     charge_mode: chargeParams.value.charge_mode,
-                    amount: chargeParams.value.amount
+                    amount: chargeParams.value.amount,
+                    order_no: orderNo
                 };
 
                 // 按时长模式需要传 duration_minutes
@@ -258,7 +255,7 @@ createApp({
                 }
 
                 const response = await axios.post(
-                    `${API_BASE}/internal/test/devices/${selectedDevice.value.device_phy_id}/charge`,
+                    `${API_BASE}/api/v1/third/devices/${selectedDevice.value.device_phy_id}/charge`,
                     requestBody
                 );
 
@@ -288,7 +285,7 @@ createApp({
 
             try {
                 const response = await axios.post(
-                    `${API_BASE}/internal/test/devices/${selectedDevice.value.device_phy_id}/stop`,
+                    `${API_BASE}/api/v1/third/devices/${selectedDevice.value.device_phy_id}/stop`,
                     { socket_uid: chargeParams.value.socket_uid, port_no: selectedPort.value }  // 使用JSON body传递 socket_uid + port_no
                 );
 

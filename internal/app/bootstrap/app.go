@@ -55,7 +55,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	dbpool, err := app.ConnectDBAndMigrate(context.Background(), cfg.Database, "db/migrations", log)
 	if err != nil {
 		log.Error("database initialization failed", zap.Error(err))
-		return err // P0修复: 数据库失败直接返回，不继续启动
+		return err
 	}
 	defer dbpool.Close()
 
@@ -91,15 +91,13 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	}
 	eventQueue, deduper := app.NewEventQueue(cfg.Thirdparty.Push, redisClient, pusherTyped, log)
 
-	// 🔥 修复：提前初始化Redis队列，供OutboundAdapter使用
 	redisQueue := app.NewRedisOutboundQueue(redisClient)
 
 	// Week5: 创建Outbound适配器（用于BKV下行消息）
-	// 🔥 修复：传入Redis队列，确保心跳ACK能被worker立即发送
 	outboundAdapter := app.NewOutboundAdapter(dbpool, repo, redisQueue)
 	driverCommandSource := bkv.NewCommandSource(outboundAdapter, log)
 
-	// P1-2修复: 创建CardService（刷卡充电业务）
+	// 创建CardService（刷卡充电业务）
 	pricingEngine := service.NewPricingEngine()
 	cardService := service.NewCardService(repo, pricingEngine, log)
 
@@ -108,9 +106,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	// DriverCore: 协议驱动 -> 核心的事件收敛入口
 	driverCore := app.NewDriverCore(coreRepo, eventQueue, log)
 
-	// P1修复: 使用NewHandlersWithServices完整初始化BKV处理器
-	// P1-2修复: 注入CardService，启用订单确认ACK验证
-	// v2.1: 注入Metrics支持充电上报监控（2025-10-31）
+	// v2.1: 注入Metrics支持充电上报监控
 	bkvHandlers := bkv.NewHandlersWithServices(repo, coreRepo, bkvReason, cardService, outboundAdapter, eventQueue, deduper, driverCore)
 	bkvHandlers.Metrics = appm // 注入指标采集器
 
@@ -131,8 +127,8 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	app.AddRedisChecker(healthAgg, redisClient)
 	log.Info("health aggregator initialized")
 
-	// P0修复: 注册路由时传入认证配置
-	// Week2: 同时注册健康检查路由
+	// 注册路由时传入认证配置
+	// 同时注册健康检查路由
 	httpSrv.Register(func(r *gin.Engine) {
 		authCfg := middleware.AuthConfig{
 			APIKeys: cfg.API.Auth.APIKeys,
