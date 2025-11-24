@@ -45,7 +45,7 @@ jobs:
 
       # 尝试从最近的 CI workflow 下载 Swagger 文档，失败则本地生成
       - name: 下载 Swagger 文档
-        uses: dawidd6/action-download-artifact@v3
+        uses: dawidd6/action-download-artifact@v11
         continue-on-error: true
         with:
           workflow: ci.yml
