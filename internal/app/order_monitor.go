@@ -264,8 +264,8 @@ func (m *OrderMonitor) cleanupCancellingOrders(ctx context.Context) {
 			zap.String("reason", "cancelling超时30秒"),
 		)
 
-		// 5 = cancelled，0x09 = BKV idle (在线+空载)
-		if err := m.repo.FinalizeOrderAndPort(ctx, orderNo, api.OrderStatusCancelling, api.OrderStatusCancelled, 0x09, nil); err != nil {
+		// 5 = cancelled，0x90 = BKV idle (在线+空载)
+		if err := m.repo.FinalizeOrderAndPort(ctx, orderNo, api.OrderStatusCancelling, api.OrderStatusCancelled, 0x90, nil); err != nil {
 			m.logger.Error("cleanup cancelling orders: finalize failed",
 				zap.String("order_no", orderNo),
 				zap.Error(err))
@@ -320,8 +320,8 @@ func (m *OrderMonitor) cleanupStoppingOrders(ctx context.Context) {
 			zap.String("reason", "stopping超时30秒"),
 		)
 
-		// 7 = stopped/settled，0x09 = BKV idle
-		if err := m.repo.FinalizeOrderAndPort(ctx, orderNo, api.OrderStatusStopping, 7, 0x09, nil); err != nil {
+		// 7 = stopped/settled，0x90 = BKV idle
+		if err := m.repo.FinalizeOrderAndPort(ctx, orderNo, api.OrderStatusStopping, 7, 0x90, nil); err != nil {
 			m.logger.Error("cleanup stopping orders: finalize failed",
 				zap.String("order_no", orderNo),
 				zap.Error(err))
@@ -378,8 +378,8 @@ func (m *OrderMonitor) cleanupInterruptedOrders(ctx context.Context) {
 			zap.String("reason", "设备离线超过60秒未恢复"),
 		)
 
-		// 6 = failed，端口收敛为 idle（0x09）；failure_reason 写入一次
-		if err := m.repo.FinalizeOrderAndPort(ctx, orderNo, api.OrderStatusInterrupted, api.OrderStatusFailed, 0x09, &reason); err != nil {
+		// 6 = failed，端口收敛为 idle（0x90）；failure_reason 写入一次
+		if err := m.repo.FinalizeOrderAndPort(ctx, orderNo, api.OrderStatusInterrupted, api.OrderStatusFailed, 0x90, &reason); err != nil {
 			m.logger.Error("cleanup interrupted orders: finalize failed",
 				zap.String("order_no", orderNo),
 				zap.Error(err))

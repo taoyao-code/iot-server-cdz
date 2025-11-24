@@ -287,8 +287,8 @@ func (s *PortStatusSyncer) fixLonelyChargingPorts(ctx context.Context) {
 			).Inc()
 		}
 
-		// 收敛端口状态为空闲 (0x09 = bit0在线 + bit3空载)
-		const idleStatus = 0x09
+		// 收敛端口状态为空闲 (0x90 = bit7在线 + bit4空载)
+		const idleStatus = 0x90
 		if err := s.repo.UpsertPortState(ctx, deviceID, portNo, idleStatus, nil); err != nil {
 			s.logger.Error("P1-4: failed to auto-fix lonely charging port",
 				zap.Int64("device_id", deviceID),
@@ -443,16 +443,16 @@ func (s *PortStatusSyncer) checkChargingOrdersConsistency(ctx context.Context) {
 // getExpectedPortStatus 根据订单状态获取期望的端口状态（BKV位图格式）
 func (s *PortStatusSyncer) getExpectedPortStatus(orderStatus int) int {
 	// 注意：这里返回的是BKV协议位图值，不是业务枚举！
-	// BKV位图: bit0=在线(0x01), bit3=空载(0x08), bit7=充电(0x80)
+	// BKV位图: bit7=在线(0x80), bit5=充电(0x20), bit4=空载(0x10)
 	switch orderStatus {
 	case 2: // charging
-		return 0x81 // 0x81 = bit0(在线) + bit7(充电)
+		return 0xA0 // 0xA0 = bit7(在线) + bit5(充电)
 	case 8, 9: // cancelling, stopping
-		return 0x81 // port可能还在charging，等待设备响应
+		return 0xA0 // port可能还在charging，等待设备响应
 	case 10: // interrupted
-		return 0x81 // port可能还在charging或已offline
+		return 0xA0 // port可能还在charging或已offline
 	default:
-		return 0x09 // 0x09 = bit0(在线) + bit3(空载) = 空闲
+		return 0x90 // 0x90 = bit7(在线) + bit4(空载) = 空闲
 	}
 }
 
@@ -471,7 +471,7 @@ func (s *PortStatusSyncer) shouldAutoFix(orderStatus int, portStatus *int, onlin
 	}
 
 	// 条件2: 端口已free但订单还是charging，可能是充电结束事件丢失
-	if portStatus != nil && *portStatus == 0x09 && orderStatus == 2 && timeSinceUpdate > 15*time.Minute {
+	if portStatus != nil && *portStatus == 0x90 && orderStatus == 2 && timeSinceUpdate > 15*time.Minute {
 		return true
 	}
 
@@ -505,7 +505,7 @@ func (s *PortStatusSyncer) autoFixInconsistency(ctx context.Context, orderNo str
 	}
 
 	// 使用统一的 FinalizeOrderAndPort 收敛订单和端口状态，避免分散更新逻辑
-	const idleStatus = 0x09 // BKV idle: bit0在线 + bit3空载
+	const idleStatus = 0x90 // BKV idle: bit7在线 + bit4空载
 	var reasonPtr *string
 	if newStatus == 6 {
 		reasonPtr = &reason

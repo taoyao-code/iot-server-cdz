@@ -561,7 +561,7 @@ func defaultChargingStatus(meta map[string]string) int32 {
 			}
 		}
 	}
-	return 0x81
+	return 0xA0 // 充电中: bit7(在线)+bit5(充电)
 }
 
 func defaultIdleStatus(meta map[string]string) int32 {
@@ -572,7 +572,7 @@ func defaultIdleStatus(meta map[string]string) int32 {
 			}
 		}
 	}
-	return 0x09
+	return 0x90 // 空闲: bit7(在线)+bit4(空载)
 }
 
 func (d *DriverCore) pushThirdpartyEvent(eventType coremodel.CoreEventType, phyID string, data map[string]interface{}) {

@@ -142,6 +142,19 @@ func (h *Handlers) handleSocketStatusUpdate(ctx context.Context, payload *BKVPay
 			WithPort(int(port.PortNo)).
 			BuildPortSnapshot(rawStatus, power)
 		h.emitter().Emit(ctx, event)
+
+		// 如果正在充电，推送充电进度事件到Webhook
+		isCharging := (port.Status & 0x20) != 0 // bit5=充电
+		if isCharging && h.EventQueue != nil {
+			powerW := float64(port.Power) / 10.0       // 0.1W -> W
+			currentA := float64(port.Current) / 1000.0 // 0.001A -> A
+			voltageV := float64(port.Voltage) / 10.0   // 0.1V -> V
+			energyKwh := float64(port.Energy) / 100.0  // 0.01kWh -> kWh
+			durationS := int(port.ChargingTime) * 60   // min -> sec
+			businessNo := fmt.Sprintf("%04X", port.BusinessNo)
+			h.pushChargingProgressEvent(ctx, deviceID, int(port.PortNo), businessNo, powerW, currentA, voltageV, energyKwh, durationS, nil)
+		}
+
 		return nil
 	}
 
@@ -221,7 +234,7 @@ func (h *Handlers) handleBKVChargingEnd(ctx context.Context, f *Frame, payload *
 		return fmt.Errorf("core events sink not configured for BKV charging end")
 	}
 
-	nextStatus := int32(0x09) // 0x09 = bit0(在线) + bit3(空载)
+	nextStatus := int32(0x90) // 0x90 = bit7(在线) + bit4(空载)
 	rawReason := int32(reason)
 
 	event := NewEventBuilder(deviceID).
@@ -239,6 +252,17 @@ func (h *Handlers) handleBKVChargingEnd(ctx context.Context, f *Frame, payload *
 	if err := h.emitter().EmitWithCheck(ctx, event); err != nil {
 		return fmt.Errorf("core event session ended failed: %w", err)
 	}
+
+	// 推送充电结束事件到Webhook
+	totalKwh := float64(kwh01) / 100.0 // 0.01kWh -> kWh
+	durationMin := durationSec / 60
+	endReasonMsg := "正常结束"
+	if reason == 1 {
+		endReasonMsg = "用户停止"
+	} else if reason == 8 {
+		endReasonMsg = "空载结束"
+	}
+	h.pushChargingEndedEvent(ctx, deviceID, orderHex, actualPort, durationMin, totalKwh, fmt.Sprintf("%d", reason), endReasonMsg, nil)
 
 	success = true
 	return nil
@@ -322,7 +346,7 @@ func (h *Handlers) HandleChargingEnd(ctx context.Context, f *Frame) error {
 	// 发送充电结束事件
 	if h.emitter().IsConfigured() {
 		orderHex := fmt.Sprintf("%04X", orderID)
-		nextStatus := int32(0x09) // 0x09 = bit0(在线) + bit3(空载)
+		nextStatus := int32(0x90) // 0x90 = bit7(在线) + bit4(空载)
 		rawReason := int32(reason)
 
 		event := NewEventBuilder(deviceID).

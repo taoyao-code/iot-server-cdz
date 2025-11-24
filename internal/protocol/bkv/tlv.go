@@ -266,21 +266,21 @@ type PortStatus struct {
 }
 
 // IsCharging 判断端口是否正在充电
-// 状态位bit7=1表示充电中
+// 状态位bit5=1表示充电中
 func (p *PortStatus) IsCharging() bool {
-	return (p.Status & 0x80) != 0
+	return (p.Status & 0x20) != 0
 }
 
 // IsIdle 判断端口是否空载
-// 状态位bit3=1表示空载
+// 状态位bit4=1表示空载
 func (p *PortStatus) IsIdle() bool {
-	return (p.Status & 0x08) != 0
+	return (p.Status & 0x10) != 0
 }
 
 // IsOnline 判断端口是否在线
-// 状态位bit0=1表示在线
+// 状态位bit7=1表示在线
 func (p *PortStatus) IsOnline() bool {
-	return (p.Status & 0x01) != 0
+	return (p.Status & 0x80) != 0
 }
 
 // ParseSocketStatus 解析插座状态上报 (0x94字段)
@@ -420,25 +420,312 @@ func (p *BKVPayload) GetSocketStatus() (*SocketStatus, error) {
 func parseSocketStatusFields(fields []TLVField) (*SocketStatus, error) {
 	status := &SocketStatus{}
 
+	// 调试：打印所有字段
+	fmt.Printf("[DEBUG] parseSocketStatusFields: %d fields\n", len(fields))
+	for i, f := range fields {
+		fmt.Printf("[DEBUG] Field[%d]: Tag=0x%02X, Len=%d, Value=%x\n", i, f.Tag, f.Length, f.Value)
+	}
+
 	for _, field := range fields {
 		switch field.Tag {
-		case 0x03:
+		case 0x4A: // 插座序号
 			if len(field.Value) >= 1 {
-				// 根据位置判断是插座序号还是其他
-				if field.Value[0] == 0x4A {
-					status.SocketNo = field.Value[0]
+				status.SocketNo = field.Value[0]
+			}
+		case 0x3E: // 软件版本
+			if len(field.Value) >= 2 {
+				status.SoftwareVer = binary.BigEndian.Uint16(field.Value[0:2])
+			}
+		case 0x07: // 温度
+			if len(field.Value) >= 1 {
+				status.Temperature = field.Value[0]
+			}
+		case 0x96: // RSSI信号强度
+			if len(field.Value) >= 1 {
+				status.RSSI = field.Value[0]
+			}
+		case 0x28: // 端口信息容器
+			// Value 应该包含 Tag 0x5B 和端口数据
+			if len(field.Value) >= 1 && field.Value[0] == 0x5B {
+				// 解析端口数据（跳过 0x5B 标识字节）
+				port := parsePortStatusFromFields(fields, field)
+				if port != nil {
+					fmt.Printf("[DEBUG] Parsed port: PortNo=%d, Status=0x%02X, Power=%d\n", port.PortNo, port.Status, port.Power)
+					if port.PortNo == 0 {
+						status.PortA = port
+					} else if port.PortNo == 1 {
+						status.PortB = port
+					}
 				}
 			}
-		case 0x01:
-			if len(field.Value) >= 4 && field.Value[0] == 0x01 {
-				// 软件版本：01 3e ff ff 格式
-				status.SoftwareVer = binary.BigEndian.Uint16(field.Value[1:3])
-			}
-			// 其他字段的解析...
+		}
+	}
+
+	// 如果通过 0x28 没有解析到端口，尝试从 0x08 字段直接解析
+	if status.PortA == nil && status.PortB == nil {
+		fmt.Printf("[DEBUG] Fallback to parsePortsFromFields\n")
+		status.PortA, status.PortB = parsePortsFromFields(fields)
+		if status.PortA != nil {
+			fmt.Printf("[DEBUG] PortA: PortNo=%d, Status=0x%02X, Power=%d\n", status.PortA.PortNo, status.PortA.Status, status.PortA.Power)
+		}
+		if status.PortB != nil {
+			fmt.Printf("[DEBUG] PortB: PortNo=%d, Status=0x%02X, Power=%d\n", status.PortB.PortNo, status.PortB.Status, status.PortB.Power)
 		}
 	}
 
 	return status, nil
+}
+
+// parsePortStatusFromFields 从字段列表中解析单个端口状态
+// 查找 0x28 标记后的端口相关字段
+func parsePortStatusFromFields(fields []TLVField, containerField TLVField) *PortStatus {
+	port := &PortStatus{}
+	found := false
+
+	// 找到容器字段在列表中的位置
+	containerIdx := -1
+	for i, f := range fields {
+		if f.Tag == containerField.Tag && len(f.Value) > 0 && f.Value[0] == containerField.Value[0] {
+			containerIdx = i
+			break
+		}
+	}
+
+	if containerIdx < 0 {
+		return nil
+	}
+
+	// 解析容器后面的端口字段（直到下一个 0x28 或结束）
+	for i := containerIdx + 1; i < len(fields); i++ {
+		f := fields[i]
+		if f.Tag == 0x28 { // 下一个端口容器
+			break
+		}
+
+		switch f.Tag {
+		case 0x08: // 插孔号
+			if len(f.Value) >= 1 {
+				portNo := f.Value[0]
+				// 只接受有效端口号 (0=A孔, 1=B孔)
+				if portNo > 1 {
+					return nil // 无效端口号
+				}
+				port.PortNo = portNo
+				found = true
+			}
+		case 0x09: // 状态
+			if len(f.Value) >= 1 {
+				port.Status = f.Value[0]
+			}
+		case 0x0A: // 业务号
+			if len(f.Value) >= 2 {
+				port.BusinessNo = binary.BigEndian.Uint16(f.Value[0:2])
+			}
+		case 0x95: // 电压（某些协议版本）或功率
+			if len(f.Value) >= 2 {
+				port.Voltage = binary.BigEndian.Uint16(f.Value[0:2])
+			}
+		case 0x0B: // 瞬时功率
+			if len(f.Value) >= 2 {
+				port.Power = binary.BigEndian.Uint16(f.Value[0:2])
+			}
+		case 0x0C: // 瞬时电流
+			if len(f.Value) >= 2 {
+				port.Current = binary.BigEndian.Uint16(f.Value[0:2])
+			}
+		case 0x0D: // 用电量
+			if len(f.Value) >= 2 {
+				port.Energy = binary.BigEndian.Uint16(f.Value[0:2])
+			}
+		case 0x0E: // 充电时间
+			if len(f.Value) >= 2 {
+				port.ChargingTime = binary.BigEndian.Uint16(f.Value[0:2])
+			}
+		}
+	}
+
+	if !found {
+		return nil
+	}
+	return port
+}
+
+// parsePortsFromFields 直接从字段列表解析端口（兼容不同协议格式）
+// BKV嵌套格式：Tag=0x03/0x04 表示类型指示符，Value[0]是实际字段标签，后续字段包含数据
+func parsePortsFromFields(fields []TLVField) (*PortStatus, *PortStatus) {
+	var portA, portB *PortStatus
+	var currentPort *PortStatus
+	portAStarted := false
+	portBStarted := false
+
+	// 用于处理嵌套格式的临时变量
+	var pendingTag uint8
+	var pendingIsSingle bool // true=0x03单字节, false=0x04多字节
+
+	for i, f := range fields {
+		// 处理嵌套格式：0x03=单字节值，0x04=多字节值
+		if f.Tag == 0x03 && len(f.Value) >= 1 {
+			pendingTag = f.Value[0]
+			pendingIsSingle = true
+			continue
+		}
+		if f.Tag == 0x04 && len(f.Value) >= 1 {
+			pendingTag = f.Value[0]
+			pendingIsSingle = false
+			continue
+		}
+
+		// 如果有待处理的嵌套标签，当前字段的Tag本身可能是数据值
+		if pendingTag != 0 && currentPort != nil {
+			// 在嵌套格式中，紧跟在 03/04 01 [tag] 之后的字节是值
+			// 但TLV解析器把它当作了新的Tag，所以我们用f.Tag作为值
+			var dataValue []byte
+			if pendingIsSingle {
+				// 单字节值：f.Tag本身就是值
+				dataValue = []byte{f.Tag}
+			} else {
+				// 多字节值：f.Tag是高字节，f.Length是低字节（被误解析为Tag和Length）
+				dataValue = []byte{f.Tag, f.Length}
+			}
+
+			fmt.Printf("[DEBUG] Nested data: pendingTag=0x%02X, f.Tag=0x%02X, f.Length=%d, dataValue=%x, f.Value=%x\n", pendingTag, f.Tag, f.Length, dataValue, f.Value)
+
+			if len(dataValue) > 0 {
+				switch pendingTag {
+				case 0x08: // 插孔号
+					portNo := dataValue[0]
+					if portNo <= 1 {
+						currentPort.PortNo = portNo
+						if portNo == 0 {
+							portA = currentPort
+						} else {
+							portB = currentPort
+						}
+						fmt.Printf("[DEBUG] Nested parse: port number = %d\n", portNo)
+					}
+				case 0x09: // 状态
+					currentPort.Status = dataValue[0]
+					fmt.Printf("[DEBUG] Nested parse: port %d status = 0x%02X\n", currentPort.PortNo, currentPort.Status)
+				case 0x0A: // 业务号
+					if len(dataValue) >= 2 {
+						currentPort.BusinessNo = binary.BigEndian.Uint16(dataValue[0:2])
+					}
+				case 0x95: // 电压
+					if len(dataValue) >= 2 {
+						currentPort.Voltage = binary.BigEndian.Uint16(dataValue[0:2])
+					}
+				case 0x0B: // 瞬时功率
+					if len(dataValue) >= 2 {
+						currentPort.Power = binary.BigEndian.Uint16(dataValue[0:2])
+					}
+				case 0x0C: // 瞬时电流
+					if len(dataValue) >= 2 {
+						currentPort.Current = binary.BigEndian.Uint16(dataValue[0:2])
+					}
+				case 0x0D: // 用电量
+					if len(dataValue) >= 2 {
+						currentPort.Energy = binary.BigEndian.Uint16(dataValue[0:2])
+					}
+				case 0x0E: // 充电时间
+					if len(dataValue) >= 2 {
+						currentPort.ChargingTime = binary.BigEndian.Uint16(dataValue[0:2])
+					}
+				}
+			}
+
+			// 检查f.Value中是否有打包的后续字段
+			// TLV解析器错误地将多个嵌套字段打包到同一个Value中
+			// 格式: [前缀字节, 标签, 值, 前缀字节, 标签, 值, ...]
+			if pendingIsSingle && len(f.Value) >= 3 {
+				// 尝试提取打包的字段
+				for j := 0; j+1 < len(f.Value); {
+					// 跳过前缀字节 (通常是 01)
+					if f.Value[j] == 0x01 || f.Value[j] == 0x03 || f.Value[j] == 0x04 {
+						j++
+						continue
+					}
+
+					tag := f.Value[j]
+					value := f.Value[j+1]
+
+					fmt.Printf("[DEBUG] Packed field: tag=0x%02X, value=0x%02X\n", tag, value)
+
+					switch tag {
+					case 0x09: // 状态
+						currentPort.Status = value
+						fmt.Printf("[DEBUG] Packed parse: port %d status = 0x%02X\n", currentPort.PortNo, currentPort.Status)
+					case 0x08: // 端口号
+						if value <= 1 {
+							currentPort.PortNo = value
+						}
+					}
+					j += 2
+				}
+			}
+
+			pendingTag = 0
+			continue
+		}
+
+		// 标准格式处理
+		switch f.Tag {
+		case 0x28: // 端口容器开始
+			if !portAStarted {
+				portA = &PortStatus{}
+				currentPort = portA
+				portAStarted = true
+				fmt.Printf("[DEBUG] Port container A started at field %d\n", i)
+			} else if !portBStarted {
+				portB = &PortStatus{}
+				currentPort = portB
+				portBStarted = true
+				fmt.Printf("[DEBUG] Port container B started at field %d\n", i)
+			}
+		case 0x08: // 插孔号（标准格式）
+			if currentPort != nil && len(f.Value) >= 1 {
+				portNo := f.Value[0]
+				if portNo > 1 {
+					continue
+				}
+				currentPort.PortNo = portNo
+				if portNo == 0 {
+					portA = currentPort
+				} else if portNo == 1 {
+					portB = currentPort
+				}
+			}
+		case 0x09: // 状态（标准格式）
+			if currentPort != nil && len(f.Value) >= 1 {
+				currentPort.Status = f.Value[0]
+			}
+		case 0x0A: // 业务号（标准格式）
+			if currentPort != nil && len(f.Value) >= 2 {
+				currentPort.BusinessNo = binary.BigEndian.Uint16(f.Value[0:2])
+			}
+		case 0x95: // 电压/功率
+			if currentPort != nil && len(f.Value) >= 2 {
+				currentPort.Voltage = binary.BigEndian.Uint16(f.Value[0:2])
+			}
+		case 0x0B: // 瞬时功率
+			if currentPort != nil && len(f.Value) >= 2 {
+				currentPort.Power = binary.BigEndian.Uint16(f.Value[0:2])
+			}
+		case 0x0C: // 瞬时电流
+			if currentPort != nil && len(f.Value) >= 2 {
+				currentPort.Current = binary.BigEndian.Uint16(f.Value[0:2])
+			}
+		case 0x0D: // 用电量
+			if currentPort != nil && len(f.Value) >= 2 {
+				currentPort.Energy = binary.BigEndian.Uint16(f.Value[0:2])
+			}
+		case 0x0E: // 充电时间
+			if currentPort != nil && len(f.Value) >= 2 {
+				currentPort.ChargingTime = binary.BigEndian.Uint16(f.Value[0:2])
+			}
+		}
+	}
+
+	return portA, portB
 }
 
 // IsHeartbeat 判断是否为心跳命令
@@ -540,17 +827,18 @@ func ParseBKVChargingEnd(data []byte) (*BKVChargingEnd, error) {
 		return nil, ErrTLVShort
 	}
 
-	// 兼容 0x0015 data：0011 02 02 5036...
+	// 兼容 0x0015 data：0011 02 01 ffff...
 	// 判定条件：
 	//   - 至少包含 length(2) + cmd(1) + 最小字段(15)
 	//   - 第3字节为 0x02(普通结束) 或 0x18(按功率结束)
-	//   - length 字段 == 剩余长度减去 cmd(1)（协议文档示例：0x0011 = 总长20-3）
+	//   - length 字段 + 3 == 总长度（length不包括自身2字节和subCmd 1字节）
+	//   协议示例：0x0011(17) + 2(length本身) + 1(subCmd) = 20字节总长
 	if len(data) >= 18 {
 		subCmd := data[2]
 		if subCmd == 0x02 || subCmd == 0x18 {
 			declLen := binary.BigEndian.Uint16(data[0:2])
-			if int(declLen) == len(data)-3 {
-				data = data[3:] // 跳过 length + subCmd，使 data[0] 对齐为插座号
+			if int(declLen)+3 == len(data) {
+				data = data[3:] // 跳过 length(2字节) + subCmd(1字节)，使 data[0] 对齐为插座号
 			}
 		}
 	}

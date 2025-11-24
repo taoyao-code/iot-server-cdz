@@ -160,6 +160,18 @@ type ChargingEndedData struct {
 	EndedAt      int64   `json:"ended_at"`       // 结束时间
 }
 
+// ChargingProgressData 充电进度事件数据
+type ChargingProgressData struct {
+	PortNo     int     `json:"port_no"`     // 端口号
+	BusinessNo string  `json:"business_no"` // 业务号
+	PowerW     float64 `json:"power_w"`     // 瞬时功率(W)
+	CurrentA   float64 `json:"current_a"`   // 瞬时电流(A)
+	VoltageV   float64 `json:"voltage_v"`   // 电压(V)
+	EnergyKwh  float64 `json:"energy_kwh"`  // 已用电量(kWh)
+	DurationS  int     `json:"duration_s"`  // 已充时长(秒)
+	UpdatedAt  int64   `json:"updated_at"`  // 更新时间
+}
+
 // DeviceAlarmData 设备告警事件数据
 type DeviceAlarmData struct {
 	AlarmType string                 `json:"alarm_type"`         // 告警类型
@@ -277,6 +289,19 @@ func (d *ChargingEndedData) ToMap() map[string]interface{} {
 		"end_reason":     d.EndReason,
 		"end_reason_msg": d.EndReasonMsg,
 		"ended_at":       d.EndedAt,
+	}
+}
+
+func (d *ChargingProgressData) ToMap() map[string]interface{} {
+	return map[string]interface{}{
+		"port_no":     d.PortNo,
+		"business_no": d.BusinessNo,
+		"power_w":     d.PowerW,
+		"current_a":   d.CurrentA,
+		"voltage_v":   d.VoltageV,
+		"energy_kwh":  d.EnergyKwh,
+		"duration_s":  d.DurationS,
+		"updated_at":  d.UpdatedAt,
 	}
 }
 

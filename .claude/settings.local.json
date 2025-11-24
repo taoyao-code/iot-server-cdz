@@ -13,7 +13,9 @@
       "Bash(xxd:*)",
       "Bash(python3:*)",
       "Bash(xargs:*)",
-      "Bash(go build:*)"
+      "Bash(go build:*)",
+      "Bash(cat:*)",
+      "Bash(psql:*)"
     ],
     "deny": [],
     "ask": []

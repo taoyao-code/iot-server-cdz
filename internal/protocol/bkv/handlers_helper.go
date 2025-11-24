@@ -197,7 +197,7 @@ func (h *Handlers) handleControlChargingEnd(ctx context.Context, f *Frame, devic
 	h.emitter().Emit(ctx, evPS)
 
 	// 2. 发送 SessionEnded 事件
-	nextStatus := int32(0x09) // 空闲
+	nextStatus := int32(0x90) // 空闲: bit7(在线)+bit4(空载)
 	rawReason := int32(end.EndReason)
 	bizNo := fmt.Sprintf("%04X", end.BusinessNo)
 
@@ -214,15 +214,26 @@ func (h *Handlers) handleControlChargingEnd(ctx context.Context, f *Frame, devic
 		)
 	h.emitter().Emit(ctx, evEnd)
 
+	// 推送充电结束事件到Webhook
+	totalKwh := float64(end.EnergyUsed) / 100.0 // 0.01kWh -> kWh
+	durationMin := int(end.ChargingTime)
+	endReasonMsg := "正常结束"
+	if end.EndReason == 1 {
+		endReasonMsg = "用户停止"
+	} else if end.EndReason == 8 {
+		endReasonMsg = "空载结束"
+	}
+	h.pushChargingEndedEvent(ctx, deviceID, bizNo, int(end.Port), durationMin, totalKwh, fmt.Sprintf("%d", end.EndReason), endReasonMsg, nil)
+
 	// 3. 回复 ACK
 	h.sendChargingEndAck(ctx, f, nil, int(end.SocketNo), int(end.Port), true)
 }
 
 // (h *Handlers) handleControlUplinkStatus 处理控制上行状态更新
 func (h *Handlers) handleControlUplinkStatus(ctx context.Context, deviceID string, socketNo, portNo int, switchFlag byte, businessNo uint16) {
-	status := int32(0x09) // 默认空闲
+	status := int32(0x90) // 默认空闲: bit7(在线)+bit4(空载)
 	if switchFlag == 0x01 {
-		status = 0x81 // 充电中
+		status = 0xA0 // 充电中: bit7(在线)+bit5(充电)
 	}
 
 	bizNo := fmt.Sprintf("%04X", businessNo)
@@ -237,9 +248,9 @@ func (h *Handlers) handleControlUplinkStatus(ctx context.Context, deviceID strin
 
 // (h *Handlers) handleControlDownlinkCommand 处理控制下行命令
 func (h *Handlers) handleControlDownlinkCommand(ctx context.Context, deviceID string, cmd *BKVControlCommand) {
-	status := int32(0x09)
+	status := int32(0x90) // 空闲: bit7(在线)+bit4(空载)
 	if cmd.Switch == SwitchOn {
-		status = 0x81
+		status = 0xA0 // 充电中: bit7(在线)+bit5(充电)
 	}
 
 	ev := NewEventBuilder(deviceID).
@@ -258,12 +269,13 @@ func (h *Handlers) sendDownlinkReply(deviceID string, cmd uint16, msgID uint32, 
 }
 
 // (h *Handlers) mapSocketStatusToRaw 映射插座状态枚举到原始状态位图
+// 协议规范：bit7=在线, bit5=充电, bit4=空载
 func mapSocketStatusToRaw(status int) int32 {
 	switch status {
 	case 0:
-		return 0x09 // idle → 在线+空载
+		return 0x90 // idle → 在线(bit7)+空载(bit4)
 	case 1:
-		return 0x81 // charging → 在线+充电
+		return 0xA0 // charging → 在线(bit7)+充电(bit5)
 	case 2:
 		return 0x00 // fault → 离线/故障
 	default:

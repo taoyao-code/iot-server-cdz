@@ -135,6 +135,28 @@ func (h *Handlers) pushChargingStartedEvent(ctx context.Context, devicePhyID, or
 	h.pushEvent(ctx, event, logger)
 }
 
+// pushChargingProgressEvent 推送充电进度事件
+func (h *Handlers) pushChargingProgressEvent(ctx context.Context, devicePhyID string, portNo int, businessNo string, powerW, currentA, voltageV, energyKwh float64, durationS int, logger *zap.Logger) {
+	eventData := &thirdparty.ChargingProgressData{
+		PortNo:     portNo,
+		BusinessNo: businessNo,
+		PowerW:     powerW,
+		CurrentA:   currentA,
+		VoltageV:   voltageV,
+		EnergyKwh:  energyKwh,
+		DurationS:  durationS,
+		UpdatedAt:  time.Now().Unix(),
+	}
+
+	event := thirdparty.NewEvent(
+		thirdparty.EventChargingProgress,
+		devicePhyID,
+		eventData.ToMap(),
+	)
+
+	h.pushEvent(ctx, event, logger)
+}
+
 // pushChargingCompletedEvent 推送充电完成事件(用于手动停止)
 func (h *Handlers) pushChargingCompletedEvent(ctx context.Context, devicePhyID, orderNo string, portNo int, endReason int, logger *zap.Logger) {
 	// 暂时不知道准确的duration和totalKwh，使用占位值
