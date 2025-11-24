@@ -120,7 +120,7 @@ jobs:
           echo "发布版本: $VERSION"
 
       - name: 下载所有构建产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           pattern: binary-*
           path: bin/
