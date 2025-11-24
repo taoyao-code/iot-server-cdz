@@ -32,9 +32,10 @@ createApp({
 
         // Charge Parameters
         const chargeParams = ref({
+            socket_uid: '',
             charge_mode: 1,  // 默认按时长
             amount: 100,     // 默认100分
-            duration_minutes: 60,  // 默认60分钟
+            duration_minutes: 1,  // 默认60分钟
             port_no: 0
         });
 
@@ -60,7 +61,7 @@ createApp({
 
         // 判断是否可以启动充电
         const canStartCharge = computed(() => {
-            return selectedPortStatus.value === 0 && selectedDevice.value?.is_online;
+            return selectedPortStatus.value === 0 && selectedDevice.value?.is_online && chargeParams.value.socket_uid;
         });
 
         // 判断是否可以停止充电
@@ -230,6 +231,7 @@ createApp({
 
             try {
                 const requestBody = {
+                    socket_uid: chargeParams.value.socket_uid,
                     port_no: selectedPort.value,
                     charge_mode: chargeParams.value.charge_mode,
                     amount: chargeParams.value.amount
@@ -272,7 +274,7 @@ createApp({
             try {
                 const response = await axios.post(
                     `${API_BASE}/internal/test/devices/${selectedDevice.value.device_phy_id}/stop`,
-                    { port_no: selectedPort.value }  // 使用JSON body传递port_no
+                    { socket_uid: chargeParams.value.socket_uid, port_no: selectedPort.value }  // 使用JSON body传递 socket_uid + port_no
                 );
 
                 if (response.data.code === 0) {

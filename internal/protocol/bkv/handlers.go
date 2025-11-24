@@ -10,6 +10,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/coremodel"
 	"github.com/taoyao-code/iot-server/internal/driverapi"
 	"github.com/taoyao-code/iot-server/internal/storage"
+	"github.com/taoyao-code/iot-server/internal/storage/models"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
 )
 
@@ -430,21 +431,40 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 	}
 
 	if f.IsUplink() {
-		if len(f.Data) >= 2 && len(f.Data) < 64 {
+		if len(f.Data) >= 3 && f.Data[2] == 0x02 {
+			// 充电结束/状态上报（简化：标记端口为空闲）
+			socketNo := int(f.Data[3])
+			evPort := coremodel.PortNo(socketNo)
+			ev := &coremodel.CoreEvent{
+				Type:       coremodel.EventPortSnapshot,
+				DeviceID:   coremodel.DeviceID(devicePhyID),
+				PortNo:     &evPort,
+				OccurredAt: time.Now(),
+				PortSnapshot: &coremodel.PortSnapshot{
+					DeviceID:  coremodel.DeviceID(devicePhyID),
+					PortNo:    evPort,
+					Status:    coremodel.PortStatusUnknown,
+					RawStatus: 0x09, // 空闲/在线
+					At:        time.Now(),
+				},
+			}
+			_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
+		} else if len(f.Data) >= 2 && len(f.Data) < 64 {
 			innerLen := (int(f.Data[0]) << 8) | int(f.Data[1])
 			totalLen := 2 + innerLen
 			if innerLen >= 5 && len(f.Data) >= totalLen {
 				inner := f.Data[2:totalLen]
 				if len(inner) >= 5 && inner[0] == 0x07 {
-					result := inner[1]
-					portNo := int(inner[3])
+					socketNo := int(inner[1])
+					portNo := int(inner[2])
+					switchFlag := inner[3]
 					var businessNo uint16
 					if len(inner) >= 6 {
 						businessNo = binary.BigEndian.Uint16(inner[4:6])
 					}
-					status := int32(0x09)
-					if result == 0x01 {
-						status = 0x81
+					status := int32(0x09) // 默认空闲
+					if switchFlag == 0x01 {
+						status = 0x81 // 充电中
 					}
 					evPort := coremodel.PortNo(portNo)
 					evBiz := coremodel.BusinessNo(fmt.Sprintf("%04X", businessNo))
@@ -461,6 +481,11 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 							RawStatus: status,
 							At:        time.Now(),
 						},
+					}
+					// 在元数据中记录 socket_no 便于诊断
+					if ev.PortSnapshot != nil {
+						sn := int32(socketNo)
+						ev.PortSnapshot.SocketNo = &sn
 					}
 					_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
 				}
@@ -1169,6 +1194,8 @@ func (h *Handlers) HandleNetworkRefresh(ctx context.Context, f *Frame) error {
 	metadata := map[string]string{
 		"cmd": fmt.Sprintf("0x%04X", f.Cmd),
 	}
+	upserted := 0
+	upsertErrors := 0
 
 	if err != nil {
 		result = "failed"
@@ -1176,6 +1203,41 @@ func (h *Handlers) HandleNetworkRefresh(ctx context.Context, f *Frame) error {
 		metadata["raw_payload"] = fmt.Sprintf("%x", f.Data)
 	} else {
 		metadata["socket_count"] = fmt.Sprintf("%d", len(resp.Sockets))
+		if h.Core != nil {
+			now := time.Now()
+			for _, s := range resp.Sockets {
+				socket := &models.GatewaySocket{
+					GatewayID:  devicePhyID,
+					SocketNo:   int32(s.SocketNo),
+					SocketMAC:  s.SocketMAC,
+					LastSeenAt: &now,
+				}
+				if s.SocketUID != "" {
+					uid := s.SocketUID
+					socket.SocketUID = &uid
+				}
+				if s.Channel > 0 {
+					ch := int32(s.Channel)
+					socket.Channel = &ch
+				}
+				status := int32(s.Status)
+				socket.Status = &status
+				rssi := int32(s.SignalStrength)
+				socket.SignalStrength = &rssi
+
+				if e := h.Core.UpsertGatewaySocket(ctx, socket); e != nil {
+					upsertErrors++
+					continue
+				}
+				upserted++
+			}
+		}
+	}
+	if upserted > 0 {
+		metadata["mapping_upserted"] = fmt.Sprintf("%d", upserted)
+	}
+	if upsertErrors > 0 {
+		metadata["mapping_upsert_errors"] = fmt.Sprintf("%d", upsertErrors)
 	}
 
 	if h.CoreEvents != nil {

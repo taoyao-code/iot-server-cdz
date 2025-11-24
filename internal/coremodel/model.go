@@ -64,6 +64,7 @@ type DeviceHeartbeatPayload struct {
 type PortSnapshot struct {
 	DeviceID DeviceID
 	PortNo   PortNo
+	SocketNo *int32
 	Status   PortStatus
 	// RawStatus 保存协议侧原始状态值（例如BKV位图），供核心直接持久化或进一步映射。
 	RawStatus int32
@@ -293,6 +294,7 @@ type CoreCommand struct {
 	CommandID        string
 	DeviceID         DeviceID
 	PortNo           PortNo
+	SocketNo         *int32
 	SessionID        *SessionID
 	BusinessNo       *BusinessNo
 	IssuedAt         time.Time

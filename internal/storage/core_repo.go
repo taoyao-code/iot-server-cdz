@@ -28,6 +28,12 @@ type CoreRepo interface {
 	// ListDevices 简单列表示例（仅用于管理/调试）
 	ListDevices(ctx context.Context, limit, offset int) ([]models.Device, error)
 
+	// ---------- 网关插座映射 ----------
+	// UpsertGatewaySocket 写入或更新网关插座映射（按 gateway_id+socket_no 唯一键）
+	UpsertGatewaySocket(ctx context.Context, socket *models.GatewaySocket) error
+	// GetGatewaySocketByUID 通过 socket_uid 查询映射（若无返回 ErrRecordNotFound）
+	GetGatewaySocketByUID(ctx context.Context, uid string) (*models.GatewaySocket, error)
+
 	// ---------- 端口 ----------
 	// UpsertPortSnapshot 更新或插入端口快照（与 BKV 位图保持一致）
 	UpsertPortSnapshot(ctx context.Context, deviceID int64, portNo int32, status int32, powerW *int32, updatedAt time.Time) error

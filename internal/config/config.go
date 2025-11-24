@@ -272,8 +272,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("http.pprof.prefix", "/debug/pprof")
 
 	v.SetDefault("tcp.addr", ":7000")
-	v.SetDefault("tcp.readTimeout", "5s")
-	v.SetDefault("tcp.writeTimeout", "10s")
+	v.SetDefault("tcp.readTimeout", "300s")
+	v.SetDefault("tcp.writeTimeout", "30s")
 	v.SetDefault("tcp.maxConnections", 5000)
 	v.SetDefault("tcp.connectionBacklog", 1024)
 
@@ -294,7 +294,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("gateway.read_buffer_bytes", 32768)
 	v.SetDefault("gateway.write_buffer_bytes", 32768)
 	v.SetDefault("gateway.throttle_ms", 500)
-	v.SetDefault("gateway.ack_timeout_ms", 15000)
+	v.SetDefault("gateway.ack_timeout_ms", 10000)
 	v.SetDefault("gateway.retry_max", 1)
 	v.SetDefault("gateway.dead_retention_days", 7)
 	v.SetDefault("gateway.ip_whitelist", []string{})

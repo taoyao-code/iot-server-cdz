@@ -26,6 +26,7 @@ func TestThirdPartyAPI_StartCharge_RequestValidation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	reqBody := StartChargeRequest{
+		SocketUID:   "TEST-UID-01",
 		PortNo:      1,
 		ChargeMode:  1,    // 按时长
 		Amount:      1000, // 10元
@@ -319,6 +320,7 @@ func TestThirdPartyAPI_StartCharge_FullFlow(t *testing.T) {
 			name:     "正常启动充电-按时长",
 			deviceID: "DEV001",
 			request: StartChargeRequest{
+				SocketUID:   "TEST-UID-01",
 				PortNo:      1,
 				ChargeMode:  1,
 				Amount:      1000,
@@ -334,6 +336,7 @@ func TestThirdPartyAPI_StartCharge_FullFlow(t *testing.T) {
 			name:     "正常启动充电-按电量",
 			deviceID: "DEV002",
 			request: StartChargeRequest{
+				SocketUID:   "TEST-UID-01",
 				PortNo:      2,
 				ChargeMode:  2,
 				Amount:      2000,
@@ -349,6 +352,7 @@ func TestThirdPartyAPI_StartCharge_FullFlow(t *testing.T) {
 			name:     "无效端口号",
 			deviceID: "DEV003",
 			request: StartChargeRequest{
+				SocketUID:   "TEST-UID-01",
 				PortNo:      0,
 				ChargeMode:  1,
 				Amount:      1000,
@@ -364,6 +368,7 @@ func TestThirdPartyAPI_StartCharge_FullFlow(t *testing.T) {
 			name:     "无效充电模式",
 			deviceID: "DEV004",
 			request: StartChargeRequest{
+				SocketUID:   "TEST-UID-01",
 				PortNo:      1,
 				ChargeMode:  10,
 				Amount:      1000,
@@ -379,6 +384,7 @@ func TestThirdPartyAPI_StartCharge_FullFlow(t *testing.T) {
 			name:     "零金额",
 			deviceID: "DEV005",
 			request: StartChargeRequest{
+				SocketUID:   "TEST-UID-01",
 				PortNo:      1,
 				ChargeMode:  1,
 				Amount:      0,
@@ -1146,6 +1152,7 @@ func TestThirdPartyAPI_NetworkCommands(t *testing.T) {
 func TestThirdPartyAPI_BoundaryConditions(t *testing.T) {
 	t.Run("最大金额", func(t *testing.T) {
 		req := StartChargeRequest{
+			SocketUID:   "TEST-UID-01",
 			PortNo:      1,
 			ChargeMode:  1,
 			Amount:      999999, // 最大金额
@@ -1162,6 +1169,7 @@ func TestThirdPartyAPI_BoundaryConditions(t *testing.T) {
 
 	t.Run("最小金额", func(t *testing.T) {
 		req := StartChargeRequest{
+			SocketUID:   "TEST-UID-01",
 			PortNo:      1,
 			ChargeMode:  1,
 			Amount:      1, // 最小金额
@@ -1178,7 +1186,8 @@ func TestThirdPartyAPI_BoundaryConditions(t *testing.T) {
 
 	t.Run("最大端口号", func(t *testing.T) {
 		req := StopChargeRequest{
-			PortNo: intPtr(255), // 最大端口号
+			SocketUID: "TEST-UID-01",
+			PortNo:    intPtr(255), // 最大端口号
 		}
 		bytes, err := json.Marshal(req)
 		assert.NoError(t, err)

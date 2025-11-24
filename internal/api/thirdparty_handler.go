@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // ThirdPartyHandler 第三方API处理器
@@ -103,14 +105,15 @@ type StandardResponse struct {
 
 // StartChargeRequest 启动充电请求
 type StartChargeRequest struct {
-	PortNo          int `json:"port_no" binding:"min=0"`                    // 端口号：0=A端口, 1=B端口, ...（移除required，因为0是有效值）
-	ChargeMode      int `json:"charge_mode" binding:"required,min=1,max=4"` // 充电模式：1=按时长,2=按电量,3=按功率,4=充满自停
-	Amount          int `json:"amount" binding:"required,min=1"`            // 金额（分）
-	DurationMinutes int `json:"duration_minutes"`                           // 时长（分钟）- 推荐使用
-	Duration        int `json:"duration"`                                   // 时长（分钟）- 兼容旧版
-	Power           int `json:"power"`                                      // 功率（瓦）
-	PricePerKwh     int `json:"price_per_kwh"`                              // 电价（分/度）
-	ServiceFee      int `json:"service_fee"`                                // 服务费率（千分比）
+	SocketUID       string `json:"socket_uid" binding:"required"`              // 插座 UID（必填）
+	PortNo          int    `json:"port_no" binding:"min=0"`                    // 端口号：0=A端口, 1=B端口, ...（移除required，因为0是有效值）
+	ChargeMode      int    `json:"charge_mode" binding:"required,min=1,max=4"` // 充电模式：1=按时长,2=按电量,3=按功率,4=充满自停
+	Amount          int    `json:"amount" binding:"required,min=1"`            // 金额（分）
+	DurationMinutes int    `json:"duration_minutes"`                           // 时长（分钟）- 推荐使用
+	Duration        int    `json:"duration"`                                   // 时长（分钟）- 兼容旧版
+	Power           int    `json:"power"`                                      // 功率（瓦）
+	PricePerKwh     int    `json:"price_per_kwh"`                              // 电价（分/度）
+	ServiceFee      int    `json:"service_fee"`                                // 服务费率（千分比）
 }
 
 // GetDuration 获取时长（优先使用 duration_minutes）
@@ -157,7 +160,8 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		zap.String("device_phy_id", devicePhyID),
 		zap.Int("port_no", req.PortNo),
 		zap.Int("charge_mode", req.ChargeMode),
-		zap.Int("amount", req.Amount))
+		zap.Int("amount", req.Amount),
+		zap.String("socket_uid", req.SocketUID))
 
 	// 1. 验证设备存在（使用 CoreRepo 作为核心存储）
 	device, err := h.core.EnsureDevice(ctx, devicePhyID)
@@ -187,6 +191,48 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 				"device_id": devicePhyID,
 				"status":    "offline",
 			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
+	// 2.1 解析 socket_uid 对应的映射，获取 socket_no
+	mapping, err := h.getSocketMappingByUID(ctx, req.SocketUID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		msg := fmt.Sprintf("查询插座映射失败: %v", err)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusBadRequest
+			msg = fmt.Sprintf("未找到插座UID映射: %s", req.SocketUID)
+		}
+		c.JSON(status, StandardResponse{
+			Code:      status,
+			Message:   msg,
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+	if mapping.GatewayID != "" && mapping.GatewayID != devicePhyID {
+		c.JSON(http.StatusBadRequest, StandardResponse{
+			Code:    400,
+			Message: fmt.Sprintf("插座UID与设备不匹配: uid=%s, gateway=%s", req.SocketUID, mapping.GatewayID),
+			Data: map[string]interface{}{
+				"socket_uid": req.SocketUID,
+				"gateway_id": mapping.GatewayID,
+				"device_id":  devicePhyID,
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+	socketNo := int(mapping.SocketNo)
+	if socketNo <= 0 {
+		c.JSON(http.StatusBadRequest, StandardResponse{
+			Code:      400,
+			Message:   fmt.Sprintf("非法的插座编号: %d (uid=%s)", socketNo, req.SocketUID),
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -385,13 +431,17 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 	h.logger.Info("P1-3: order created with port locked",
 		zap.String("order_no", orderNo),
 		zap.Int64("device_id", devID),
-		zap.Int("port_no", req.PortNo))
+		zap.Int("port_no", req.PortNo),
+		zap.String("socket_uid", req.SocketUID),
+		zap.Int("socket_no", socketNo))
 
-	if err := h.dispatchStartChargeCommand(ctx, devicePhyID, devID, &req, orderNo, businessNo); err != nil {
+	if err := h.dispatchStartChargeCommand(ctx, devicePhyID, devID, socketNo, &req, orderNo, businessNo); err != nil {
 		h.logger.Error("failed to dispatch start command",
 			zap.Error(err),
 			zap.String("order_no", orderNo),
-			zap.String("device_phy_id", devicePhyID))
+			zap.String("device_phy_id", devicePhyID),
+			zap.String("socket_uid", req.SocketUID),
+			zap.Int("socket_no", socketNo))
 
 		c.JSON(http.StatusInternalServerError, StandardResponse{
 			Code: 500,
@@ -412,10 +462,12 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 	h.logger.Info("charge command dispatched",
 		zap.String("order_no", orderNo),
 		zap.String("device_phy_id", devicePhyID),
-		zap.Int("port_no", req.PortNo))
+		zap.Int("port_no", req.PortNo),
+		zap.String("socket_uid", req.SocketUID),
+		zap.Int("socket_no", socketNo))
 
 	// 主动查询插座状态（0x001D），避免仅依赖周期性0x94
-	_ = h.enqueueSocketStatusQuery(ctx, devID, devicePhyID, 0)
+	_ = h.enqueueSocketStatusQuery(ctx, devID, devicePhyID, socketNo)
 
 	// 新增：等待设备状态就绪验证
 	if err := h.waitForDeviceReady(ctx, devID, devicePhyID, req.PortNo, orderNo, requestID); err != nil {
@@ -465,6 +517,7 @@ func (h *ThirdPartyHandler) dispatchStartChargeCommand(
 	ctx context.Context,
 	devicePhyID string,
 	deviceID int64,
+	socketNo int,
 	req *StartChargeRequest,
 	orderNo string,
 	businessNo uint16,
@@ -482,12 +535,13 @@ func (h *ThirdPartyHandler) dispatchStartChargeCommand(
 		durationMin = 1
 	}
 
-	return h.sendStartChargeViaDriver(ctx, devicePhyID, req.PortNo, businessNo, orderNo, req.ChargeMode, durationMin)
+	return h.sendStartChargeViaDriver(ctx, devicePhyID, socketNo, req.PortNo, businessNo, orderNo, req.ChargeMode, durationMin)
 }
 
 func (h *ThirdPartyHandler) sendStartChargeViaDriver(
 	ctx context.Context,
 	devicePhyID string,
+	socketNo int,
 	portNo int,
 	businessNo uint16,
 	orderNo string,
@@ -501,12 +555,16 @@ func (h *ThirdPartyHandler) sendStartChargeViaDriver(
 	biz := coremodel.BusinessNo(bizStr)
 	modeCode := int32(chargeMode)
 	durationSec := int32(durationMin) * 60
+	socket := int32(socketNo)
 
 	cmd := &coremodel.CoreCommand{
 		Type:      coremodel.CommandStartCharge,
 		CommandID: fmt.Sprintf("start:%s:%d", orderNo, time.Now().UnixNano()),
 		DeviceID:  coremodel.DeviceID(devicePhyID),
 		PortNo:    coremodel.PortNo(portNo),
+		SocketNo: func() *int32 {
+			return &socket
+		}(),
 		BusinessNo: func() *coremodel.BusinessNo {
 			return &biz
 		}(),
@@ -525,6 +583,7 @@ func (h *ThirdPartyHandler) dispatchStopChargeCommand(
 	ctx context.Context,
 	devicePhyID string,
 	deviceID int64,
+	socketNo int,
 	portNo int,
 	orderNo string,
 	businessNo uint16,
@@ -532,7 +591,7 @@ func (h *ThirdPartyHandler) dispatchStopChargeCommand(
 	if h.driverCmd == nil {
 		return false, fmt.Errorf("driver command source not configured")
 	}
-	if err := h.sendStopChargeViaDriver(ctx, devicePhyID, portNo, businessNo, orderNo); err != nil {
+	if err := h.sendStopChargeViaDriver(ctx, devicePhyID, socketNo, portNo, businessNo, orderNo); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -541,6 +600,7 @@ func (h *ThirdPartyHandler) dispatchStopChargeCommand(
 func (h *ThirdPartyHandler) sendStopChargeViaDriver(
 	ctx context.Context,
 	devicePhyID string,
+	socketNo int,
 	portNo int,
 	businessNo uint16,
 	orderNo string,
@@ -549,12 +609,16 @@ func (h *ThirdPartyHandler) sendStopChargeViaDriver(
 		return fmt.Errorf("driver command source not configured")
 	}
 	biz := coremodel.BusinessNo(strconv.Itoa(int(businessNo)))
+	socket := int32(socketNo)
 
 	cmd := &coremodel.CoreCommand{
 		Type:      coremodel.CommandStopCharge,
 		CommandID: fmt.Sprintf("stop:%s:%d", orderNo, time.Now().UnixNano()),
 		DeviceID:  coremodel.DeviceID(devicePhyID),
 		PortNo:    coremodel.PortNo(portNo),
+		SocketNo: func() *int32 {
+			return &socket
+		}(),
 		BusinessNo: func() *coremodel.BusinessNo {
 			return &biz
 		}(),
@@ -602,9 +666,22 @@ func (h *ThirdPartyHandler) sendQueryPortStatusViaDriver(
 	return h.driverCmd.SendCoreCommand(ctx, cmd)
 }
 
+// getSocketMappingByUID 通过 socket_uid 查询插座映射。
+func (h *ThirdPartyHandler) getSocketMappingByUID(ctx context.Context, socketUID string) (*models.GatewaySocket, error) {
+	if h.core == nil {
+		return nil, fmt.Errorf("core repo not configured")
+	}
+	uid := strings.TrimSpace(socketUID)
+	if uid == "" {
+		return nil, fmt.Errorf("socket_uid is required")
+	}
+	return h.core.GetGatewaySocketByUID(ctx, uid)
+}
+
 // StopChargeRequest 停止充电请求
 type StopChargeRequest struct {
-	PortNo *int `json:"port_no" binding:"required,min=0"` // 端口号：0=A端口, 1=B端口, ...（必填，使用指针避免0值validation问题）
+	SocketUID string `json:"socket_uid" binding:"required"`    // 插座 UID（必填）
+	PortNo    *int   `json:"port_no" binding:"required,min=0"` // 端口号：0=A端口, 1=B端口, ...（必填，使用指针避免0值validation问题）
 }
 
 // StopCharge 停止充电
@@ -648,6 +725,7 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 
 	h.logger.Info("stop charge requested",
 		zap.String("device_phy_id", devicePhyID),
+		zap.String("socket_uid", req.SocketUID),
 		zap.Int("port_no", *req.PortNo))
 
 	// 1. 验证设备存在
@@ -658,6 +736,48 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 			Code: 500,
 			// EN: failed to get device
 			Message:   "获取设备失败",
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
+	// 1.1 解析 socket_uid 获取 socket_no
+	mapping, err := h.getSocketMappingByUID(ctx, req.SocketUID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		msg := fmt.Sprintf("查询插座映射失败: %v", err)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusBadRequest
+			msg = fmt.Sprintf("未找到插座UID映射: %s", req.SocketUID)
+		}
+		c.JSON(status, StandardResponse{
+			Code:      status,
+			Message:   msg,
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+	if mapping.GatewayID != "" && mapping.GatewayID != devicePhyID {
+		c.JSON(http.StatusBadRequest, StandardResponse{
+			Code:    400,
+			Message: fmt.Sprintf("插座UID与设备不匹配: uid=%s, gateway=%s", req.SocketUID, mapping.GatewayID),
+			Data: map[string]interface{}{
+				"socket_uid": req.SocketUID,
+				"gateway_id": mapping.GatewayID,
+				"device_id":  devicePhyID,
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+	socketNo := int(mapping.SocketNo)
+	if socketNo <= 0 {
+		c.JSON(http.StatusBadRequest, StandardResponse{
+			Code:      400,
+			Message:   fmt.Sprintf("非法的插座编号: %d (uid=%s)", socketNo, req.SocketUID),
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
@@ -795,12 +915,14 @@ sendStopCommand:
 		biz = deriveBusinessNo(orderNo)
 	}
 
-	stopCommandSent, dispatchErr := h.dispatchStopChargeCommand(ctx, devicePhyID, devID, *req.PortNo, orderNo, biz)
+	stopCommandSent, dispatchErr := h.dispatchStopChargeCommand(ctx, devicePhyID, devID, socketNo, *req.PortNo, orderNo, biz)
 	if dispatchErr != nil {
 		h.logger.Error("failed to dispatch stop command",
 			zap.Error(dispatchErr),
 			zap.String("order_no", orderNo),
-			zap.String("device_phy_id", devicePhyID))
+			zap.String("device_phy_id", devicePhyID),
+			zap.String("socket_uid", req.SocketUID),
+			zap.Int("socket_no", socketNo))
 
 		c.JSON(http.StatusInternalServerError, StandardResponse{
 			Code: 500,
@@ -821,7 +943,7 @@ sendStopCommand:
 	// 可选同步查询：在降级模式下，为了尽量拿到“真实端口状态”，主动发送一次查询插座状态命令(0x001D)，
 	// 并在短时间窗口内轮询 ports 表，观察状态是否发生变化。
 	if isFallbackMode {
-		if err := h.syncPortStatusAfterStop(ctx, devID, devicePhyID, *req.PortNo, requestID); err != nil {
+		if err := h.syncPortStatusAfterStop(ctx, devID, devicePhyID, socketNo, *req.PortNo, requestID); err != nil {
 			h.logger.Warn("sync port status after fallback stop failed",
 				zap.String("device_phy_id", devicePhyID),
 				zap.Int("port_no", *req.PortNo),
@@ -882,6 +1004,7 @@ func (h *ThirdPartyHandler) syncPortStatusAfterStop(
 	ctx context.Context,
 	deviceID int64,
 	devicePhyID string,
+	socketNo int,
 	portNo int,
 	requestID string,
 ) error {
@@ -894,7 +1017,7 @@ func (h *ThirdPartyHandler) syncPortStatusAfterStop(
 	}
 
 	// 2. 下发一次查询插座状态命令(0x001D)，复用 StartCharge 中的实现约定。
-	if err := h.enqueueSocketStatusQuery(ctx, deviceID, devicePhyID, 0 /*socketNo*/); err != nil {
+	if err := h.enqueueSocketStatusQuery(ctx, deviceID, devicePhyID, socketNo); err != nil {
 		h.logger.Warn("failed to enqueue socket status query after fallback stop",
 			zap.String("device_phy_id", devicePhyID),
 			zap.Int("port_no", portNo),

@@ -507,14 +507,15 @@ func (h *TestConsoleHandler) ListTestScenarios(c *gin.Context) {
 
 // StartTestChargeRequest 启动测试充电请求
 type StartTestChargeRequest struct {
-	PortNo          int    `json:"port_no" binding:"min=0"` // 端口号：0=A端口, 1=B端口, ...（移除required，因为0是有效值）
+	SocketUID       string `json:"socket_uid" binding:"required"` // 插座 UID（必填）
+	PortNo          int    `json:"port_no" binding:"min=0"`       // 端口号：0=A端口, 1=B端口, ...（移除required，因为0是有效值）
 	ChargeMode      int    `json:"charge_mode" binding:"required,min=1,max=4"`
 	Amount          int    `json:"amount" binding:"required,min=1"`
 	DurationMinutes int    `json:"duration_minutes"`
 	Power           int    `json:"power"`
 	PricePerKwh     int    `json:"price_per_kwh"`
-	ServiceFee      int    `json:"service_fee"`
 	ScenarioID      string `json:"scenario_id"` // 可选：使用场景ID
+	ServiceFee      int    `json:"service_fee"`
 }
 
 // StartTestCharge 启动测试充电
@@ -551,6 +552,7 @@ func (h *TestConsoleHandler) StartTestCharge(c *gin.Context) {
 	h.logger.Info("test session started",
 		zap.String("test_session_id", testSessionID),
 		zap.String("device_phy_id", devicePhyID),
+		zap.String("socket_uid", req.SocketUID),
 		zap.String("scenario_id", req.ScenarioID),
 		zap.Int("port_no", req.PortNo))
 
@@ -672,7 +674,7 @@ func (h *TestConsoleHandler) StartTestCharge(c *gin.Context) {
 		h.logger.Info("scenario: normal flow",
 			zap.String("test_session_id", testSessionID),
 			zap.String("scenario_id", req.ScenarioID))
-		// 继续执行下面的正常逻辑
+	// 继续执行下面的正常逻辑
 
 	default:
 		// 未知场景
@@ -684,6 +686,7 @@ func (h *TestConsoleHandler) StartTestCharge(c *gin.Context) {
 
 	// 构造StartChargeRequest并调用第三方API逻辑
 	chargeReq := StartChargeRequest{
+		SocketUID:       req.SocketUID,
 		PortNo:          req.PortNo,
 		ChargeMode:      req.ChargeMode,
 		Amount:          req.Amount,
@@ -748,6 +751,7 @@ func (h *TestConsoleHandler) StopTestCharge(c *gin.Context) {
 	h.logger.Info("test stop charge requested",
 		zap.String("test_session_id", testSessionID),
 		zap.String("device_phy_id", devicePhyID),
+		zap.String("socket_uid", req.SocketUID),
 		zap.Int("port_no", *req.PortNo))
 
 	// 将test_session_id注入到context中，供时间线服务记录

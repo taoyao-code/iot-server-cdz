@@ -81,10 +81,14 @@ func (c *CommandSource) handleStartCharge(ctx context.Context, cmd *coremodel.Co
 	}
 
 	port := uint8(MapPort(int(cmd.PortNo)))
+	socket := uint8(0)
+	if cmd.SocketNo != nil && *cmd.SocketNo >= 0 {
+		socket = uint8(*cmd.SocketNo)
+	}
 	durationMin := toDurationMinute(payload.TargetDurationSec)
 	mode := toModeCode(payload)
 
-	inner := EncodeStartControlPayload(0, port, mode, durationMin, biz)
+	inner := EncodeStartControlPayload(socket, port, mode, durationMin, biz)
 	data := WrapControlPayload(inner)
 	msgID := c.nextMsgID()
 
@@ -95,6 +99,7 @@ func (c *CommandSource) handleStartCharge(ctx context.Context, cmd *coremodel.Co
 	if c.log != nil {
 		c.log.Info("bkv command source: start charge dispatched",
 			zap.String("device_id", deviceID),
+			zap.Uint8("socket_no", socket),
 			zap.Uint8("port", port),
 			zap.Uint16("business_no", biz),
 			zap.Uint8("mode", mode),
@@ -116,7 +121,11 @@ func (c *CommandSource) handleStopCharge(ctx context.Context, cmd *coremodel.Cor
 	}
 
 	port := uint8(MapPort(int(cmd.PortNo)))
-	inner := EncodeStopControlPayload(0, port, biz)
+	socket := uint8(0)
+	if cmd.SocketNo != nil && *cmd.SocketNo >= 0 {
+		socket = uint8(*cmd.SocketNo)
+	}
+	inner := EncodeStopControlPayload(socket, port, biz)
 	data := WrapControlPayload(inner)
 	msgID := c.nextMsgID()
 
@@ -126,6 +135,7 @@ func (c *CommandSource) handleStopCharge(ctx context.Context, cmd *coremodel.Cor
 	if c.log != nil {
 		c.log.Info("bkv command source: stop charge dispatched",
 			zap.String("device_id", deviceID),
+			zap.Uint8("socket_no", socket),
 			zap.Uint8("port", port),
 			zap.Uint16("business_no", biz))
 	}

@@ -9,7 +9,9 @@
       "Bash(find:*)",
       "Bash(openspec list:*)",
       "Bash(openspec validate:*)",
-      "Bash(openspec show:*)"
+      "Bash(openspec show:*)",
+      "Bash(xxd:*)",
+      "Bash(python3:*)"
     ],
     "deny": [],
     "ask": []

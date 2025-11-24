@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -108,6 +109,51 @@ func (r *Repository) ListDevices(ctx context.Context, limit, offset int) ([]mode
 		return nil, err
 	}
 	return devices, nil
+}
+
+// UpsertGatewaySocket 写入/更新网关插座映射（按 gateway_id+socket_no 唯一键）。
+func (r *Repository) UpsertGatewaySocket(ctx context.Context, socket *models.GatewaySocket) error {
+	if socket == nil {
+		return errors.New("gateway socket is required")
+	}
+	if socket.GatewayID == "" {
+		return errors.New("gateway_id is required")
+	}
+	if socket.SocketNo <= 0 {
+		return errors.New("socket_no must be positive")
+	}
+
+	return r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "gateway_id"}, {Name: "socket_no"}},
+			DoUpdates: clause.Assignments(map[string]interface{}{
+				"socket_mac":      gorm.Expr("excluded.socket_mac"),
+				"socket_uid":      gorm.Expr("excluded.socket_uid"),
+				"channel":         gorm.Expr("excluded.channel"),
+				"status":          gorm.Expr("excluded.status"),
+				"signal_strength": gorm.Expr("excluded.signal_strength"),
+				"last_seen_at":    gorm.Expr("excluded.last_seen_at"),
+				"updated_at":      gorm.Expr("NOW()"),
+			}),
+		}).
+		Create(socket).Error
+}
+
+// GetGatewaySocketByUID 按 socket_uid 查询映射，按更新时间倒序取最新。
+func (r *Repository) GetGatewaySocketByUID(ctx context.Context, uid string) (*models.GatewaySocket, error) {
+	if strings.TrimSpace(uid) == "" {
+		return nil, errors.New("uid is required")
+	}
+
+	var socket models.GatewaySocket
+	err := r.db.WithContext(ctx).
+		Where("socket_uid = ?", uid).
+		Order("updated_at DESC").
+		First(&socket).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	return &socket, err
 }
 
 // UpsertPortSnapshot 写入端口快照，冲突时更新状态/功率/时间。

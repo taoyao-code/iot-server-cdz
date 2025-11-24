@@ -33,6 +33,23 @@ type Device struct {
 
 func (Device) TableName() string { return "devices" }
 
+// GatewaySocket 映射 gateway_sockets 表
+type GatewaySocket struct {
+	ID             int64      `gorm:"column:id;primaryKey;autoIncrement"`
+	GatewayID      string     `gorm:"column:gateway_id;type:varchar(50);not null"`
+	SocketNo       int32      `gorm:"column:socket_no;not null"`
+	SocketMAC      string     `gorm:"column:socket_mac;type:varchar(20);not null"`
+	SocketUID      *string    `gorm:"column:socket_uid;type:varchar(20)"`
+	Channel        *int32     `gorm:"column:channel"`
+	Status         *int32     `gorm:"column:status"`
+	SignalStrength *int32     `gorm:"column:signal_strength"`
+	LastSeenAt     *time.Time `gorm:"column:last_seen_at"`
+	CreatedAt      time.Time  `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt      time.Time  `gorm:"column:updated_at;autoUpdateTime"`
+}
+
+func (GatewaySocket) TableName() string { return "gateway_sockets" }
+
 // Port 映射 ports 表（复合主键：device_id + port_no）
 type Port struct {
 	DeviceID int64 `gorm:"column:device_id;primaryKey"`

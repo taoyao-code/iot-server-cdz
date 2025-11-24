@@ -19,7 +19,8 @@ var errNeedMoreData = errors.New("need more data")
 
 // networkNode 组网插座配置
 type networkNode struct {
-	Slot uint8   // 插座编号 1-250
+	UID  uint64  // 插座UID（业务层唯一标识，正面贴纸编号）
+	Slot uint8   // 插座编号（组网通信短地址，1-250）
 	MAC  [6]byte // 插座MAC原始字节
 }
 
@@ -136,17 +137,18 @@ type networkConfigFile struct {
 
 // socketConfig 单个插座配置
 type socketConfig struct {
-	Slot uint8  `json:"slot"` // 插座编号 1-250
-	MAC  string `json:"mac"`  // 插座MAC，例如 "854121800889"
+	UID uint64 `json:"uid"` // 插座UID（业务层唯一标识）
+	MAC string `json:"mac"` // 插座MAC，例如 "854121800889"
 }
 
 // loadNetworkConfig 从JSON文件加载组网配置（信道 + 插座列表）
+// 插座编号(number)会根据配置顺序自动分配(1,2,3...)，无需手动配置
 // 示例文件内容：
 //
 //	{
 //	  "channel": 4,
 //	  "sockets": [
-//	    { "slot": 1, "mac": "854121800889" }
+//	    { "uid": 301015011402415, "mac": "854121800889" }
 //	  ]
 //	}
 func loadNetworkConfig(path string) (uint8, []networkNode) {
@@ -177,25 +179,36 @@ func loadNetworkConfig(path string) (uint8, []networkNode) {
 	}
 
 	var nodes []networkNode
+	autoNumber := uint8(1) // 自动编号计数器，从1开始
 	for _, s := range fileCfg.Sockets {
-		if s.Slot < 1 || s.Slot > 250 {
-			log.Printf("忽略无效插座号: %d (必须在1-250)", s.Slot)
+		// 验证插座UID
+		if s.UID == 0 {
+			log.Printf("忽略缺失UID的插座配置")
 			continue
 		}
 
 		macBytes, err := parseMAC(s.MAC)
 		if err != nil {
-			log.Printf("忽略插座%d的无效MAC(%q): %v", s.Slot, s.MAC, err)
+			log.Printf("忽略插座UID=%d的无效MAC(%q): %v", s.UID, s.MAC, err)
 			continue
+		}
+
+		// 检查编号是否超出协议限制
+		if autoNumber > 250 {
+			log.Printf("警告：插座数量超过协议限制(250)，忽略UID=%d", s.UID)
+			break
 		}
 
 		var macArr [6]byte
 		copy(macArr[:], macBytes)
 
 		nodes = append(nodes, networkNode{
-			Slot: s.Slot,
+			UID:  s.UID,
+			Slot: autoNumber, // 自动分配编号
 			MAC:  macArr,
 		})
+
+		autoNumber++ // 编号递增
 	}
 
 	if len(nodes) == 0 {
@@ -204,6 +217,11 @@ func loadNetworkConfig(path string) (uint8, []networkNode) {
 	}
 
 	log.Printf("已加载组网配置: 信道=%d, 插座数量=%d", channel, len(nodes))
+	for _, n := range nodes {
+		log.Printf("  插座映射: UID=%d → 编号=%d, MAC=%02X%02X%02X%02X%02X%02X",
+			n.UID, n.Slot,
+			n.MAC[0], n.MAC[1], n.MAC[2], n.MAC[3], n.MAC[4], n.MAC[5])
+	}
 	return channel, nodes
 }
 
