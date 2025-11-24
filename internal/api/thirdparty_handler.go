@@ -2200,8 +2200,8 @@ func (h *ThirdPartyHandler) GetOrderEvents(c *gin.Context) {
 // waitForDeviceReady 等待设备就绪状态验证
 // 在发送充电命令后，轮询检查设备状态是否从空载转为可充电状态
 func (h *ThirdPartyHandler) waitForDeviceReady(ctx context.Context, deviceID int64, devicePhyID string, portNo int, orderNo string, requestID string) error {
-	// 最大等待时间5秒，轮询间隔500ms
-	maxWait := 5 * time.Second
+	// 增加等待时间到10秒，给设备更多时间进行状态转换
+	maxWait := 10 * time.Second
 	pollInterval := 500 * time.Millisecond
 	deadline := time.Now().Add(maxWait)
 
@@ -2210,6 +2210,17 @@ func (h *ThirdPartyHandler) waitForDeviceReady(ctx context.Context, deviceID int
 		zap.Int("port_no", portNo),
 		zap.String("order_no", orderNo),
 		zap.Duration("max_wait", maxWait))
+
+	// 记录初始状态用于对比
+	var initialStatus int
+	initialQuerySQL := `SELECT status FROM ports WHERE device_id = $1 AND port_no = $2`
+	if err := h.repo.Pool.QueryRow(ctx, initialQuerySQL, deviceID, portNo).Scan(&initialStatus); err == nil {
+		h.logger.Info("initial device state",
+			zap.String("device_phy_id", devicePhyID),
+			zap.Int("port_no", portNo),
+			zap.Int("initial_status", initialStatus),
+			zap.String("initial_status_hex", fmt.Sprintf("0x%02x", initialStatus)))
+	}
 
 	for time.Now().Before(deadline) {
 		select {
@@ -2239,6 +2250,8 @@ func (h *ThirdPartyHandler) waitForDeviceReady(ctx context.Context, deviceID int
 		isOnline := (portStatus & 0x01) != 0   // bit0=1表示在线
 		isCharging := (portStatus & 0x80) != 0 // bit7=1表示充电中
 		isNoLoad := (portStatus & 0x08) != 0   // bit3=1表示空载/空闲
+		statusByte := portStatus & 0xFF
+		waited := time.Since(deadline.Add(-maxWait))
 
 		h.logger.Debug("device state check",
 			zap.String("device_phy_id", devicePhyID),
@@ -2251,8 +2264,8 @@ func (h *ThirdPartyHandler) waitForDeviceReady(ctx context.Context, deviceID int
 
 		// 设备就绪条件：
 		// 1. 必须在线
-		// 2. 不能处于空载状态（空载表示设备拒绝充电）
-		// 3. 如果已经开始充电，则视为就绪
+		// 2. 如果已经开始充电，则视为就绪
+		// 3. 设备在线即可视为就绪（允许从空载状态开始充电）
 		if !isOnline {
 			return fmt.Errorf("device offline (status=0x%02x)", portStatus)
 		}
@@ -2266,28 +2279,58 @@ func (h *ThirdPartyHandler) waitForDeviceReady(ctx context.Context, deviceID int
 			return nil
 		}
 
-		if isNoLoad {
-			// 设备处于空载状态，继续等待
-			h.logger.Debug("device in no-load state, waiting",
+		// 智能状态检测：如果状态从初始状态发生了变化，说明设备正在响应命令
+		if portStatus != initialStatus {
+			h.logger.Info("device state changed from initial state, considering device responsive",
 				zap.String("device_phy_id", devicePhyID),
 				zap.Int("port_no", portNo),
-				zap.Int("port_status", portStatus))
-			time.Sleep(pollInterval)
-			continue
+				zap.Int("initial_status", initialStatus),
+				zap.Int("current_status", portStatus),
+				zap.String("order_no", orderNo))
+			return nil
 		}
 
-		// 设备在线且不在空载状态，视为就绪
-		h.logger.Info("device ready - online and not no-load",
-			zap.String("device_phy_id", devicePhyID),
-			zap.Int("port_no", portNo),
-			zap.String("order_no", orderNo),
-			zap.Int("port_status", portStatus))
-		return nil
+		// 允许设备在空载状态下开始充电 - 这是正常的初始状态
+		// 但我们会继续监控状态变化
+		if isNoLoad && waited > 2*time.Second {
+			// 如果已经等待了2秒以上，且设备仍然空载，允许开始充电
+			h.logger.Info("device ready - online in no-load state after waiting period",
+				zap.String("device_phy_id", devicePhyID),
+				zap.Int("port_no", portNo),
+				zap.String("order_no", orderNo),
+				zap.Int("port_status", portStatus),
+				zap.Duration("waited", waited))
+			return nil
+		}
+
+		// 兼容部分设备仅上报“在线=0x01”作为空闲状态（未置空载位）
+		if isOnline && !isCharging && statusByte == 0x01 && waited > 2*time.Second {
+			h.logger.Info("device ready - online idle state without no-load bit",
+				zap.String("device_phy_id", devicePhyID),
+				zap.Int("port_no", portNo),
+				zap.String("order_no", orderNo),
+				zap.Int("port_status", portStatus),
+				zap.Duration("waited", waited))
+			return nil
+		}
+
+		// 继续等待状态变化
+		time.Sleep(pollInterval)
 	}
 
-	// 超时：设备仍未就绪 - 获取最终状态
+	// 超时：设备仍未就绪 - 获取最终状态并记录详细信息
 	var finalStatus int
 	finalQuerySQL := `SELECT status FROM ports WHERE device_id = $1 AND port_no = $2`
 	_ = h.repo.Pool.QueryRow(ctx, finalQuerySQL, deviceID, portNo).Scan(&finalStatus)
-	return fmt.Errorf("device not ready after %v (final_status=0x%02x)", maxWait, finalStatus)
+
+	h.logger.Warn("device not ready after timeout",
+		zap.String("device_phy_id", devicePhyID),
+		zap.Int("port_no", portNo),
+		zap.String("order_no", orderNo),
+		zap.Duration("max_wait", maxWait),
+		zap.Int("final_status", finalStatus),
+		zap.String("final_status_hex", fmt.Sprintf("0x%02x", finalStatus)),
+		zap.Int("initial_status", initialStatus))
+
+	return fmt.Errorf("device not ready after %v (final_status=0x%02x, initial_status=0x%02x)", maxWait, finalStatus, initialStatus)
 }

@@ -281,7 +281,10 @@ func (r *Repository) CreateOrder(ctx context.Context, order *models.Order) error
 
 // activeOrderStatuses 标记进行中订单状态。
 var activeOrderStatuses = []int32{0, 1, 2}
-var lockOrderStatuses = []int32{0, 1, 2, 8, 9, 10}
+
+// lockOrderStatuses 标记锁定端口的订单状态 - 排除过渡状态(8,9,10)
+// 过渡状态(cancelling/stopping/interrupted)的订单正在结束过程中，端口应该可以被重用
+var lockOrderStatuses = []int32{0, 1, 2}
 
 // GetActiveOrder 返回设备端口最近的活跃订单。
 func (r *Repository) GetActiveOrder(ctx context.Context, deviceID int64, portNo int32) (*models.Order, error) {
