@@ -124,6 +124,10 @@
                         <div class="flex items-center space-x-2">
                             <i class="fas fa-plug text-[10px]"></i>
                             <span>{{ getDeviceStatusText(device) }}</span>
+                            <span v-if="device.consistency === 'inconsistent'" class="text-yellow-400 ml-1"
+                                title="数据不一致">
+                                ⚠️
+                            </span>
                         </div>
                         <div v-if="device.activeOrdersCount > 0" class="text-blue-400 font-mono">
                             {{ device.activeOrdersCount }} 订单
@@ -170,8 +174,7 @@
                         </button>
 
                         <!-- 刷新间隔选择 -->
-                        <select v-model.number="refreshIntervalSeconds"
-                            :disabled="!autoRefresh"
+                        <select v-model.number="refreshIntervalSeconds" :disabled="!autoRefresh"
                             class="bg-gray-900 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none disabled:opacity-50 disabled:cursor-not-allowed">
                             <option v-for="interval in refreshIntervalOptions" :key="interval" :value="interval">
                                 {{ interval }}秒
@@ -243,6 +246,9 @@
                         <div class="mt-2 text-xs text-gray-500">
                             活跃订单: {{ selectedDevice.active_orders?.length || 0 }}
                         </div>
+                        <div v-if="selectedDevice.consistency === 'inconsistent'" class="mt-2 text-xs text-yellow-400">
+                            ⚠️ 数据不一致: {{ selectedDevice.inconsistency }}
+                        </div>
                     </div>
 
                     <!-- Registration Time -->
@@ -288,7 +294,8 @@
                                     <option :value="null" disabled>请选择端口</option>
                                     <option v-for="port in selectedDevice.ports" :key="port.port_no"
                                         :value="port.port_no">
-                                        端口 {{ port.port_no }} - {{ getPortStatusText(port.status) }}
+                                        端口 {{ port.port_no }} - {{ getPortStatusText(port.status,
+                                        selectedDevice.consistency, selectedDevice.inconsistency) }}
                                     </option>
                                 </select>
                             </div>
@@ -370,7 +377,8 @@
                                                     'text-green-400': port.status === 0,
                                                     'text-blue-400': port.status === 1,
                                                     'text-red-400': port.status === 2
-                                                }">{{ getPortStatusText(port.status) }}</span>
+                                                }">{{ getPortStatusText(port.status, selectedDevice.consistency,
+                                                    selectedDevice.inconsistency) }}</span>
                                             </div>
                                         </div>
                                         <div class="text-right">

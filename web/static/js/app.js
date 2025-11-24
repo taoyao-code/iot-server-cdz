@@ -101,20 +101,35 @@ createApp({
             }
         };
 
-        const getPortStatusText = (status) => {
+        const getPortStatusText = (status, consistencyStatus, inconsistencyReason) => {
             const statusMap = {
                 0: '空闲',
                 1: '充电中',
                 2: '故障'
             };
-            return statusMap[status] || '未知';
+
+            const baseStatus = statusMap[status] || '未知';
+
+            // 如果有不一致状态，在状态文本中体现
+            if (consistencyStatus === 'inconsistent') {
+                return `${baseStatus} (⚠️ 不一致)`;
+            }
+
+            return baseStatus;
         };
 
         const getDeviceStatusText = (device) => {
             if (!device.is_online) return '离线';
-            if (device.active_orders && device.active_orders.length > 0) {
+
+            // 检查是否有任何端口实际在充电（状态为1表示充电中）
+            const hasChargingPort = device.ports && device.ports.some(port => port.status === 1);
+
+            if (hasChargingPort) {
                 return '充电中';
             }
+
+            // 即使有活跃订单，如果没有端口在充电，也显示为空闲
+            // 这处理了数据不一致的情况：active_order_but_ports_not_charging
             return '空闲';
         };
 
