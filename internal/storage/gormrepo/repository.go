@@ -391,14 +391,26 @@ WHERE device_id   = ?
 	}
 
 	// 2) 回退路径：按 order_no upsert（兼容老协议/测试用例）
-	const upsertByOrderNo = `
-INSERT INTO orders (device_id, port_no, order_no, start_time, end_time, kwh_0p01, end_reason, status)
-VALUES (?, ?, ?, NOW()-make_interval(secs => ?), NOW(), ?, ?, 3)
-ON CONFLICT (order_no)
-DO UPDATE SET end_time=NOW(), kwh_0p01=EXCLUDED.kwh_0p01, end_reason=EXCLUDED.end_reason, status=3, updated_at=NOW()`
+	// 部分环境缺少 order_no 唯一约束，使用“先更新，后插入”避免 ON CONFLICT 依赖。
+	updateRes := r.db.WithContext(ctx).Exec(
+		`UPDATE orders
+         SET end_time=NOW(), kwh_0p01=?, end_reason=?, status=3, updated_at=NOW()
+         WHERE order_no=?`,
+		kwh0p01, reason, orderHex,
+	)
+	if updateRes.Error != nil {
+		return updateRes.Error
+	}
+	if updateRes.RowsAffected > 0 {
+		return nil
+	}
 
-	res := r.db.WithContext(ctx).Exec(upsertByOrderNo, deviceID, portNo, orderHex, durationSec, kwh0p01, reason)
-	return res.Error
+	insertRes := r.db.WithContext(ctx).Exec(
+		`INSERT INTO orders (device_id, port_no, order_no, start_time, end_time, kwh_0p01, end_reason, status)
+         VALUES (?, ?, ?, NOW()-make_interval(secs => ?), NOW(), ?, ?, 3)`,
+		deviceID, portNo, orderHex, durationSec, kwh0p01, reason,
+	)
+	return insertRes.Error
 }
 
 // UpsertOrderProgress 插入或更新订单进度。

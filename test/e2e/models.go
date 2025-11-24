@@ -90,6 +90,7 @@ type OrderInfo struct {
 
 // StartChargeRequest 启动充电请求
 type StartChargeRequest struct {
+	SocketUID       string     `json:"socket_uid"`
 	PortNo          int        `json:"port_no"`
 	ChargeMode      ChargeMode `json:"charge_mode"`
 	Amount          int        `json:"amount"`
@@ -106,7 +107,8 @@ type ChargeResponse struct {
 
 // StopChargeRequest 停止充电请求
 type StopChargeRequest struct {
-	PortNo int `json:"port_no"`
+	SocketUID string `json:"socket_uid"`
+	PortNo    int    `json:"port_no"`
 }
 
 // ListDevicesParams 设备列表查询参数

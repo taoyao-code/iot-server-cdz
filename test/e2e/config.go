@@ -15,6 +15,7 @@ type Config struct {
 
 	// 测试设备
 	TestDeviceID string // 测试设备ID
+	SocketUID    string // 测试插座UID（用于控制链路映射）
 
 	// 超时配置
 	RequestTimeout time.Duration // 单个请求超时
@@ -36,6 +37,7 @@ func GetConfig() *Config {
 		ServerURL:      getEnv("E2E_SERVER_URL", "http://localhost:7055"),
 		APIKey:         getEnv("E2E_API_KEY", ""),
 		TestDeviceID:   getEnv("E2E_DEVICE_ID", ""),
+		SocketUID:      getEnv("E2E_SOCKET_UID", ""),
 		RequestTimeout: getDurationEnv("E2E_REQUEST_TIMEOUT", 30*time.Second),
 		WaitTimeout:    getDurationEnv("E2E_WAIT_TIMEOUT", 60*time.Second),
 		RetryAttempts:  getIntEnv("E2E_RETRY_ATTEMPTS", 3),
@@ -50,6 +52,9 @@ func GetConfig() *Config {
 	}
 	if cfg.TestDeviceID == "" {
 		panic("E2E_DEVICE_ID is required")
+	}
+	if cfg.SocketUID == "" {
+		panic("E2E_SOCKET_UID is required")
 	}
 
 	return cfg
@@ -69,6 +74,7 @@ func (c *Config) String() string {
   Server URL: %s
   API Key: %s
   Device ID: %s
+  Socket UID: %s
   Request Timeout: %s
   Wait Timeout: %s
   Retry Attempts: %d
@@ -78,6 +84,7 @@ func (c *Config) String() string {
 		c.ServerURL,
 		c.MaskedAPIKey(),
 		c.TestDeviceID,
+		c.SocketUID,
 		c.RequestTimeout,
 		c.WaitTimeout,
 		c.RetryAttempts,

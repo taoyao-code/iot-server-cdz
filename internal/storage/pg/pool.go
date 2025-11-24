@@ -10,7 +10,7 @@ import (
 )
 
 // NewPool 创建 pgx 连接池
-func NewPool(ctx context.Context, dsn string, maxOpen, maxIdle int, maxLifetime time.Duration, logger *zap.Logger) (*pgxpool.Pool, error) {
+func NewPool(ctx context.Context, dsn string, maxOpen, maxIdle int, maxLifetime time.Duration, logLevel string, logger *zap.Logger) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, err
@@ -18,9 +18,28 @@ func NewPool(ctx context.Context, dsn string, maxOpen, maxIdle int, maxLifetime 
 
 	// 添加 SQL 日志追踪器
 	if logger != nil {
+		// 根据配置的日志级别映射到 tracelog.LogLevel
+		var traceLevel tracelog.LogLevel
+		switch logLevel {
+		case "silent":
+			traceLevel = tracelog.LogLevelNone // 完全关闭
+		case "error":
+			traceLevel = tracelog.LogLevelError // 仅错误
+		case "warn":
+			traceLevel = tracelog.LogLevelWarn // 警告+错误
+		case "info":
+			traceLevel = tracelog.LogLevelInfo // 信息+警告+错误
+		case "debug":
+			traceLevel = tracelog.LogLevelDebug // 调试+以上所有
+		case "trace":
+			traceLevel = tracelog.LogLevelTrace // 完整SQL追踪
+		default:
+			traceLevel = tracelog.LogLevelNone // 默认关闭
+		}
+
 		cfg.ConnConfig.Tracer = &tracelog.TraceLog{
 			Logger:   &pgxZapLogger{logger: logger},
-			LogLevel: tracelog.LogLevelTrace, // 记录所有 SQL 语句
+			LogLevel: traceLevel,
 		}
 	}
 

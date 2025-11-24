@@ -56,7 +56,8 @@ database:
   maxOpenConns: 100
   maxIdleConns: 20
   connMaxLifetime: 2h
-  autoMigrate: false # 生产环境禁用自动迁移，使用手动迁移
+  autoMigrate: false # 生产环境禁用自动迁移,使用手动迁移
+  logLevel: "silent" # GORM日志级别: silent(关闭), error(仅错误), warn(警告), info(完整SQL)
 
 # Redis配置（生产环境）
 redis:
@@ -87,7 +88,7 @@ thirdparty:
   ip_whitelist: [] # 生产环境建议配置IP白名单
 
 session:
-  heartbeat_timeout_sec: 60 # P1-1修复: 心跳周期30s × 2 = 60s (避免网络波动误判)
+  heartbeat_timeout_sec: 120 # P1-1修复: 心跳周期30s × 2 = 60s (避免网络波动误判)
   weighted:
     enabled: true
     tcp_down_window_sec: 120

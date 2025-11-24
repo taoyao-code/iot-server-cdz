@@ -193,6 +193,7 @@ func (s *ChargeSuite) TestPortConflict() {
 	// 2. 尝试在同一端口创建第二个订单（不使用自动重试）
 	s.T().Log("→ 尝试在同一端口创建订单（预期冲突）...")
 	req := &StartChargeRequest{
+		SocketUID:       s.helper.Config().SocketUID,
 		PortNo:          1,
 		ChargeMode:      ChargeModeByDuration,
 		Amount:          500,

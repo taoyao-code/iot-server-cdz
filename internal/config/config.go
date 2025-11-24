@@ -116,6 +116,7 @@ type DatabaseConfig struct {
 	MaxIdleConns    int           `mapstructure:"maxIdleConns"`
 	ConnMaxLifetime time.Duration `mapstructure:"connMaxLifetime"`
 	AutoMigrate     bool          `mapstructure:"autoMigrate"`
+	LogLevel        string        `mapstructure:"logLevel"` // GORM日志级别: silent, error, warn, info
 }
 
 // RedisConfig Redis 连接配置 (Week2.2)
@@ -316,6 +317,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.maxIdleConns", 10)
 	v.SetDefault("database.connMaxLifetime", "1h")
 	v.SetDefault("database.autoMigrate", false)
+	v.SetDefault("database.logLevel", "silent") // 默认关闭SQL日志
 
 	// thirdparty defaults
 	v.SetDefault("thirdparty.push.webhook_url", "")

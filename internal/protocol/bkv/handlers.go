@@ -431,25 +431,70 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 	}
 
 	if f.IsUplink() {
-		if len(f.Data) >= 3 && f.Data[2] == 0x02 {
-			// 充电结束/状态上报（简化：标记端口为空闲）
-			socketNo := int(f.Data[3])
-			evPort := coremodel.PortNo(socketNo)
-			ev := &coremodel.CoreEvent{
-				Type:       coremodel.EventPortSnapshot,
-				DeviceID:   coremodel.DeviceID(devicePhyID),
-				PortNo:     &evPort,
-				OccurredAt: time.Now(),
-				PortSnapshot: &coremodel.PortSnapshot{
-					DeviceID:  coremodel.DeviceID(devicePhyID),
-					PortNo:    evPort,
-					Status:    coremodel.PortStatusUnknown,
-					RawStatus: 0x09, // 空闲/在线
-					At:        time.Now(),
-				},
+		// 处理充电结束/功率模式结束上报（0x0015 子命令 0x02 / 0x18）
+		if len(f.Data) >= 3 && (f.Data[2] == 0x02 || f.Data[2] == 0x18) {
+			if end, err := ParseBKVChargingEnd(f.Data); err == nil {
+				now := time.Now()
+				portNo := coremodel.PortNo(end.Port)
+				rawStatus := int32(end.Status)
+				var powerW *int32
+				if end.InstantPower > 0 {
+					p := int32(end.InstantPower) / 10 // 0.1W -> W
+					powerW = &p
+				}
+
+				// PortSnapshot 更新
+				evPS := &coremodel.CoreEvent{
+					Type:       coremodel.EventPortSnapshot,
+					DeviceID:   coremodel.DeviceID(devicePhyID),
+					PortNo:     &portNo,
+					OccurredAt: now,
+					PortSnapshot: &coremodel.PortSnapshot{
+						DeviceID:  coremodel.DeviceID(devicePhyID),
+						PortNo:    portNo,
+						RawStatus: rawStatus,
+						PowerW:    powerW,
+						At:        now,
+					},
+				}
+				sn := int32(end.SocketNo)
+				evPS.PortSnapshot.SocketNo = &sn
+				_ = h.CoreEvents.HandleCoreEvent(ctx, evPS)
+
+				// SessionEnded 更新
+				nextStatus := int32(0x09) // 空闲
+				durationSec := int32(end.ChargingTime) * 60
+				energy01 := int32(end.EnergyUsed) // 0.01 kWh
+				rawReason := int32(end.EndReason)
+				biz := coremodel.BusinessNo(fmt.Sprintf("%04X", end.BusinessNo))
+				evEnd := &coremodel.CoreEvent{
+					Type:       coremodel.EventSessionEnded,
+					DeviceID:   coremodel.DeviceID(devicePhyID),
+					PortNo:     &portNo,
+					BusinessNo: &biz,
+					OccurredAt: now,
+					SessionEnded: &coremodel.SessionEndedPayload{
+						DeviceID:       coremodel.DeviceID(devicePhyID),
+						PortNo:         portNo,
+						BusinessNo:     biz,
+						EnergyKWh01:    energy01,
+						DurationSec:    durationSec,
+						EndReasonCode:  "",
+						InstantPowerW:  powerW,
+						OccurredAt:     now,
+						RawReason:      &rawReason,
+						NextPortStatus: &nextStatus,
+					},
+				}
+				_ = h.CoreEvents.HandleCoreEvent(ctx, evEnd)
+
+				// 回 ACK（使用 socket_no/port_no）
+				h.sendChargingEndAck(ctx, f, nil, int(end.SocketNo), int(end.Port), true)
+				return nil
 			}
-			_ = h.CoreEvents.HandleCoreEvent(ctx, ev)
-		} else if len(f.Data) >= 2 && len(f.Data) < 64 {
+		}
+
+		if len(f.Data) >= 2 && len(f.Data) < 64 {
 			innerLen := (int(f.Data[0]) << 8) | int(f.Data[1])
 			totalLen := 2 + innerLen
 			if innerLen >= 5 && len(f.Data) >= totalLen {

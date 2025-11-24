@@ -86,6 +86,7 @@ func (h *TestHelper) CreateCharge(ctx context.Context, portNo int, mode ChargeMo
 	h.t.Helper()
 
 	req := &StartChargeRequest{
+		SocketUID:       h.config.SocketUID,
 		PortNo:          portNo,
 		ChargeMode:      mode,
 		Amount:          amount,
@@ -119,7 +120,7 @@ func (h *TestHelper) StopCharge(ctx context.Context, portNo int) {
 		h.t.Logf("→ 停止端口%d充电", portNo)
 	}
 
-	err := h.client.StopCharge(ctx, h.config.TestDeviceID, portNo)
+	err := h.client.StopCharge(ctx, h.config.TestDeviceID, portNo, h.config.SocketUID)
 	require.NoError(h.t, err, "停止充电失败")
 
 	if h.config.Verbose {

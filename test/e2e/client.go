@@ -131,9 +131,9 @@ func (c *APIClient) StartCharge(ctx context.Context, deviceID string, req *Start
 }
 
 // StopCharge 停止充电
-func (c *APIClient) StopCharge(ctx context.Context, deviceID string, portNo int) error {
+func (c *APIClient) StopCharge(ctx context.Context, deviceID string, portNo int, socketUID string) error {
 	path := fmt.Sprintf("/api/v1/third/devices/%s/stop", deviceID)
-	req := &StopChargeRequest{PortNo: portNo}
+	req := &StopChargeRequest{PortNo: portNo, SocketUID: socketUID}
 	return c.doRequest(ctx, http.MethodPost, path, req, nil)
 }
 
@@ -220,7 +220,7 @@ func (c *APIClient) RetryOnConflict(ctx context.Context, deviceID string, req *S
 	}
 
 	// 停止当前端口的充电
-	if stopErr := c.StopCharge(ctx, deviceID, req.PortNo); stopErr != nil {
+	if stopErr := c.StopCharge(ctx, deviceID, req.PortNo, req.SocketUID); stopErr != nil {
 		return nil, fmt.Errorf("stop charge failed: %w (original error: %v)", stopErr, err)
 	}
 
