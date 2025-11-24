@@ -41,6 +41,8 @@ type CoreRepo interface {
 	GetPort(ctx context.Context, deviceID int64, portNo int32) (*models.Port, error)
 	// UpdatePortStatus 仅更新端口状态位（不改 updated_at 以外字段）
 	UpdatePortStatus(ctx context.Context, deviceID int64, portNo int32, status int32) error
+	// LockOrCreatePort 行锁定端口记录，不存在则创建
+	LockOrCreatePort(ctx context.Context, deviceID int64, portNo int32) (*models.Port, error)
 
 	// ---------- 订单 ----------
 	// CreateOrder 创建订单（要求调用方填充必要字段：DeviceID/PortNo/OrderNo/...）
@@ -51,6 +53,8 @@ type CoreRepo interface {
 	GetOrderByOrderNo(ctx context.Context, orderNo string) (*models.Order, error)
 	// GetOrderByBusinessNo 通过 business_no 查询订单
 	GetOrderByBusinessNo(ctx context.Context, deviceID int64, businessNo int32) (*models.Order, error)
+	// LockActiveOrderForPort 锁定指定端口的活跃订单
+	LockActiveOrderForPort(ctx context.Context, deviceID int64, portNo int32) (*models.Order, bool, error)
 	// UpdateOrderStatus 更新订单状态
 	UpdateOrderStatus(ctx context.Context, orderID int64, status int32) error
 	// CompleteOrder 完成订单（写入结束原因、时间、累计电量/金额等；实现内保证与端口状态一致性可选在同一事务完成）
@@ -61,6 +65,8 @@ type CoreRepo interface {
 	SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh0p01 int, reason int) error
 	// UpsertOrderProgress 插入或更新订单进度（基于 order_no 冲突覆盖状态/进度）
 	UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int32, orderNo string, businessNo *int32, durationSec int32, kwh0p01 int32, status int32, powerW01 *int32) error
+	// CleanupPendingOrders 标记超时 pending 订单为完成状态
+	CleanupPendingOrders(ctx context.Context, deviceID int64, before time.Time) (int64, error)
 
 	// ---------- 指令日志 ----------
 	// AppendCmdLog 追加一条上下行指令日志

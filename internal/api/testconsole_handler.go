@@ -691,7 +691,6 @@ func (h *TestConsoleHandler) StartTestCharge(c *gin.Context) {
 		ChargeMode:      req.ChargeMode,
 		Amount:          req.Amount,
 		DurationMinutes: req.DurationMinutes,
-		Duration:        req.DurationMinutes,
 		Power:           req.Power,
 		PricePerKwh:     req.PricePerKwh,
 		ServiceFee:      req.ServiceFee,

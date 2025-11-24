@@ -150,18 +150,10 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 			zap.Bool("enabled", thirdpartyAuthCfg.Enabled))
 		api.RegisterThirdPartyRoutes(r, repo, coreRepo, sess, driverCommandSource, eventQueue, appm, thirdpartyAuthCfg, log)
 
-		// 注册内部测试控制台路由（仅在启用时）
-		enableTestConsole := cfg.API.Auth.Enabled && len(cfg.API.Auth.APIKeys) > 0
-		api.RegisterTestConsoleRoutes(r, repo, coreRepo, sess, driverCommandSource, eventQueue, appm, authCfg, log, enableTestConsole)
-
-		// 注册静态文件服务（测试控制台前端）
-		if enableTestConsole {
-			r.Static("/static", "./web/static")
-			r.GET("/test-console", func(c *gin.Context) {
-				c.File("./web/static/index.html")
-			})
-			log.Info("test console frontend registered", zap.String("path", "/test-console"))
-		}
+		r.Static("/static", "./web/static")
+		r.GET("/test-console", func(c *gin.Context) {
+			c.File("./web/static/index.html")
+		})
 
 		app.RegisterHealthRoutes(r, healthAgg) // Week2: 健康检查路由
 	})
