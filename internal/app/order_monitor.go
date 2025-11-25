@@ -30,21 +30,6 @@ type OrderMonitor struct {
 	statsChargingLong int64
 }
 
-// NewOrderMonitor 创建订单监控器
-func NewOrderMonitor(repo *pgstorage.Repository, commands driverapi.CommandSource, logger *zap.Logger) *OrderMonitor {
-	return &OrderMonitor{
-		repo:            repo,
-		commands:        commands,
-		logger:          logger,
-		checkInterval:   1 * time.Minute, // 每分钟检查一次
-		pendingTimeout:  5 * time.Minute, // pending超过5分钟告警
-		chargingTimeout: 2 * time.Hour,   // charging超过2小时告警
-		nowFunc:         time.Now,
-		// 避免每轮过多下行命令导致队列拥塞
-		sendLimit: 50,
-	}
-}
-
 // Start 启动监控器
 func (m *OrderMonitor) Start(ctx context.Context) {
 	m.logger.Info("order monitor started",

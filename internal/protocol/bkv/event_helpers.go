@@ -55,69 +55,6 @@ func (h *Handlers) pushEvent(ctx context.Context, event *thirdparty.StandardEven
 	}
 }
 
-// pushOrderCreatedEvent 推送订单创建事件
-func (h *Handlers) pushOrderCreatedEvent(ctx context.Context, devicePhyID, orderNo string, portNo int, chargeMode string, duration int, pricePerKwh float64, logger *zap.Logger) {
-	eventData := &thirdparty.OrderCreatedData{
-		OrderNo:     orderNo,
-		PortNo:      portNo,
-		ChargeMode:  chargeMode,
-		Duration:    duration,
-		PricePerKwh: pricePerKwh,
-		CreatedAt:   time.Now().Unix(),
-	}
-
-	event := thirdparty.NewEvent(
-		thirdparty.EventOrderCreated,
-		devicePhyID,
-		eventData.ToMap(),
-	)
-
-	h.pushEvent(ctx, event, logger)
-}
-
-// pushOrderConfirmedEvent 推送订单确认事件
-func (h *Handlers) pushOrderConfirmedEvent(ctx context.Context, devicePhyID, orderNo string, portNo int, result, failReason string, logger *zap.Logger) {
-	eventData := &thirdparty.OrderConfirmedData{
-		OrderNo:     orderNo,
-		PortNo:      portNo,
-		Result:      result,
-		FailReason:  failReason,
-		ConfirmedAt: time.Now().Unix(),
-	}
-
-	event := thirdparty.NewEvent(
-		thirdparty.EventOrderConfirmed,
-		devicePhyID,
-		eventData.ToMap(),
-	)
-
-	h.pushEvent(ctx, event, logger)
-}
-
-// pushOrderCompletedEvent 推送订单完成事件
-func (h *Handlers) pushOrderCompletedEvent(ctx context.Context, devicePhyID, orderNo string, portNo int, duration int, totalKwh, peakPower, avgPower, totalAmount float64, endReason, endReasonMsg string, logger *zap.Logger) {
-	eventData := &thirdparty.OrderCompletedData{
-		OrderNo:      orderNo,
-		PortNo:       portNo,
-		Duration:     duration,
-		TotalKwh:     totalKwh,
-		PeakPower:    peakPower,
-		AvgPower:     avgPower,
-		TotalAmount:  totalAmount,
-		EndReason:    endReason,
-		EndReasonMsg: endReasonMsg,
-		CompletedAt:  time.Now().Unix(),
-	}
-
-	event := thirdparty.NewEvent(
-		thirdparty.EventOrderCompleted,
-		devicePhyID,
-		eventData.ToMap(),
-	)
-
-	h.pushEvent(ctx, event, logger)
-}
-
 // pushChargingStartedEvent 推送充电开始事件
 func (h *Handlers) pushChargingStartedEvent(ctx context.Context, devicePhyID, orderNo string, portNo int, logger *zap.Logger) {
 	eventData := &thirdparty.ChargingStartedData{

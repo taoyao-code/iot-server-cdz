@@ -15,18 +15,6 @@ const (
 	// EventDeviceHeartbeat 设备心跳事件
 	EventDeviceHeartbeat EventType = "device.heartbeat"
 
-	// EventOrderCreated 订单创建事件
-	EventOrderCreated EventType = "order.created"
-
-	// EventOrderConfirmed 订单确认事件（设备确认接收）
-	EventOrderConfirmed EventType = "order.confirmed"
-
-	// EventOrderCompleted 订单完成事件
-	EventOrderCompleted EventType = "order.completed"
-
-	// EventOrderFailed 订单失败事件 (P0-2修复: 新增)
-	EventOrderFailed EventType = "order.failed"
-
 	// EventChargingStarted 充电开始事件
 	EventChargingStarted EventType = "charging.started"
 

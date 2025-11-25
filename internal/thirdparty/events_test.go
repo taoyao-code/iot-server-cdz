@@ -67,9 +67,6 @@ func TestAllEventTypes(t *testing.T) {
 	eventTypes := []EventType{
 		EventDeviceRegistered,
 		EventDeviceHeartbeat,
-		EventOrderCreated,
-		EventOrderConfirmed,
-		EventOrderCompleted,
 		EventChargingStarted,
 		EventChargingEnded,
 		EventDeviceAlarm,
