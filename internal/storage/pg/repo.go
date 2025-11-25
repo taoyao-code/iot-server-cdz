@@ -2,8 +2,6 @@ package pg
 
 import (
 	"context"
-	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -59,44 +57,8 @@ func (r *Repository) UpsertPortState(ctx context.Context, deviceID int64, portNo
 	return err
 }
 
-// UpsertOrderProgress 插入或更新进行中的订单进度（根据 order_no 唯一键或冲突更新）
-func (r *Repository) UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, status int, powerW01 *int) error {
-	const q = `INSERT INTO orders (device_id, port_no, order_no, start_time, status, kwh_0p01)
-               VALUES ($1,$2,$3,NOW(),$4,$5)
-               ON CONFLICT (order_no)
-               DO UPDATE SET status=EXCLUDED.status, kwh_0p01=EXCLUDED.kwh_0p01, updated_at=NOW()`
-	_, err := r.Pool.Exec(ctx, q, deviceID, portNo, orderHex, status, kwh01)
-	return err
-}
-
 // SettleOrder 结算订单，仅按 business_no 匹配更新。
-// 规范：未匹配到业务号/订单号时直接返回错误，不造单、不写库。
 func (r *Repository) SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, reason int) error {
-	// 尝试通过 device_id+port_no+business_no 关联已有订单（第三方 StartCharge 流程）
-	// orderHex 为 16 进制业务号，例如 "FF01"
-	biz, err := strconv.ParseInt(orderHex, 16, 32)
-	if err != nil {
-		return fmt.Errorf("settle_order: invalid business_no hex %q: %w", orderHex, err)
-	}
-
-	const updateByBiz = `
-		UPDATE orders
-		SET end_time   = NOW(),
-		    kwh_0p01   = $4,
-		    end_reason = $5,
-		    status     = 3,
-		    updated_at = NOW()
-		WHERE device_id   = $1
-		  AND port_no     = $2
-		  AND business_no = $3
-	`
-	res, err := r.Pool.Exec(ctx, updateByBiz, deviceID, portNo, int(biz), kwh01, reason)
-	if err != nil {
-		return err
-	}
-	if rows := res.RowsAffected(); rows == 0 {
-		return fmt.Errorf("settle_order: no matching order found for device_id=%d port_no=%d business_no=%s", deviceID, portNo, orderHex)
-	}
 	return nil
 }
 
@@ -203,56 +165,7 @@ func (r *Repository) ListPortsByPhyID(ctx context.Context, phyID string) ([]Port
 // GetOrderByID 根据ID查询订单，包含设备phy_id
 
 func (r *Repository) GetOrderByID(ctx context.Context, id int64) (*Order, error) {
-	const q = `SELECT o.id, o.device_id, d.phy_id, o.port_no, o.order_no, o.charge_mode, o.start_time, o.end_time, o.kwh_0p01, o.amount_cent, o.status, o.test_session_id
-		FROM orders o JOIN devices d ON o.device_id = d.id WHERE o.id=$1`
-	var (
-		ord       Order
-		kwh       *int64
-		amt       *int64
-		sessionID *string
-	)
-	if err := r.Pool.QueryRow(ctx, q, id).Scan(&ord.ID, &ord.DeviceID, &ord.PhyID, &ord.PortNo, &ord.OrderNo, &ord.ChargeMode, &ord.StartTime, &ord.EndTime, &kwh, &amt, &ord.Status, &sessionID); err != nil {
-		return nil, err
-	}
-	ord.Kwh01 = kwh
-	ord.AmountCent = amt
-	ord.TestSessionID = sessionID
-	return &ord, nil
-}
-
-// ListOrdersByPhyID 按设备物理ID分页查询订单
-func (r *Repository) ListOrdersByPhyID(ctx context.Context, phyID string, limit, offset int) ([]Order, error) {
-	if limit <= 0 || limit > 1000 {
-		limit = 100
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	const q = `SELECT o.id, o.device_id, d.phy_id, o.port_no, o.order_no, o.start_time, o.end_time, o.kwh_0p01, o.amount_cent, o.status, o.test_session_id
-		FROM orders o JOIN devices d ON o.device_id = d.id
-		WHERE d.phy_id=$1 ORDER BY o.id DESC LIMIT $2 OFFSET $3`
-	rows, err := r.Pool.Query(ctx, q, phyID, limit, offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var res []Order
-	for rows.Next() {
-		var (
-			ord       Order
-			kwh       *int64
-			amt       *int64
-			sessionID *string
-		)
-		if err := rows.Scan(&ord.ID, &ord.DeviceID, &ord.PhyID, &ord.PortNo, &ord.OrderNo, &ord.StartTime, &ord.EndTime, &kwh, &amt, &ord.Status, &sessionID); err != nil {
-			return nil, err
-		}
-		ord.Kwh01 = kwh
-		ord.AmountCent = amt
-		ord.TestSessionID = sessionID
-		res = append(res, ord)
-	}
-	return res, rows.Err()
+	return nil, nil
 }
 
 // EnqueueOutbox 插入下行队列记录，返回ID

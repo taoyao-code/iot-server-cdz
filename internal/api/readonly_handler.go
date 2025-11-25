@@ -191,10 +191,6 @@ func (h *ReadOnlyHandler) GetSessionStatus(c *gin.Context) {
 func (h *ReadOnlyHandler) GetOrder(c *gin.Context) {
 }
 
-func (h *ReadOnlyHandler) ListDeviceOrders(c *gin.Context) {
-	c.JSON(200, gin.H{"orders": ""})
-}
-
 // Ready 快速就绪检查
 func (h *ReadOnlyHandler) Ready(c *gin.Context) {
 	// 检查数据库

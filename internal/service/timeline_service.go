@@ -64,38 +64,6 @@ func (s *TimelineService) GetTimeline(ctx context.Context, testSessionID string)
 		},
 	}
 
-	// 1. 查询订单数据
-	orderEvents, err := s.getOrderEvents(ctx, testSessionID)
-	if err != nil {
-		s.logger.Warn("failed to get order events",
-			zap.String("test_session_id", testSessionID),
-			zap.Error(err))
-	} else {
-		// 累积订单相关事件
-		timeline.Events = append(timeline.Events, orderEvents...)
-		timeline.Summary.OrdersCreated = countEventsByType(orderEvents, "db_operation")
-
-		// 统计异常订单（例如fallback_stop_without_order）
-		anomalyCount := 0
-		fallbackAnomalyCount := 0
-		for _, ev := range orderEvents {
-			if data := ev.Data; data != nil {
-				if v, ok := data["is_anomaly"].(bool); ok && v {
-					anomalyCount++
-					if reason, ok := data["failure_reason"].(*string); ok && reason != nil && *reason == "fallback_stop_without_order" {
-						fallbackAnomalyCount++
-					}
-				}
-			}
-		}
-		if anomalyCount > 0 {
-			timeline.Summary.Details["anomaly_orders"] = anomalyCount
-		}
-		if fallbackAnomalyCount > 0 {
-			timeline.Summary.Details["fallback_stop_anomalies"] = fallbackAnomalyCount
-		}
-	}
-
 	// 2. 查询出站命令
 	cmdEvents, err := s.getOutboundCommandEvents(ctx, testSessionID)
 	if err != nil {
@@ -142,109 +110,7 @@ func (s *TimelineService) GetTimeline(ctx context.Context, testSessionID string)
 	timeline.Summary.TotalEvents = len(timeline.Events)
 	timeline.Summary.Errors = countEventsByType(timeline.Events, "error")
 
-	// 获取最终状态
-	if timeline.Summary.OrdersCreated > 0 && len(orderEvents) > 0 {
-		// 从最后一个订单事件中提取状态
-		lastOrderEvent := orderEvents[len(orderEvents)-1]
-		if status, ok := lastOrderEvent.Data["status"]; ok {
-			timeline.Summary.FinalStatus = getOrderStatusText(status)
-		}
-	}
-
 	return timeline, nil
-}
-
-// getOrderEvents 获取订单相关事件
-func (s *TimelineService) getOrderEvents(ctx context.Context, testSessionID string) ([]TimelineEvent, error) {
-	query := `
-		SELECT
-			order_no, device_id, port_no, status, failure_reason,
-			start_time, end_time, amount_cent, kwh_0p01,
-			created_at, updated_at
-		FROM orders
-		WHERE test_session_id = $1
-		ORDER BY created_at ASC
-	`
-
-	rows, err := s.repo.Pool.Query(ctx, query, testSessionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var events []TimelineEvent
-	for rows.Next() {
-		var (
-			orderNo       string
-			deviceID      int
-			portNo        int
-			status        int
-			failureReason *string
-			startTime     *time.Time
-			endTime       *time.Time
-			amountCent    int
-			kwh0p01       int
-			createdAt     time.Time
-			updatedAt     time.Time
-		)
-
-		if err := rows.Scan(&orderNo, &deviceID, &portNo, &status, &failureReason,
-			&startTime, &endTime, &amountCent, &kwh0p01,
-			&createdAt, &updatedAt); err != nil {
-			return nil, err
-		}
-
-		statusText := getOrderStatusText(status)
-		isAnomaly := status == 4 && failureReason != nil && *failureReason != ""
-		description := "订单创建"
-		if isAnomaly {
-			description = "异常订单创建"
-		}
-
-		// 订单创建事件
-		events = append(events, TimelineEvent{
-			Timestamp:   createdAt,
-			Type:        "db_operation",
-			Source:      "orders",
-			Description: description,
-			Data: map[string]interface{}{
-				"order_no":       orderNo,
-				"device_id":      deviceID,
-				"port_no":        portNo,
-				"status":         status,
-				"status_text":    statusText,
-				"amount_cent":    amountCent,
-				"is_anomaly":     isAnomaly,
-				"failure_reason": failureReason,
-			},
-		})
-
-		// 如果订单有更新，添加更新事件
-		if !updatedAt.Equal(createdAt) {
-			updateDesc := "订单状态更新"
-			if isAnomaly {
-				updateDesc = "异常订单状态更新"
-			}
-
-			events = append(events, TimelineEvent{
-				Timestamp:   updatedAt,
-				Type:        "db_operation",
-				Source:      "orders",
-				Description: updateDesc,
-				Data: map[string]interface{}{
-					"order_no":       orderNo,
-					"status":         status,
-					"status_text":    statusText,
-					"kwh_0p01":       kwh0p01,
-					"amount_cent":    amountCent,
-					"is_anomaly":     isAnomaly,
-					"failure_reason": failureReason,
-				},
-			})
-		}
-	}
-
-	return events, nil
 }
 
 // getOutboundCommandEvents 获取出站命令事件

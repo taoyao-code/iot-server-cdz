@@ -62,34 +62,6 @@ type Port struct {
 
 func (Port) TableName() string { return "ports" }
 
-// Order 映射 orders 表
-type Order struct {
-	ID         int64      `gorm:"column:id;primaryKey;autoIncrement"`
-	DeviceID   int64      `gorm:"column:device_id;not null;index"`
-	PortNo     int32      `gorm:"column:port_no;not null;index:idx_orders_device_port,priority:2"`
-	OrderNo    string     `gorm:"column:order_no;type:text;not null;uniqueIndex"`
-	BusinessNo int32      `gorm:"column:business_no;not null;default:0;index:idx_orders_business_no,priority:2"`
-	StartTime  *time.Time `gorm:"column:start_time"`
-	EndTime    *time.Time `gorm:"column:end_time"`
-	// 以 0.01kWh 为单位
-	Kwh0p01 *int64 `gorm:"column:kwh_0p01"`
-	// 金额（分）
-	AmountCent *int64 `gorm:"column:amount_cent"`
-	// 结束原因
-	EndReason *int32 `gorm:"column:end_reason"`
-	// 订单状态
-	Status     int32     `gorm:"column:status;not null;default:0"`
-	ChargeMode int32     `gorm:"column:charge_mode;not null;default:1"`
-	CreatedAt  time.Time `gorm:"column:created_at;autoCreateTime"`
-	UpdatedAt  time.Time `gorm:"column:updated_at;autoUpdateTime"`
-	// 失败原因说明
-	FailureReason *string `gorm:"column:failure_reason;type:text"`
-	// E2E 测试会话标识
-	TestSessionID *string `gorm:"column:test_session_id;type:text;index:idx_orders_test_session,where:test_session_id IS NOT NULL"`
-}
-
-func (Order) TableName() string { return "orders" }
-
 // CmdLog 映射 cmd_log 表（上下行指令日志）
 type CmdLog struct {
 	ID            int64     `gorm:"column:id;primaryKey;autoIncrement"`

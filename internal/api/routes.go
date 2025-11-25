@@ -50,9 +50,5 @@ func RegisterReadOnlyRoutes(
 	// 会话管理
 	api.GET("/sessions/:device_id", handler.GetSessionStatus)
 
-	// 订单管理
-	api.GET("/orders/:order_id", handler.GetOrder)
-	api.GET("/devices/:device_id/orders", handler.ListDeviceOrders)
-
 	logger.Info("readonly routes registered", zap.Int("endpoints", 6))
 }
