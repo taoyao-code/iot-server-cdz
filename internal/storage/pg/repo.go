@@ -2,6 +2,7 @@ package pg
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -68,40 +69,35 @@ func (r *Repository) UpsertOrderProgress(ctx context.Context, deviceID int64, po
 	return err
 }
 
-// SettleOrder 结算订单（结束时间、耗电、金额占位、结束原因）
-// 兼容两类调用方：
-// 1. 旧协议/AP3000 等直接以 order_no=orderHex 落库的订单
-// 2. BKV/第三方 API：使用 business_no 关联订单，orderHex 为 16 进制业务号
+// SettleOrder 结算订单，仅按 business_no 匹配更新。
+// 规范：未匹配到业务号/订单号时直接返回错误，不造单、不写库。
 func (r *Repository) SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, reason int) error {
-	// 优先尝试通过 device_id+port_no+business_no 关联已有订单（第三方 StartCharge 流程）
+	// 尝试通过 device_id+port_no+business_no 关联已有订单（第三方 StartCharge 流程）
 	// orderHex 为 16 进制业务号，例如 "FF01"
-	if biz, err := strconv.ParseInt(orderHex, 16, 32); err == nil {
-		const updateByBiz = `
-			UPDATE orders
-			SET end_time   = NOW(),
-			    kwh_0p01   = $4,
-			    end_reason = $5,
-			    status     = 3,
-			    updated_at = NOW()
-			WHERE device_id   = $1
-			  AND port_no     = $2
-			  AND business_no = $3
-		`
-		if res, err := r.Pool.Exec(ctx, updateByBiz, deviceID, portNo, int(biz), kwh01, reason); err == nil {
-			if rows := res.RowsAffected(); rows > 0 {
-				return nil
-			}
-		}
+	biz, err := strconv.ParseInt(orderHex, 16, 32)
+	if err != nil {
+		return fmt.Errorf("settle_order: invalid business_no hex %q: %w", orderHex, err)
 	}
 
-	// 回退路径：按 order_no upsert（兼容老协议/测试用例）
-	const q = `
-		INSERT INTO orders (device_id, port_no, order_no, start_time, end_time, kwh_0p01, end_reason, status)
-		VALUES ($1,$2,$3,NOW()-make_interval(secs => $4), NOW(), $5, $6, 3)
-		ON CONFLICT (order_no)
-		DO UPDATE SET end_time=NOW(), kwh_0p01=$5, end_reason=$6, status=3, updated_at=NOW()`
-	_, err := r.Pool.Exec(ctx, q, deviceID, portNo, orderHex, durationSec, kwh01, reason)
-	return err
+	const updateByBiz = `
+		UPDATE orders
+		SET end_time   = NOW(),
+		    kwh_0p01   = $4,
+		    end_reason = $5,
+		    status     = 3,
+		    updated_at = NOW()
+		WHERE device_id   = $1
+		  AND port_no     = $2
+		  AND business_no = $3
+	`
+	res, err := r.Pool.Exec(ctx, updateByBiz, deviceID, portNo, int(biz), kwh01, reason)
+	if err != nil {
+		return err
+	}
+	if rows := res.RowsAffected(); rows == 0 {
+		return fmt.Errorf("settle_order: no matching order found for device_id=%d port_no=%d business_no=%s", deviceID, portNo, orderHex)
+	}
+	return nil
 }
 
 // AckOutboundByMsgID 根据 device_id+msg_id 标记下行队列完成或失败
