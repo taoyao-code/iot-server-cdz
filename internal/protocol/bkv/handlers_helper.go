@@ -181,25 +181,17 @@ func (h *Handlers) collectChargingMetrics(deviceID string, portNo int, status ui
 }
 
 // (h *Handlers) handleControlChargingEnd 处理控制帧中的充电结束上报
+// 规范：端口收敛仅依赖 SessionEnded.NextPortStatus，不在充电结束路径发送 PortSnapshot
 func (h *Handlers) handleControlChargingEnd(ctx context.Context, f *Frame, deviceID string, end *BKVChargingEnd) {
-	// 1. 发送 PortSnapshot 事件
-	rawStatus := int32(end.Status)
+	// 发送 SessionEnded 事件，端口状态收敛由核心通过 NextPortStatus 完成
+	nextStatus := int32(0x90) // 空闲: bit7(在线)+bit4(空载)
+	rawReason := int32(end.EndReason)
+	bizNo := fmt.Sprintf("%04X", end.BusinessNo)
 	var powerW *int32
 	if end.InstantPower > 0 {
 		p := int32(end.InstantPower) / 10 // 0.1W -> W
 		powerW = &p
 	}
-
-	evPS := NewEventBuilder(deviceID).
-		WithPort(int(end.Port)).
-		WithSocketNo(int(end.SocketNo)).
-		BuildPortSnapshot(rawStatus, powerW)
-	h.emitter().Emit(ctx, evPS)
-
-	// 2. 发送 SessionEnded 事件
-	nextStatus := int32(0x90) // 空闲: bit7(在线)+bit4(空载)
-	rawReason := int32(end.EndReason)
-	bizNo := fmt.Sprintf("%04X", end.BusinessNo)
 
 	evEnd := NewEventBuilder(deviceID).
 		WithPort(int(end.Port)).
@@ -261,34 +253,17 @@ func (h *Handlers) handleControlChargingProgress(ctx context.Context, deviceID s
 }
 
 // (h *Handlers) handleControlUplinkStatus 处理控制上行状态更新
+// 规范：控制 ACK 路径不写入 PortSnapshot，端口状态由状态上报或 SessionEnded 决定
 func (h *Handlers) handleControlUplinkStatus(ctx context.Context, deviceID string, socketNo, portNo int, switchFlag byte, businessNo uint16) {
-	status := int32(0x90) // 默认空闲: bit7(在线)+bit4(空载)
-	if switchFlag == 0x01 {
-		status = 0xA0 // 充电中: bit7(在线)+bit5(充电)
-	}
-
-	bizNo := fmt.Sprintf("%04X", businessNo)
-	ev := NewEventBuilder(deviceID).
-		WithPort(portNo).
-		WithSocketNo(socketNo).
-		WithBusinessNo(bizNo).
-		BuildPortSnapshot(status, nil)
-
-	h.emitter().Emit(ctx, ev)
+	// 规范：仅保留日志，不发送 PortSnapshot 事件
+	// 端口状态应由状态上报(0x1000/0x1017)或 SessionEnded 事件决定
 }
 
 // (h *Handlers) handleControlDownlinkCommand 处理控制下行命令
+// 规范：控制下行路径不写入 PortSnapshot，端口状态由状态上报或 SessionEnded 决定
 func (h *Handlers) handleControlDownlinkCommand(ctx context.Context, deviceID string, cmd *BKVControlCommand) {
-	status := int32(0x90) // 空闲: bit7(在线)+bit4(空载)
-	if cmd.Switch == SwitchOn {
-		status = 0xA0 // 充电中: bit7(在线)+bit5(充电)
-	}
-
-	ev := NewEventBuilder(deviceID).
-		WithPort(int(cmd.Port)).
-		BuildPortSnapshot(status, nil)
-
-	h.emitter().Emit(ctx, ev)
+	// 规范：仅保留日志，不发送 PortSnapshot 事件
+	// 端口状态应由状态上报(0x1000/0x1017)或 SessionEnded 事件决定
 }
 
 // (h *Handlers) sendDownlinkReply 发送下行回复（通用）
