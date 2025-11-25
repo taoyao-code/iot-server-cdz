@@ -71,11 +71,6 @@ The middleware core SHALL instruct protocol drivers only through normalized comm
 
 Protocol drivers MUST NOT access the middleware database, transaction layers, or upstream business services directly, and MUST rely solely on the driver API to report state and receive commands.
 
-#### Scenario: Preventing drivers from updating orders directly
-- **WHEN** a protocol driver needs to reflect a change in charging status or completion reason
-- **THEN** it MUST emit the appropriate normalized event (such as `SessionStarted`, `SessionProgress`, or `SessionEnded`) through the driver API
-- **AND** all order lifecycle transitions, consistency fixes, and third-party notifications MUST be handled by middleware core modules in response to these events.
-
 #### Scenario: Preventing drivers from querying core storage
 - **WHEN** a protocol driver needs information about a device, port, or session (for example to map a device serial number to an internal identifier)
 - **THEN** it MUST obtain this information through explicit driver API calls or notifications (such as device/product notify callbacks)
