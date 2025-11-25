@@ -44,7 +44,7 @@ lint:
 build:
 	@echo "构建应用..."
 	GOOS=$(shell go env GOOS) GOARCH=$(shell go env GOARCH) \
-	go build -ldflags="-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X main.GitCommit=$(GIT_COMMIT)" \
+	go build -ldflags="-X main.Version=$(VERSION) -X 'main.BuildTime=$(BUILD_TIME)' -X main.GitCommit=$(GIT_COMMIT)" \
 	-o bin/$(APP) ./cmd/server
 	@echo "构建完成: bin/$(APP) (version: $(VERSION))"
 
