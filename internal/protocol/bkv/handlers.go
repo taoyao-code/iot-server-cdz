@@ -273,10 +273,20 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 	deviceID := extractDeviceIDOrDefault(f)
 
 	if f.IsUplink() {
-		// 1. 处理充电结束/功率模式结束上报（子命令 0x02 / 0x18）
+		// 1. 处理子命令 0x02 / 0x18 的帧
+		// 关键：必须检查 Status 的 bit5 位来判断是否为真正的充电结束
+		// bit5=1 表示仍在充电，只应更新端口快照；bit5=0 表示充电已结束
 		if len(f.Data) >= 3 && (f.Data[2] == 0x02 || f.Data[2] == 0x18) {
 			if end, err := ParseBKVChargingEnd(f.Data); err == nil {
-				h.handleControlChargingEnd(ctx, f, deviceID, end)
+				// 检查端口状态位 bit5（0x20）：1=充电中，0=非充电
+				isStillCharging := (end.Status & 0x20) != 0
+				if isStillCharging {
+					// 端口仍在充电中，只发送 PortSnapshot 事件更新状态，不触发 SessionEnded
+					h.handleControlChargingProgress(ctx, deviceID, end)
+				} else {
+					// 端口已停止充电，触发充电结束流程
+					h.handleControlChargingEnd(ctx, f, deviceID, end)
+				}
 				return nil
 			}
 		}

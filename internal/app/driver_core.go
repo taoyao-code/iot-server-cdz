@@ -232,71 +232,79 @@ func (d *DriverCore) handleSessionEnded(ctx context.Context, ev *coremodel.CoreE
 		rawReason = int(*payload.RawReason)
 	}
 
-	return d.core.WithTx(ctx, func(repo storage.CoreRepo) error {
-		device, err := repo.EnsureDevice(ctx, phyID)
-		if err != nil {
-			if d.log != nil {
-				d.log.Warn("driver core: ensure device failed on session ended",
-					zap.String("device_phy_id", phyID),
-					zap.Error(err))
-			}
-			return err
+	// 确定端口终态
+	status := payload.NextPortStatus
+	if status == nil {
+		if payload.RawStatus != nil {
+			status = payload.RawStatus
+		} else {
+			idle := defaultIdleStatus(nil)
+			status = &idle
 		}
+	}
 
-		if orderNo == "" && bizPtr != nil {
-			orderNo = fmt.Sprintf("%04X", *bizPtr)
-		}
-		if orderNo == "" {
-			orderNo = fmt.Sprintf("AUTO-END-%d-%d", device.ID, portNo)
-		}
+	var power *int32
+	if payload.InstantPowerW != nil {
+		p := *payload.InstantPowerW
+		power = &p
+	}
 
-		if err := repo.SettleOrder(ctx, device.ID, int(portNo), orderNo, int(payload.DurationSec), int(payload.EnergyKWh01), rawReason); err != nil {
+	// 获取设备信息
+	device, err := d.core.EnsureDevice(ctx, phyID)
+	if err != nil {
+		if d.log != nil {
+			d.log.Warn("driver core: ensure device failed on session ended",
+				zap.String("device_phy_id", phyID),
+				zap.Error(err))
+		}
+		return err
+	}
+
+	if orderNo == "" && bizPtr != nil {
+		orderNo = fmt.Sprintf("%04X", *bizPtr)
+	}
+	if orderNo == "" {
+		orderNo = fmt.Sprintf("AUTO-END-%d-%d", device.ID, portNo)
+	}
+
+	// 优先持久化端口终态：确保端口状态收敛，即使后续结算失败
+	// 遵循规范：充电结束时端口必须释放，防止端口长期锁定
+	if status != nil {
+		if err := d.core.UpsertPortSnapshot(ctx, device.ID, portNo, *status, power, occurredAt); err != nil {
 			if d.log != nil {
-				d.log.Error("driver core: settle order failed",
+				d.log.Error("driver core: upsert port snapshot failed on session ended",
 					zap.String("device_phy_id", phyID),
 					zap.Int32("port_no", portNo),
-					zap.String("order_no", orderNo),
 					zap.Error(err))
 			}
 			return err
 		}
+	}
 
-		status := payload.NextPortStatus
-		if status == nil {
-			if payload.RawStatus != nil {
-				status = payload.RawStatus
-			} else {
-				idle := defaultIdleStatus(nil)
-				status = &idle
-			}
+	// 尝试结算订单：失败时记录错误但不影响已持久化的端口状态
+	var settleErr error
+	if err := d.core.SettleOrder(ctx, device.ID, int(portNo), orderNo, int(payload.DurationSec), int(payload.EnergyKWh01), rawReason); err != nil {
+		settleErr = err
+		if d.log != nil {
+			d.log.Error("driver core: settle order failed (port already released)",
+				zap.String("device_phy_id", phyID),
+				zap.Int32("port_no", portNo),
+				zap.String("order_no", orderNo),
+				zap.Error(err))
 		}
+	}
 
-		if status != nil {
-			var power *int32
-			if payload.InstantPowerW != nil {
-				p := *payload.InstantPowerW
-				power = &p
-			}
-			if err := repo.UpsertPortSnapshot(ctx, device.ID, portNo, *status, power, occurredAt); err != nil {
-				if d.log != nil {
-					d.log.Error("driver core: upsert port snapshot failed after session ended",
-						zap.String("device_phy_id", phyID),
-						zap.Int32("port_no", portNo),
-						zap.Error(err))
-				}
-				return err
-			}
-		}
-
-		d.pushThirdpartyEvent(coremodel.EventSessionEnded, phyID, map[string]interface{}{
-			"order_no": orderNo,
-			"port_no":  portNo,
-			"energy":   payload.EnergyKWh01,
-			"duration": payload.DurationSec,
-			"reason":   rawReason,
-		})
-		return nil
+	// 无论结算是否成功，都推送第三方事件
+	d.pushThirdpartyEvent(coremodel.EventSessionEnded, phyID, map[string]interface{}{
+		"order_no": orderNo,
+		"port_no":  portNo,
+		"energy":   payload.EnergyKWh01,
+		"duration": payload.DurationSec,
+		"reason":   rawReason,
 	})
+
+	// 返回结算错误供上层观测，但端口状态已收敛
+	return settleErr
 }
 
 func (d *DriverCore) handleException(ctx context.Context, ev *coremodel.CoreEvent) error {

@@ -229,6 +229,37 @@ func (h *Handlers) handleControlChargingEnd(ctx context.Context, f *Frame, devic
 	h.sendChargingEndAck(ctx, f, nil, int(end.SocketNo), int(end.Port), true)
 }
 
+// (h *Handlers) handleControlChargingProgress 处理控制帧中的充电进行中状态上报
+// 当 subCmd=0x02/0x18 但 Status 的 bit5=1（仍在充电）时调用此函数
+// 只更新端口快照，不触发 SessionEnded
+func (h *Handlers) handleControlChargingProgress(ctx context.Context, deviceID string, end *BKVChargingEnd) {
+	// 1. 发送 PortSnapshot 事件更新端口状态
+	rawStatus := int32(end.Status)
+	var powerW *int32
+	if end.InstantPower > 0 {
+		p := int32(end.InstantPower) / 10 // 0.1W -> W
+		powerW = &p
+	}
+
+	bizNo := fmt.Sprintf("%04X", end.BusinessNo)
+
+	evPS := NewEventBuilder(deviceID).
+		WithPort(int(end.Port)).
+		WithSocketNo(int(end.SocketNo)).
+		WithBusinessNo(bizNo).
+		BuildPortSnapshot(rawStatus, powerW)
+	h.emitter().Emit(ctx, evPS)
+
+	// 2. 推送充电进度事件到Webhook（如果配置了事件队列）
+	if h.EventQueue != nil {
+		powerWVal := float64(end.InstantPower) / 10.0    // 0.1W -> W
+		currentA := float64(end.InstantCurrent) / 1000.0 // 0.001A -> A
+		energyKwh := float64(end.EnergyUsed) / 100.0     // 0.01kWh -> kWh
+		durationS := int(end.ChargingTime) * 60          // min -> sec
+		h.pushChargingProgressEvent(ctx, deviceID, int(end.Port), bizNo, powerWVal, currentA, 0, energyKwh, durationS, nil)
+	}
+}
+
 // (h *Handlers) handleControlUplinkStatus 处理控制上行状态更新
 func (h *Handlers) handleControlUplinkStatus(ctx context.Context, deviceID string, socketNo, portNo int, switchFlag byte, businessNo uint16) {
 	status := int32(0x90) // 默认空闲: bit7(在线)+bit4(空载)

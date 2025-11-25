@@ -662,13 +662,11 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 		}
 
 		// 转换端口状态：协议位图 -> 业务枚举（0=空闲,1=充电中,2=故障）
-		// 协议规范：bit7=在线, bit5=充电, bit4=空载；若功率>0但未置充电位，也视为充电中
+		// 协议规范：bit7=在线, bit5=充电, bit4=空载
+		// 注意：只根据位图判断充电状态，不使用功率推断（功率可能滞后或异常）
 		statusEnum := 0                           // 默认空闲
 		isPortOnline := (port.Status & 0x80) != 0 // bit7
 		isCharging := (port.Status & 0x20) != 0   // bit5
-		if !isCharging && powerW > 0 {
-			isCharging = true
-		}
 
 		if !isPortOnline {
 			statusEnum = 2 // 故障
