@@ -207,40 +207,6 @@ func (r *Repository) UpdatePortStatus(ctx context.Context, deviceID int64, portN
 	return nil
 }
 
-// CleanupPendingOrders 标记超时 pending 订单为完成状态。
-func (r *Repository) CleanupPendingOrders(ctx context.Context, deviceID int64, before time.Time) (int64, error) {
-	const pendingStatus int32 = 0
-	res := r.db.WithContext(ctx).
-		Model(&models.Order{}).
-		Where("device_id = ? AND status = ? AND created_at < ?", deviceID, pendingStatus, before).
-		Updates(map[string]interface{}{
-			"status":     3,
-			"updated_at": gorm.Expr("NOW()"),
-		})
-	if res.Error != nil {
-		return 0, res.Error
-	}
-	return res.RowsAffected, nil
-}
-
-// LockActiveOrderForPort 锁定指定端口的活跃订单
-func (r *Repository) LockActiveOrderForPort(ctx context.Context, deviceID int64, portNo int32) (*models.Order, bool, error) {
-	var order models.Order
-	res := r.db.WithContext(ctx).
-		Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-		Where("device_id = ? AND port_no = ? AND status IN ?", deviceID, portNo, lockOrderStatuses).
-		Order("created_at DESC").
-		Limit(1).
-		Find(&order)
-	if res.Error != nil {
-		return nil, false, res.Error
-	}
-	if res.RowsAffected == 0 {
-		return nil, false, nil
-	}
-	return &order, true, nil
-}
-
 // LockOrCreatePort 行锁定端口记录，若不存在则创建后返回
 func (r *Repository) LockOrCreatePort(ctx context.Context, deviceID int64, portNo int32) (*models.Port, error) {
 	var port models.Port
@@ -273,113 +239,12 @@ func (r *Repository) LockOrCreatePort(ctx context.Context, deviceID int64, portN
 	return &port, nil
 }
 
-// CreateOrder 创建订单记录。
-func (r *Repository) CreateOrder(ctx context.Context, order *models.Order) error {
-	return r.db.WithContext(ctx).Create(order).Error
-}
-
 // activeOrderStatuses 标记进行中订单状态。
 var activeOrderStatuses = []int32{0, 1, 2}
 
 // lockOrderStatuses 标记锁定端口的订单状态 - 排除过渡状态(8,9,10)
 // 过渡状态(cancelling/stopping/interrupted)的订单正在结束过程中，端口应该可以被重用
 var lockOrderStatuses = []int32{0, 1, 2}
-
-// GetActiveOrder 返回设备端口最近的活跃订单。
-func (r *Repository) GetActiveOrder(ctx context.Context, deviceID int64, portNo int32) (*models.Order, error) {
-	var order models.Order
-	err := r.db.WithContext(ctx).
-		Where("device_id = ? AND port_no = ? AND status IN ?", deviceID, portNo, activeOrderStatuses).
-		Order("created_at DESC").
-		First(&order).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
-	}
-	return &order, err
-}
-
-// GetOrderByOrderNo 根据订单号查询。
-func (r *Repository) GetOrderByOrderNo(ctx context.Context, orderNo string) (*models.Order, error) {
-	var order models.Order
-	err := r.db.WithContext(ctx).Where("order_no = ?", orderNo).First(&order).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
-	}
-	return &order, err
-}
-
-// GetOrderByBusinessNo 根据 business_no 查询订单。
-func (r *Repository) GetOrderByBusinessNo(ctx context.Context, deviceID int64, businessNo int32) (*models.Order, error) {
-	var order models.Order
-	err := r.db.WithContext(ctx).
-		Where("device_id = ? AND business_no = ?", deviceID, businessNo).
-		Order("id DESC").
-		First(&order).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
-	}
-	return &order, err
-}
-
-// UpdateOrderStatus 更新订单状态。
-func (r *Repository) UpdateOrderStatus(ctx context.Context, orderID int64, status int32) error {
-	res := r.db.WithContext(ctx).
-		Model(&models.Order{}).
-		Where("id = ?", orderID).
-		Updates(map[string]interface{}{
-			"status":     status,
-			"updated_at": gorm.Expr("NOW()"),
-		})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
-}
-
-// CompleteOrder 完成订单并写入结束信息。
-func (r *Repository) CompleteOrder(ctx context.Context, deviceID int64, portNo int32, endReason int32, endTime time.Time, amountCent *int64, kwh0p01 *int64) error {
-	updates := map[string]interface{}{
-		"end_time":   endTime,
-		"end_reason": endReason,
-		"status":     3,
-		"updated_at": gorm.Expr("NOW()"),
-	}
-	if amountCent != nil {
-		updates["amount_cent"] = amountCent
-	}
-	if kwh0p01 != nil {
-		updates["kwh_0p01"] = kwh0p01
-	}
-
-	res := r.db.WithContext(ctx).
-		Model(&models.Order{}).
-		Where("device_id = ? AND port_no = ?", deviceID, portNo).
-		Where("status IN ?", []int32{2, 9}).
-		Updates(updates)
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
-}
-
-// SettleOrder 结算订单，支持多种匹配策略。
-// 1. 首先尝试按 business_no 精确匹配（第三方 API 创建的订单）
-// 2. 如果失败，尝试按 device_id + port_no 匹配活跃订单
-// 3. 如果仍然失败，自动创建并完成订单（确保充电数据不丢失）
-func (r *Repository) SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh0p01 int, reason int) error {
-	return nil
-}
-
-// UpsertOrderProgress 插入或更新订单进度。
-func (r *Repository) UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int32, orderNo string, businessNo *int32, durationSec int32, kwh0p01 int32, status int32, powerW01 *int32) error {
-	return nil
-}
 
 // AppendCmdLog 写入指令日志。
 func (r *Repository) AppendCmdLog(ctx context.Context, log *models.CmdLog) error {
