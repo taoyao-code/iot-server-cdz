@@ -15,7 +15,8 @@
       "Bash(xargs:*)",
       "Bash(go build:*)",
       "Bash(cat:*)",
-      "Bash(psql:*)"
+      "Bash(psql:*)",
+      "Bash(go test:*)"
     ],
     "deny": [],
     "ask": []
