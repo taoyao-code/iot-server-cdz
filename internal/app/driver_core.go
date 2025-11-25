@@ -21,17 +21,6 @@ type DriverCore struct {
 	log    *zap.Logger
 }
 
-const (
-	orderStatusPending     = 0
-	orderStatusConfirmed   = 1
-	orderStatusCharging    = 2
-	orderStatusCompleted   = 3
-	orderStatusCancelled   = 5
-	orderStatusFailed      = 6
-	orderStatusStopping    = 9
-	orderStatusInterrupted = 10
-)
-
 func NewDriverCore(core storage.CoreRepo, events *thirdparty.EventQueue, log *zap.Logger) *DriverCore {
 	return &DriverCore{
 		core:   core,
@@ -84,56 +73,53 @@ func (d *DriverCore) handleSessionStarted(ctx context.Context, ev *coremodel.Cor
 		return nil
 	}
 
-	orderNo, bizPtr := parseBusiness(ev.BusinessNo, payload.BusinessNo)
+	_, bizPtr := parseBusiness(ev.BusinessNo, payload.BusinessNo)
 	portNo := int32(payload.PortNo)
 	startedAt := defaultTime(payload.StartedAt)
 	status := defaultChargingStatus(payload.Metadata)
 
-	return d.core.WithTx(ctx, func(repo storage.CoreRepo) error {
-		device, err := repo.EnsureDevice(ctx, phyID)
-		if err != nil {
-			if d.log != nil {
-				d.log.Warn("driver core: ensure device failed on session started",
-					zap.String("device_phy_id", phyID),
-					zap.Error(err))
-			}
-			return err
+	// 获取设备信息
+	device, err := d.core.EnsureDevice(ctx, phyID)
+	if err != nil {
+		if d.log != nil {
+			d.log.Warn("driver core: ensure device failed on session started",
+				zap.String("device_phy_id", phyID),
+				zap.Error(err))
 		}
+		return err
+	}
 
-		if orderNo == "" && bizPtr != nil {
-			orderNo = fmt.Sprintf("%04X", *bizPtr)
-		}
-		if orderNo == "" {
-			orderNo = fmt.Sprintf("AUTO-START-%d-%d-%d", device.ID, portNo, startedAt.Unix())
-		}
+	// 生成业务号标识（用于事件推送）
+	businessNo := ""
+	if bizPtr != nil {
+		businessNo = fmt.Sprintf("%04X", *bizPtr)
+	}
 
-		if err := repo.UpsertOrderProgress(ctx, device.ID, portNo, orderNo, bizPtr, 0, 0, orderStatusCharging, payload.TargetPowerW); err != nil {
-			if d.log != nil {
-				d.log.Error("driver core: upsert order progress failed",
-					zap.String("device_phy_id", phyID),
-					zap.Int32("port_no", portNo),
-					zap.String("order_no", orderNo),
-					zap.Error(err))
-			}
-			return err
+	// 更新端口状态为充电中
+	if err := d.core.UpsertPortSnapshot(ctx, device.ID, portNo, status, payload.TargetPowerW, startedAt); err != nil {
+		if d.log != nil {
+			d.log.Error("driver core: upsert port snapshot failed on session start",
+				zap.String("device_phy_id", phyID),
+				zap.Int32("port_no", portNo),
+				zap.Error(err))
 		}
+		return err
+	}
 
-		if err := repo.UpsertPortSnapshot(ctx, device.ID, portNo, status, payload.TargetPowerW, startedAt); err != nil {
-			if d.log != nil {
-				d.log.Error("driver core: upsert port snapshot failed on session start",
-					zap.String("device_phy_id", phyID),
-					zap.Int32("port_no", portNo),
-					zap.Error(err))
-			}
-			return err
-		}
-
-		d.pushThirdpartyEvent(coremodel.EventSessionStarted, phyID, map[string]interface{}{
-			"order_no": orderNo,
-			"port_no":  portNo,
-		})
-		return nil
+	// 推送第三方事件（供业务系统消费）
+	d.pushThirdpartyEvent(coremodel.EventSessionStarted, phyID, map[string]interface{}{
+		"business_no": businessNo,
+		"port_no":     portNo,
 	})
+
+	if d.log != nil {
+		d.log.Info("driver core: session started",
+			zap.String("device_phy_id", phyID),
+			zap.Int32("port_no", portNo),
+			zap.String("business_no", businessNo))
+	}
+
+	return nil
 }
 
 func (d *DriverCore) handleSessionProgress(ctx context.Context, ev *coremodel.CoreEvent) error {
@@ -147,7 +133,7 @@ func (d *DriverCore) handleSessionProgress(ctx context.Context, ev *coremodel.Co
 		return nil
 	}
 
-	orderNo, bizPtr := parseBusiness(ev.BusinessNo, payload.BusinessNo)
+	_, bizPtr := parseBusiness(ev.BusinessNo, payload.BusinessNo)
 	portNo := int32(payload.PortNo)
 
 	energy := int32(0)
@@ -164,53 +150,52 @@ func (d *DriverCore) handleSessionProgress(ctx context.Context, ev *coremodel.Co
 		status = *payload.RawStatus
 	}
 
-	return d.core.WithTx(ctx, func(repo storage.CoreRepo) error {
-		device, err := repo.EnsureDevice(ctx, phyID)
-		if err != nil {
-			if d.log != nil {
-				d.log.Warn("driver core: ensure device failed on session progress",
-					zap.String("device_phy_id", phyID),
-					zap.Error(err))
-			}
-			return err
+	// 获取设备信息
+	device, err := d.core.EnsureDevice(ctx, phyID)
+	if err != nil {
+		if d.log != nil {
+			d.log.Warn("driver core: ensure device failed on session progress",
+				zap.String("device_phy_id", phyID),
+				zap.Error(err))
 		}
+		return err
+	}
 
-		if orderNo == "" && bizPtr != nil {
-			orderNo = fmt.Sprintf("%04X", *bizPtr)
-		}
-		if orderNo == "" {
-			orderNo = fmt.Sprintf("AUTO-PROGRESS-%d-%d", device.ID, portNo)
-		}
+	// 生成业务号标识（用于事件推送）
+	businessNo := ""
+	if bizPtr != nil {
+		businessNo = fmt.Sprintf("%04X", *bizPtr)
+	}
 
-		if err := repo.UpsertOrderProgress(ctx, device.ID, portNo, orderNo, bizPtr, duration, energy, orderStatusCharging, payload.PowerW); err != nil {
-			if d.log != nil {
-				d.log.Error("driver core: upsert order progress failed on progress",
-					zap.String("device_phy_id", phyID),
-					zap.Int32("port_no", portNo),
-					zap.String("order_no", orderNo),
-					zap.Error(err))
-			}
-			return err
+	// 更新端口状态
+	if err := d.core.UpsertPortSnapshot(ctx, device.ID, portNo, status, payload.PowerW, occurredAt); err != nil {
+		if d.log != nil {
+			d.log.Error("driver core: upsert port snapshot failed on progress",
+				zap.String("device_phy_id", phyID),
+				zap.Int32("port_no", portNo),
+				zap.Error(err))
 		}
+		return err
+	}
 
-		if err := repo.UpsertPortSnapshot(ctx, device.ID, portNo, status, payload.PowerW, occurredAt); err != nil {
-			if d.log != nil {
-				d.log.Error("driver core: upsert port snapshot failed on progress",
-					zap.String("device_phy_id", phyID),
-					zap.Int32("port_no", portNo),
-					zap.Error(err))
-			}
-			return err
-		}
-
-		d.pushThirdpartyEvent(coremodel.EventSessionProgress, phyID, map[string]interface{}{
-			"order_no": orderNo,
-			"port_no":  portNo,
-			"energy":   energy,
-			"duration": duration,
-		})
-		return nil
+	// 推送第三方事件（供业务系统消费）
+	d.pushThirdpartyEvent(coremodel.EventSessionProgress, phyID, map[string]interface{}{
+		"business_no": businessNo,
+		"port_no":     portNo,
+		"energy":      energy,
+		"duration":    duration,
 	})
+
+	if d.log != nil {
+		d.log.Debug("driver core: session progress",
+			zap.String("device_phy_id", phyID),
+			zap.Int32("port_no", portNo),
+			zap.String("business_no", businessNo),
+			zap.Int32("energy_kwh01", energy),
+			zap.Int32("duration_sec", duration))
+	}
+
+	return nil
 }
 
 func (d *DriverCore) handleSessionEnded(ctx context.Context, ev *coremodel.CoreEvent) error {
@@ -224,7 +209,7 @@ func (d *DriverCore) handleSessionEnded(ctx context.Context, ev *coremodel.CoreE
 		return nil
 	}
 
-	orderNo, bizPtr := parseBusiness(ev.BusinessNo, payload.BusinessNo)
+	_, bizPtr := parseBusiness(ev.BusinessNo, payload.BusinessNo)
 	portNo := int32(payload.PortNo)
 	occurredAt := defaultTime(payload.OccurredAt)
 	rawReason := 0
@@ -260,15 +245,13 @@ func (d *DriverCore) handleSessionEnded(ctx context.Context, ev *coremodel.CoreE
 		return err
 	}
 
-	if orderNo == "" && bizPtr != nil {
-		orderNo = fmt.Sprintf("%04X", *bizPtr)
-	}
-	if orderNo == "" {
-		orderNo = fmt.Sprintf("AUTO-END-%d-%d", device.ID, portNo)
+	// 生成业务号标识（用于事件推送）
+	businessNo := ""
+	if bizPtr != nil {
+		businessNo = fmt.Sprintf("%04X", *bizPtr)
 	}
 
-	// 优先持久化端口终态：确保端口状态收敛，即使后续结算失败
-	// 遵循规范：充电结束时端口必须释放，防止端口长期锁定
+	// 持久化端口终态：确保端口状态收敛
 	if status != nil {
 		if err := d.core.UpsertPortSnapshot(ctx, device.ID, portNo, *status, power, occurredAt); err != nil {
 			if d.log != nil {
@@ -281,30 +264,26 @@ func (d *DriverCore) handleSessionEnded(ctx context.Context, ev *coremodel.CoreE
 		}
 	}
 
-	// 尝试结算订单：失败时记录错误但不影响已持久化的端口状态
-	var settleErr error
-	if err := d.core.SettleOrder(ctx, device.ID, int(portNo), orderNo, int(payload.DurationSec), int(payload.EnergyKWh01), rawReason); err != nil {
-		settleErr = err
-		if d.log != nil {
-			d.log.Error("driver core: settle order failed (port already released)",
-				zap.String("device_phy_id", phyID),
-				zap.Int32("port_no", portNo),
-				zap.String("order_no", orderNo),
-				zap.Error(err))
-		}
-	}
-
-	// 无论结算是否成功，都推送第三方事件
+	// 推送第三方事件（供业务系统消费）
 	d.pushThirdpartyEvent(coremodel.EventSessionEnded, phyID, map[string]interface{}{
-		"order_no": orderNo,
-		"port_no":  portNo,
-		"energy":   payload.EnergyKWh01,
-		"duration": payload.DurationSec,
-		"reason":   rawReason,
+		"business_no": businessNo,
+		"port_no":     portNo,
+		"energy":      payload.EnergyKWh01,
+		"duration":    payload.DurationSec,
+		"reason":      rawReason,
 	})
 
-	// 返回结算错误供上层观测，但端口状态已收敛
-	return settleErr
+	if d.log != nil {
+		d.log.Info("driver core: session ended",
+			zap.String("device_phy_id", phyID),
+			zap.Int32("port_no", portNo),
+			zap.String("business_no", businessNo),
+			zap.Int32("energy_kwh01", payload.EnergyKWh01),
+			zap.Int32("duration_sec", payload.DurationSec),
+			zap.Int("reason", rawReason))
+	}
+
+	return nil
 }
 
 func (d *DriverCore) handleException(ctx context.Context, ev *coremodel.CoreEvent) error {

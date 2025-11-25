@@ -273,20 +273,15 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 	deviceID := extractDeviceIDOrDefault(f)
 
 	if f.IsUplink() {
-		// 1. 处理子命令 0x02 / 0x18 的帧
-		// 关键：必须检查 Status 的 bit5 位来判断是否为真正的充电结束
-		// bit5=1 表示仍在充电，只应更新端口快照；bit5=0 表示充电已结束
+		// 1. 处理子命令 0x02 / 0x18 的帧（充电结束上报）
+		// 修复：子命令 0x02/0x18 即表示充电结束，不再检查 Status 的 bit5 位
+		// 原因：设备上报充电结束时，Status 字段可能仍显示 bit5=1（充电中），这是协议正常行为
+		// 参考：minimal_bkv_service.go 中的 isChargingEnd() 只检查子命令，不检查 Status
 		if len(f.Data) >= 3 && (f.Data[2] == 0x02 || f.Data[2] == 0x18) {
 			if end, err := ParseBKVChargingEnd(f.Data); err == nil {
-				// 检查端口状态位 bit5（0x20）：1=充电中，0=非充电
-				isStillCharging := (end.Status & 0x20) != 0
-				if isStillCharging {
-					// 端口仍在充电中，只发送 PortSnapshot 事件更新状态，不触发 SessionEnded
-					h.handleControlChargingProgress(ctx, deviceID, end)
-				} else {
-					// 端口已停止充电，触发充电结束流程
-					h.handleControlChargingEnd(ctx, f, deviceID, end)
-				}
+				// 子命令 0x02/0x18 直接触发充电结束流程
+				// Status 字段用于推导结束原因，不用于判断是否结束
+				h.handleControlChargingEnd(ctx, f, deviceID, end)
 				return nil
 			}
 		}

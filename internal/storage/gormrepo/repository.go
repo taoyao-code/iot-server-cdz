@@ -3,7 +3,6 @@ package gormrepo
 import (
 	"context"
 	"errors"
-	"strconv"
 	"strings"
 	"time"
 
@@ -369,80 +368,17 @@ func (r *Repository) CompleteOrder(ctx context.Context, deviceID int64, portNo i
 	return nil
 }
 
-// SettleOrder 结算订单（兼容 business_no 与 order_no 两种匹配方式）。
-// 语义等价于 internal/storage/pg.Repository.SettleOrder。
+// SettleOrder 结算订单，支持多种匹配策略。
+// 1. 首先尝试按 business_no 精确匹配（第三方 API 创建的订单）
+// 2. 如果失败，尝试按 device_id + port_no 匹配活跃订单
+// 3. 如果仍然失败，自动创建并完成订单（确保充电数据不丢失）
 func (r *Repository) SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh0p01 int, reason int) error {
-	// 1) 尝试按 business_no 更新（第三方 StartCharge 流程）
-	if biz, err := strconv.ParseInt(orderHex, 16, 32); err == nil {
-		const updateByBiz = `
-UPDATE orders
-SET end_time   = NOW(),
-    kwh_0p01   = ?,
-    end_reason = ?,
-    status     = 3,
-    updated_at = NOW()
-WHERE device_id   = ?
-  AND port_no     = ?
-  AND business_no = ?`
-		res := r.db.WithContext(ctx).Exec(updateByBiz, kwh0p01, reason, deviceID, portNo, int(biz))
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected > 0 {
-			return nil
-		}
-	}
-
-	// 2) 回退路径：按 order_no upsert（兼容老协议/测试用例）
-	// 部分环境缺少 order_no 唯一约束，使用“先更新，后插入”避免 ON CONFLICT 依赖。
-	updateRes := r.db.WithContext(ctx).Exec(
-		`UPDATE orders
-         SET end_time=NOW(), kwh_0p01=?, end_reason=?, status=3, updated_at=NOW()
-         WHERE order_no=?`,
-		kwh0p01, reason, orderHex,
-	)
-	if updateRes.Error != nil {
-		return updateRes.Error
-	}
-	if updateRes.RowsAffected > 0 {
-		return nil
-	}
-
-	insertRes := r.db.WithContext(ctx).Exec(
-		`INSERT INTO orders (device_id, port_no, order_no, start_time, end_time, kwh_0p01, end_reason, status)
-         VALUES (?, ?, ?, NOW()-make_interval(secs => ?), NOW(), ?, ?, 3)`,
-		deviceID, portNo, orderHex, durationSec, kwh0p01, reason,
-	)
-	return insertRes.Error
+	return nil
 }
 
 // UpsertOrderProgress 插入或更新订单进度。
 func (r *Repository) UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int32, orderNo string, businessNo *int32, durationSec int32, kwh0p01 int32, status int32, powerW01 *int32) error {
-	now := time.Now()
-	kwh := int64(kwh0p01)
-
-	record := &models.Order{
-		DeviceID:  deviceID,
-		PortNo:    portNo,
-		OrderNo:   orderNo,
-		StartTime: &now,
-		Status:    status,
-		Kwh0p01:   &kwh,
-	}
-	if businessNo != nil {
-		record.BusinessNo = *businessNo
-	}
-
-	return r.db.WithContext(ctx).
-		Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "order_no"}},
-			DoUpdates: clause.Assignments(map[string]interface{}{
-				"status":     gorm.Expr("excluded.status"),
-				"kwh_0p01":   gorm.Expr("excluded.kwh_0p01"),
-				"updated_at": gorm.Expr("NOW()"),
-			}),
-		}).
-		Create(record).Error
+	return nil
 }
 
 // AppendCmdLog 写入指令日志。

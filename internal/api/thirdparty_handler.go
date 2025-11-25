@@ -54,25 +54,6 @@ func NewThirdPartyHandler(
 	}
 }
 
-// mapPortStatusText 将端口状态枚举映射为可读文案（保持与历史实现一致）
-func mapPortStatusText(status int) string {
-	statusByte := status & 0xFF
-	isOnline := statusByte&0x01 != 0
-	isIdle := statusByte&0x08 != 0
-	isCharging := statusByte&0x80 != 0
-
-	switch {
-	case isCharging:
-		return "charging"
-	case !isOnline:
-		return "offline"
-	case isIdle:
-		return "free"
-	default:
-		return "occupied"
-	}
-}
-
 // StandardResponse 标准响应格式
 type StandardResponse struct {
 	Code      int         `json:"code"`           // 0=成功, >0=错误码
@@ -94,16 +75,6 @@ type StartChargeRequest struct {
 	ServiceFee      int    `json:"service_fee"`                                // 服务费率（千分比）
 	OrderNo         string `json:"order_no"`                                   // 第三方传入的订单号（可选）
 	BusinessNo      int    `json:"business_no"`                                // 第三方传入的业务号（可选，0表示使用派生值）
-}
-
-// TriggerOTARequest OTA 请求体（用于测试和参数校验）
-type TriggerOTARequest struct {
-	FirmwareURL  string `json:"firmware_url" binding:"required"`
-	Version      string `json:"version" binding:"required"`
-	MD5          string `json:"md5" binding:"required"`
-	Size         int    `json:"size" binding:"required"`
-	TargetType   int    `json:"target_type" binding:"required"`
-	TargetSocket int    `json:"target_socket"`
 }
 
 // GetDuration 获取时长（优先使用 duration_minutes）
@@ -193,7 +164,6 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		return
 	}
 
-	// 4. 生成订单号并派生业务号（BKV要求）
 	orderNo := req.OrderNo
 	if strings.TrimSpace(orderNo) == "" {
 		// 订单不存在，直接返回错误信息提示
@@ -206,6 +176,7 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		})
 		return
 	}
+	// TODO : 16位业务号派生规则需与核心系统保持一致
 	businessNo := uint16(req.BusinessNo)
 	if businessNo == 0 {
 		businessNo = deriveBusinessNo(orderNo)
@@ -271,7 +242,7 @@ func (h *ThirdPartyHandler) dispatchStartChargeCommand(
 	}
 
 	if h.driverCmd == nil {
-		return fmt.Errorf("driver command source not configured")
+		return fmt.Errorf("驱动程序命令源未配置")
 	}
 
 	durationMin := uint16(req.GetDuration())
@@ -294,9 +265,9 @@ func (h *ThirdPartyHandler) sendStartChargeViaDriver(
 	durationMin uint16,
 ) error {
 	if h.driverCmd == nil {
-		return fmt.Errorf("driver command source not configured")
+		return fmt.Errorf("驱动程序命令源未配置")
 	}
-	bizStr := strconv.Itoa(int(businessNo))
+	bizStr := strconv.Itoa(int(businessNo)) //
 	biz := coremodel.BusinessNo(bizStr)
 	modeCode := int32(chargeMode)
 	durationSec := int32(durationMin) * 60
@@ -334,7 +305,7 @@ func (h *ThirdPartyHandler) dispatchStopChargeCommand(
 	businessNo uint16,
 ) (bool, error) {
 	if h.driverCmd == nil {
-		return false, fmt.Errorf("driver command source not configured")
+		return false, fmt.Errorf("驱动程序命令源未配置")
 	}
 	if err := h.sendStopChargeViaDriver(ctx, devicePhyID, socketNo, portNo, businessNo, orderNo); err != nil {
 		return false, err
@@ -351,7 +322,7 @@ func (h *ThirdPartyHandler) sendStopChargeViaDriver(
 	orderNo string,
 ) error {
 	if h.driverCmd == nil {
-		return fmt.Errorf("driver command source not configured")
+		return fmt.Errorf("驱动程序命令源未配置")
 	}
 	biz := coremodel.BusinessNo(strconv.Itoa(int(businessNo)))
 	socket := int32(socketNo)
@@ -376,49 +347,14 @@ func (h *ThirdPartyHandler) sendStopChargeViaDriver(
 	return h.driverCmd.SendCoreCommand(ctx, cmd)
 }
 
-func (h *ThirdPartyHandler) dispatchQueryPortStatusCommand(
-	ctx context.Context,
-	deviceID int64,
-	devicePhyID string,
-	socketNo int,
-) error {
-	if h.driverCmd == nil {
-		return fmt.Errorf("driver command source not configured")
-	}
-	return h.sendQueryPortStatusViaDriver(ctx, devicePhyID, socketNo)
-}
-
-func (h *ThirdPartyHandler) sendQueryPortStatusViaDriver(
-	ctx context.Context,
-	devicePhyID string,
-	socketNo int,
-) error {
-	if h.driverCmd == nil {
-		return fmt.Errorf("driver command source not configured")
-	}
-
-	socket := int32(socketNo)
-	cmd := &coremodel.CoreCommand{
-		Type:      coremodel.CommandQueryPortStatus,
-		CommandID: fmt.Sprintf("query:%s:%d", devicePhyID, time.Now().UnixNano()),
-		DeviceID:  coremodel.DeviceID(devicePhyID),
-		IssuedAt:  time.Now(),
-		QueryPortStatus: &coremodel.QueryPortStatusPayload{
-			SocketNo: &socket,
-		},
-	}
-
-	return h.driverCmd.SendCoreCommand(ctx, cmd)
-}
-
 // getSocketMappingByUID 通过 socket_uid 查询插座映射。
 func (h *ThirdPartyHandler) getSocketMappingByUID(ctx context.Context, socketUID string) (*models.GatewaySocket, error) {
 	if h.core == nil {
-		return nil, fmt.Errorf("core repo not configured")
+		return nil, fmt.Errorf("核心存储库未配置")
 	}
 	uid := strings.TrimSpace(socketUID)
 	if uid == "" {
-		return nil, fmt.Errorf("socket_uid is required")
+		return nil, fmt.Errorf("socket_uid 是必填项")
 	}
 	return h.core.GetGatewaySocketByUID(ctx, uid)
 }
@@ -468,9 +404,7 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		zap.String("socket_uid", req.SocketUID),
 		zap.Int("port_no", *req.PortNo))
 
-	// 无状态模式：不强制设备/订单落库
-
-	// 1. 解析 socket_uid 获取 socket_no（查不到则报错，禁止 port_no 兜底）
+	// 1. 解析 socket_uid 获取 socket_no
 	mapping, err := h.getSocketMappingByUID(ctx, req.SocketUID)
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -512,17 +446,12 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		return
 	}
 
-	// 无状态模式：优先使用第三方提供的订单/业务号，否则生成临时号
+	// TODO：优先使用第三方提供的订单/业务号，否则生成临时号
 	orderNo := req.OrderNo
-	if strings.TrimSpace(orderNo) == "" {
-		orderNo = fmt.Sprintf("TMP_STOP_%d_%d", time.Now().Unix(), *req.PortNo)
-	}
 	businessNo := int64(req.BusinessNo)
 	if businessNo == 0 {
 		businessNo = int64(deriveBusinessNo(orderNo))
 	}
-
-	// 无状态模式：跳过订单状态更新，直接下发停止命令
 
 	biz := uint16(businessNo)
 	if biz == 0 {
@@ -564,11 +493,10 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		"status":       "stopping",
 		"note":         "无状态停止已下发，等待设备ACK",
 	}
-	message := "停止指令已下发"
 
 	c.JSON(http.StatusOK, StandardResponse{
 		Code:      0,
-		Message:   message,
+		Message:   "停止指令已下发",
 		Data:      responseData,
 		RequestID: requestID,
 		Timestamp: time.Now().Unix(),
@@ -617,41 +545,6 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 		ports = nil // 继续返回设备信息，即使端口查询失败
 	}
 
-	// 4. 查询活跃订单（status IN (0,1,2) = pending/charging/ending）
-	activeOrders := []struct {
-		OrderNo string
-		PortNo  int
-	}{}
-
-	queryOrders := `
-		SELECT order_no, port_no
-		FROM orders
-		WHERE device_id = $1 AND status IN (0, 1, 2)
-		ORDER BY created_at DESC
-		LIMIT 10
-	`
-	rows, err := h.repo.Pool.Query(ctx, queryOrders, device.ID)
-	if err != nil {
-		h.logger.Warn("failed to query active orders", zap.Int64("device_id", device.ID), zap.Error(err))
-	} else {
-		defer rows.Close()
-		for rows.Next() {
-			var order struct {
-				OrderNo string
-				PortNo  int
-			}
-			if err := rows.Scan(&order.OrderNo, &order.PortNo); err == nil {
-				activeOrders = append(activeOrders, order)
-			}
-		}
-	}
-
-	// 构建端口号到订单号的映射
-	orderNoByPort := make(map[int]string)
-	for _, order := range activeOrders {
-		orderNoByPort[order.PortNo] = order.OrderNo
-	}
-
 	// 5. 构建端口列表
 	portList := []map[string]interface{}{}
 	hasChargingPort := false
@@ -661,29 +554,10 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 			powerW = *port.PowerW
 		}
 
-		// 转换端口状态：协议位图 -> 业务枚举（0=空闲,1=充电中,2=故障）
-		// 协议规范：bit7=在线, bit5=充电, bit4=空载
-		// 注意：只根据位图判断充电状态，不使用功率推断（功率可能滞后或异常）
-		statusEnum := 0                           // 默认空闲
-		isPortOnline := (port.Status & 0x80) != 0 // bit7
-		isCharging := (port.Status & 0x20) != 0   // bit5
-
-		if !isPortOnline {
-			statusEnum = 2 // 故障
-		} else if isCharging {
-			statusEnum = 1 // 充电中
-			hasChargingPort = true
-		}
-
 		portData := map[string]interface{}{
 			"port_no": port.PortNo,
-			"status":  statusEnum,
+			"status":  portMappingStatus(port.Status),
 			"power":   powerW,
-		}
-
-		// 添加订单号（如果有）
-		if orderNo, exists := orderNoByPort[port.PortNo]; exists {
-			portData["order_no"] = orderNo
 		}
 
 		portList = append(portList, portData)
@@ -697,16 +571,6 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 		deviceStatus = "charging"
 	}
 
-	// 7. 构建活跃订单列表
-	activeOrderList := []map[string]interface{}{}
-	for _, order := range activeOrders {
-		orderData := map[string]interface{}{
-			"order_no": order.OrderNo,
-			"port_no":  order.PortNo,
-		}
-		activeOrderList = append(activeOrderList, orderData)
-	}
-
 	// 8. 返回设备详情
 	deviceData := map[string]interface{}{
 		"device_phy_id": devicePhyID,
@@ -714,7 +578,7 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 		"is_online":     isOnline,
 		"status":        deviceStatus,
 		"ports":         portList,
-		"active_orders": activeOrderList,
+		"active_orders": []map[string]interface{}{}, // 占位，后续可扩展
 		"registered_at": device.CreatedAt,
 	}
 	if device.LastSeenAt != nil {
@@ -729,6 +593,23 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 		RequestID: requestID,
 		Timestamp: time.Now().Unix(),
 	})
+}
+
+// 端口映射状态
+func portMappingStatus(status int) int {
+	// 转换端口状态
+	// 协议规范：bit7=在线, bit5=充电, bit4=空载；若功率>0但未置充电位，也视为充电中
+	statusEnum := 0
+	isPortOnline := (status & 0x80) != 0 // bit7
+	isCharging := (status & 0x20) != 0   // bit5
+
+	if !isPortOnline {
+		statusEnum = 2
+	} else if isCharging {
+		statusEnum = 1
+	}
+
+	return statusEnum
 }
 
 // ListDevices 查询设备列表
@@ -772,41 +653,6 @@ func (h *ThirdPartyHandler) ListDevices(c *gin.Context) {
 			ports = nil
 		}
 
-		// 查询活跃订单
-		activeOrders := []struct {
-			OrderNo string
-			PortNo  int
-		}{}
-
-		queryOrders := `
-			SELECT order_no, port_no
-			FROM orders
-			WHERE device_id = $1 AND status IN (0, 1, 2)
-			ORDER BY created_at DESC
-			LIMIT 10
-		`
-		rows, err := h.repo.Pool.Query(ctx, queryOrders, device.ID)
-		if err != nil {
-			h.logger.Warn("failed to query active orders", zap.Int64("device_id", device.ID), zap.Error(err))
-		} else {
-			defer rows.Close()
-			for rows.Next() {
-				var order struct {
-					OrderNo string
-					PortNo  int
-				}
-				if err := rows.Scan(&order.OrderNo, &order.PortNo); err == nil {
-					activeOrders = append(activeOrders, order)
-				}
-			}
-		}
-
-		// 构建端口号到订单号的映射
-		orderNoByPort := make(map[int]string)
-		for _, order := range activeOrders {
-			orderNoByPort[order.PortNo] = order.OrderNo
-		}
-
 		// 构建端口列表
 		portList := []map[string]interface{}{}
 		hasChargingPort := false
@@ -816,30 +662,10 @@ func (h *ThirdPartyHandler) ListDevices(c *gin.Context) {
 				powerW = *port.PowerW
 			}
 
-			// 转换端口状态
-			// 协议规范：bit7=在线, bit5=充电, bit4=空载；若功率>0但未置充电位，也视为充电中
-			statusEnum := 0
-			isPortOnline := (port.Status & 0x80) != 0 // bit7
-			isCharging := (port.Status & 0x20) != 0   // bit5
-			if !isCharging && powerW > 0 {
-				isCharging = true
-			}
-
-			if !isPortOnline {
-				statusEnum = 2
-			} else if isCharging {
-				statusEnum = 1
-				hasChargingPort = true
-			}
-
 			portData := map[string]interface{}{
 				"port_no": port.PortNo,
-				"status":  statusEnum,
+				"status":  portMappingStatus(port.Status),
 				"power":   powerW,
-			}
-
-			if orderNo, exists := orderNoByPort[port.PortNo]; exists {
-				portData["order_no"] = orderNo
 			}
 
 			portList = append(portList, portData)
@@ -853,16 +679,6 @@ func (h *ThirdPartyHandler) ListDevices(c *gin.Context) {
 			deviceStatus = "charging"
 		}
 
-		// 构建活跃订单列表
-		activeOrderList := []map[string]interface{}{}
-		for _, order := range activeOrders {
-			orderData := map[string]interface{}{
-				"order_no": order.OrderNo,
-				"port_no":  order.PortNo,
-			}
-			activeOrderList = append(activeOrderList, orderData)
-		}
-
 		// 添加到设备列表
 		deviceData := map[string]interface{}{
 			"device_phy_id": device.PhyID,
@@ -870,7 +686,7 @@ func (h *ThirdPartyHandler) ListDevices(c *gin.Context) {
 			"is_online":     isOnline,
 			"status":        deviceStatus,
 			"ports":         portList,
-			"active_orders": activeOrderList,
+			"active_orders": []map[string]interface{}{}, // 占位，后续可扩展
 		}
 		if device.LastSeenAt != nil {
 			deviceData["last_seen_at"] = *device.LastSeenAt
@@ -912,38 +728,7 @@ func deriveBusinessNo(orderNo string) uint16 {
 	return uint16(sum)
 }
 
-// getDeviceStatus 获取设备状态描述
-func getDeviceStatus(online bool, activeOrderNo *string) string {
-	if !online {
-		return "offline"
-	}
-	if activeOrderNo != nil {
-		return "charging"
-	}
-	return "idle"
-}
-
 // isBKVChargingStatus 判断端口状态位图是否表示充电中
 func isBKVChargingStatus(status int) bool {
 	return status&0x80 != 0
-}
-
-// isBKVOnlineStatus 判断端口状态位图是否在线
-func isBKVOnlineStatus(status int) bool {
-	return status&0x01 != 0
-}
-
-// evaluateDeviceConsistency 无状态占位实现
-func (h *ThirdPartyHandler) evaluateDeviceConsistency(ctx context.Context, deviceID int64, devicePhyID string, isOnline bool, activeOrderNo *string) (string, string) {
-	return "", ""
-}
-
-// GetOrder 占位实现，当前无订单存储时返回404
-func (h *ThirdPartyHandler) GetOrder(c *gin.Context) {
-	c.JSON(http.StatusNotFound, StandardResponse{
-		Code:      404,
-		Message:   "订单不存在",
-		RequestID: c.GetString("request_id"),
-		Timestamp: time.Now().Unix(),
-	})
 }

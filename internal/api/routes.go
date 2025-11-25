@@ -8,8 +8,6 @@ import (
 	"github.com/taoyao-code/iot-server/internal/session"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
 	"go.uber.org/zap"
-
-	_ "github.com/taoyao-code/iot-server/api/swagger" // swagger docs
 )
 
 // RegisterReadOnlyRoutes 注册只读查询路由
