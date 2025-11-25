@@ -57,11 +57,6 @@ func (r *Repository) UpsertPortState(ctx context.Context, deviceID int64, portNo
 	return err
 }
 
-// SettleOrder 结算订单，仅按 business_no 匹配更新。
-func (r *Repository) SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, reason int) error {
-	return nil
-}
-
 // AckOutboundByMsgID 根据 device_id+msg_id 标记下行队列完成或失败
 func (r *Repository) AckOutboundByMsgID(ctx context.Context, deviceID int64, msgID int, ok bool, errCode *int) error {
 	if ok {

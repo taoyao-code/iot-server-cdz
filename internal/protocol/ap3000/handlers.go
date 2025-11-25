@@ -12,8 +12,6 @@ type repoAPI interface {
 	EnsureDevice(ctx context.Context, phyID string) (int64, error)
 	InsertCmdLog(ctx context.Context, deviceID int64, msgID int, cmd int, direction int16, payload []byte, success bool) error
 	UpsertPortState(ctx context.Context, deviceID int64, portNo int, status int, powerW *int) error
-	UpsertOrderProgress(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, status int, powerW01 *int) error
-	SettleOrder(ctx context.Context, deviceID int64, portNo int, orderHex string, durationSec int, kwh01 int, reason int) error
 	AckOutboundByMsgID(ctx context.Context, deviceID int64, msgID int, ok bool, errCode *int) error
 }
 
@@ -71,7 +69,6 @@ func (h *Handlers) Handle03(ctx context.Context, f *Frame) error {
 	s, derr := Decode03(f.Data)
 	success := derr == nil && s != nil
 	if success {
-		_ = h.Repo.SettleOrder(ctx, devID, s.Port, s.OrderHex, s.DurationSec, s.Kwh01, s.Reason)
 		// 异步第三方推送（可选）
 		if h.Pusher != nil && h.PushURL != "" {
 			payload := map[string]any{
@@ -104,7 +101,6 @@ func (h *Handlers) Handle06(ctx context.Context, f *Frame) error {
 	}
 	p, derr := Decode06(f.Data)
 	if derr == nil && p != nil {
-		_ = h.Repo.UpsertOrderProgress(ctx, devID, p.Port, p.OrderHex, p.DurationSec, p.Kwh01, p.Status, &p.PowerW01)
 		_ = h.Repo.UpsertPortState(ctx, devID, p.Port, p.Status, nil)
 	}
 	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, f.Data, derr == nil)

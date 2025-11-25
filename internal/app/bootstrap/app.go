@@ -82,7 +82,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 		}
 	}
 
-	pusher, pushURL := app.NewPusherIfEnabled(cfg.Thirdparty.Push.WebhookURL, cfg.Thirdparty.Push.Secret)
+	pusher, _ := app.NewPusherIfEnabled(cfg.Thirdparty.Push.WebhookURL, cfg.Thirdparty.Push.Secret)
 
 	// 初始化事件队列和去重器
 	var pusherTyped *thirdparty.Pusher
@@ -101,7 +101,8 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	pricingEngine := service.NewPricingEngine()
 	cardService := service.NewCardService(repo, pricingEngine, log)
 
-	handlerSet := &ap3000.Handlers{Repo: repo, Pusher: pusher, PushURL: pushURL, Metrics: appm}
+	// AP3000 handlers 暂不启用（repo 未实现 ap3000.repoAPI 接口）
+	// 所有 ap3000.Handlers 方法都有 nil 安全检查，返回 nil 是安全的
 
 	// DriverCore: 协议驱动 -> 核心的事件收敛入口
 	driverCore := app.NewDriverCore(coreRepo, eventQueue, log)
@@ -199,8 +200,8 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	)
 	tcpSrv.SetConnHandler(gateway.NewConnHandler(
 		cfg.Protocols, sess, policy, appm,
-		func() *ap3000.Handlers { return handlerSet }, // P0修复: Handler已初始化，非nil
-		func() *bkv.Handlers { return bkvHandlers },   // P0修复: Handler已初始化，非nil
+		func() *ap3000.Handlers { return nil }, // AP3000 暂未实现
+		func() *bkv.Handlers { return bkvHandlers },
 	))
 
 	if err := tcpSrv.Start(); err != nil {
