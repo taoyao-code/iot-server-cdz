@@ -177,15 +177,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	// ========== 阶段7.5: 启动事件队列Workers(如果启用)==========
 	app.StartEventQueueWorkers(ctx, eventQueue, cfg.Thirdparty.Push.WorkerCount, log)
 
-	// ========== 阶段7.6: 启动订单监控器(检测卡死订单)==========
-	orderMonitor := app.NewOrderMonitor(repo, driverCommandSource, log)
-	go orderMonitor.Start(ctx)
-	log.Info("order monitor started",
-		zap.Duration("check_interval", 1*time.Minute),
-		zap.Duration("pending_threshold", 5*time.Minute),
-		zap.Duration("charging_threshold", 2*time.Hour))
-
-	// ========== 阶段7.7: P1-4启动端口状态同步器(检测端口状态不一致)==========
+	// ========== 阶段7.6: P1-4启动端口状态同步器(检测端口状态不一致)==========
 	// 修复：注入SessionManager用于实时在线判断
 	portSyncer := app.NewPortStatusSyncer(repo, sess, driverCommandSource, appm, log)
 	go portSyncer.Start(ctx)
