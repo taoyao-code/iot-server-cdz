@@ -210,3 +210,27 @@ func TestRawStatusToCode(t *testing.T) {
 		t.Errorf("RawStatusToCode(0xA0) = %d, want %d", got, StatusCodeCharging)
 	}
 }
+
+func TestNormalizePortStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  int32
+		expect PortStatusCode
+	}{
+		{"already_offline", int32(StatusCodeOffline), StatusCodeOffline},
+		{"already_idle", int32(StatusCodeIdle), StatusCodeIdle},
+		{"already_charging", int32(StatusCodeCharging), StatusCodeCharging},
+		{"already_fault", int32(StatusCodeFault), StatusCodeFault},
+		{"raw_idle", 0x90, StatusCodeIdle},
+		{"raw_charging", 0xA0, StatusCodeCharging},
+		{"raw_fault_bits", 0x98, StatusCodeFault},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NormalizePortStatus(tt.input); got != tt.expect {
+				t.Errorf("NormalizePortStatus(%#02x) = %d, want %d", tt.input, got, tt.expect)
+			}
+		})
+	}
+}

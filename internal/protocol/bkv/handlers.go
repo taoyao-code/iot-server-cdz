@@ -306,7 +306,7 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 		// 原因：设备上报充电结束时，Status 字段可能仍显示 bit5=1（充电中），这是协议正常行为
 		// 参考：minimal_bkv_service.go 中的 isChargingEnd() 只检查子命令，不检查 Status
 		if subCmd == 0x02 || subCmd == 0x18 {
-			if end, err := ParseBKVChargingEnd(inner); err == nil {
+			if end, err := ParseBKVChargingEnd(f.Data); err == nil {
 				// 补丁：部分设备仅在充电结束帧(0x0015)中携带最新端口状态
 				// 为确保端口快照及时落库，在处理充电结束的同时发送PortSnapshot事件
 				// 这解决了某些设备不发送独立的端口状态查询响应(0x000D/0x000E/0x001D)的问题

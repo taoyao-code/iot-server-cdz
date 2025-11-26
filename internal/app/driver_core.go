@@ -70,13 +70,15 @@ func (d *DriverCore) handleSessionStarted(ctx context.Context, ev *coremodel.Cor
 		return nil
 	}
 
+	status := int32(coremodel.NormalizePortStatus(defaultChargingStatus(payload.Metadata)))
+
 	return d.handleSessionState(ctx, sessionContext{
 		Event:         ev,
 		PayloadDevice: payload.DeviceID,
 		PortNo:        int32(payload.PortNo),
 		Business:      payload.BusinessNo,
 		FallbackBiz:   ev.BusinessNo,
-		Status:        defaultChargingStatus(payload.Metadata),
+		Status:        status,
 		Power:         payload.TargetPowerW,
 		Timestamp:     payload.StartedAt,
 		ThirdpartyEvt: coremodel.EventSessionStarted,
@@ -103,6 +105,7 @@ func (d *DriverCore) handleSessionProgress(ctx context.Context, ev *coremodel.Co
 	if payload.RawStatus != nil {
 		status = *payload.RawStatus
 	}
+	status = int32(coremodel.NormalizePortStatus(status))
 
 	return d.handleSessionState(ctx, sessionContext{
 		Event:         ev,
@@ -146,15 +149,20 @@ func (d *DriverCore) handleSessionEnded(ctx context.Context, ev *coremodel.CoreE
 		rawReason = int(*payload.RawReason)
 	}
 
-	// 确定端口终态
-	status := payload.NextPortStatus
-	if status == nil {
-		if payload.RawStatus != nil {
-			status = payload.RawStatus
-		} else {
-			idle := defaultIdleStatus(nil)
-			status = &idle
-		}
+	// 确定端口终态（统一转换为 API 状态码）
+	var (
+		terminalStatus int32
+		hasStatus      bool
+	)
+	if payload.NextPortStatus != nil {
+		terminalStatus = int32(coremodel.NormalizePortStatus(*payload.NextPortStatus))
+		hasStatus = true
+	} else if payload.RawStatus != nil {
+		terminalStatus = int32(coremodel.NormalizePortStatus(*payload.RawStatus))
+		hasStatus = true
+	} else {
+		terminalStatus = int32(coremodel.NormalizePortStatus(defaultIdleStatus(nil)))
+		hasStatus = true
 	}
 
 	var power *int32
@@ -181,8 +189,8 @@ func (d *DriverCore) handleSessionEnded(ctx context.Context, ev *coremodel.CoreE
 	}
 
 	// 持久化端口终态：确保端口状态收敛
-	if status != nil {
-		if err := d.core.UpsertPortSnapshot(ctx, device.ID, portNo, *status, power, occurredAt); err != nil {
+	if hasStatus {
+		if err := d.core.UpsertPortSnapshot(ctx, device.ID, portNo, terminalStatus, power, occurredAt); err != nil {
 			if d.log != nil {
 				d.log.Error("driver core: upsert port snapshot failed on session ended",
 					zap.String("device_phy_id", phyID),
@@ -243,7 +251,8 @@ func (d *DriverCore) handleException(ctx context.Context, ev *coremodel.CoreEven
 		}
 
 		if payload.RawStatus != nil {
-			_ = repo.UpsertPortSnapshot(ctx, device.ID, portNo, *payload.RawStatus, nil, defaultTime(payload.OccurredAt))
+			status := int32(coremodel.NormalizePortStatus(*payload.RawStatus))
+			_ = repo.UpsertPortSnapshot(ctx, device.ID, portNo, status, nil, defaultTime(payload.OccurredAt))
 		}
 
 		d.pushThirdpartyEvent(coremodel.EventExceptionReported, phyID, map[string]interface{}{
@@ -510,6 +519,7 @@ func (d *DriverCore) pushThirdpartyEvent(eventType coremodel.CoreEventType, phyI
 	_ = d.events.Enqueue(context.Background(), ev)
 }
 
+// handlePortSnapshot 处理端口状态快照事件
 func (d *DriverCore) handlePortSnapshot(ctx context.Context, ev *coremodel.CoreEvent) error {
 	ps := ev.PortSnapshot
 	if ps == nil {
@@ -534,7 +544,7 @@ func (d *DriverCore) handlePortSnapshot(ctx context.Context, ev *coremodel.CoreE
 
 	deviceID := device.ID
 	portNo := int32(ps.PortNo)
-	status := ps.RawStatus
+	status := int32(coremodel.NormalizePortStatus(ps.RawStatus))
 	var power *int32
 	if ps.PowerW != nil {
 		p := *ps.PowerW
@@ -603,7 +613,8 @@ func (d *DriverCore) handleSessionState(ctx context.Context, sc sessionContext) 
 		businessNo = fmt.Sprintf("%04X", *bizPtr)
 	}
 
-	if err := d.core.UpsertPortSnapshot(ctx, device.ID, sc.PortNo, sc.Status, sc.Power, defaultTime(sc.Timestamp)); err != nil {
+	status := int32(coremodel.NormalizePortStatus(sc.Status))
+	if err := d.core.UpsertPortSnapshot(ctx, device.ID, sc.PortNo, status, sc.Power, defaultTime(sc.Timestamp)); err != nil {
 		if d.log != nil {
 			d.log.Error("driver core: upsert port snapshot failed",
 				zap.String("device_phy_id", phyID),

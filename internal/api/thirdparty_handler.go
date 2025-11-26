@@ -501,13 +501,13 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 //   - 2: charging - 充电中
 //   - 3: fault    - 故障
 func portMappingStatus(status int) int {
-	return int(coremodel.RawStatusToCode(int32(status)))
+	return int(normalizedPortStatusCode(status))
 }
 
 // buildPortData 构建端口完整数据（包含状态信息）
 // 返回的数据直接可供前端使用，无需额外判断
 func buildPortData(portNo int, rawStatus int, powerW int) map[string]interface{} {
-	statusCode := coremodel.RawStatusToCode(int32(rawStatus))
+	statusCode := normalizedPortStatusCode(rawStatus)
 	statusInfo := statusCode.ToInfo()
 
 	return map[string]interface{}{
@@ -651,7 +651,14 @@ func deriveBusinessNo(orderNo string) uint16 {
 
 // isBKVChargingStatus 判断端口状态位图是否表示充电中
 func isBKVChargingStatus(status int) bool {
-	return coremodel.RawPortStatus(uint8(status)).IsCharging()
+	return normalizedPortStatusCode(status) == coremodel.StatusCodeCharging
+}
+
+// normalizedPortStatusCode 将数据库中的端口状态转换为统一的 API 状态码。
+// - 若数据已经是 0~3 的标准值，直接返回
+// - 若是协议层位图，则使用 coremodel.NormalizePortStatus 转换
+func normalizedPortStatusCode(status int) coremodel.PortStatusCode {
+	return coremodel.NormalizePortStatus(int32(status))
 }
 
 // GetStatusDefinitions 获取状态定义

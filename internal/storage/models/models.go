@@ -54,7 +54,7 @@ func (GatewaySocket) TableName() string { return "gateway_sockets" }
 type Port struct {
 	DeviceID int64 `gorm:"column:device_id;primaryKey"`
 	PortNo   int32 `gorm:"column:port_no;primaryKey"`
-	// 端口状态（与协议位图一致）
+	// 端口状态（统一为 API 状态码：0=离线,1=空闲,2=充电,3=故障）
 	Status    int32     `gorm:"column:status;not null;default:0"`
 	PowerW    *int32    `gorm:"column:power_w"`
 	UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime"`

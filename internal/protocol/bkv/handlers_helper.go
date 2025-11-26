@@ -359,7 +359,8 @@ func (h *Handlers) handleControlChargingEnd(ctx context.Context, f *Frame, devic
 		return
 	}
 
-	h.emitChargingEndEvents(ctx, deviceID, end, nil, false)
+	nextStatus := int32(coremodel.RawStatusOnlineNoLoad)
+	h.emitChargingEndEvents(ctx, deviceID, end, &nextStatus, false)
 
 	// 3. 回复 ACK
 	h.sendChargingEndAck(ctx, f, nil, int(end.SocketNo), int(end.Port), true)

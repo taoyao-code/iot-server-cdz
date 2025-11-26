@@ -368,6 +368,16 @@ func RawStatusToCode(rawStatus int32) PortStatusCode {
 	return RawPortStatus(uint8(rawStatus)).ToStatusCode()
 }
 
+// NormalizePortStatus 将原始状态（协议位图或数据库值）统一转换为 API 状态码。
+// - 若传入的值已经是 0~3 的状态码，则直接返回
+// - 否则视为协议层位图并调用 RawStatusToCode 进行转换
+func NormalizePortStatus(status int32) PortStatusCode {
+	if status >= int32(StatusCodeOffline) && status <= int32(StatusCodeFault) {
+		return PortStatusCode(status)
+	}
+	return RawStatusToCode(status)
+}
+
 // PortStatusToCode 将核心层状态字符串转换为 API 状态码
 func PortStatusToCode(status PortStatus) PortStatusCode {
 	switch status {

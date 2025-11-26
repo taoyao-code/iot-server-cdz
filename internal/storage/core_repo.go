@@ -35,7 +35,7 @@ type CoreRepo interface {
 	GetGatewaySocketByUID(ctx context.Context, uid string) (*models.GatewaySocket, error)
 
 	// ---------- 端口 ----------
-	// UpsertPortSnapshot 更新或插入端口快照（与 BKV 位图保持一致）
+	// UpsertPortSnapshot 更新或插入端口快照（状态统一为 API 状态码）
 	UpsertPortSnapshot(ctx context.Context, deviceID int64, portNo int32, status int32, powerW *int32, updatedAt time.Time) error
 	// GetPort 读取端口信息
 	GetPort(ctx context.Context, deviceID int64, portNo int32) (*models.Port, error)
