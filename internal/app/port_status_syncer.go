@@ -26,9 +26,7 @@ type PortStatusSyncer struct {
 
 	// 统计
 	statsChecked     int64
-	statsMismatches  int64
 	statsDeviceQuery int64
-	statsAutoFixed   int64
 }
 
 // SessionManager 会话管理器接口（避免循环依赖）
@@ -68,7 +66,6 @@ func (s *PortStatusSyncer) Start(ctx context.Context) {
 		case <-ctx.Done():
 			s.logger.Info("P1-4: port status syncer stopped",
 				zap.Int64("checked", s.statsChecked),
-				zap.Int64("mismatches", s.statsMismatches),
 				zap.Int64("device_queries", s.statsDeviceQuery))
 			return
 		case <-ticker.C:
@@ -172,8 +169,6 @@ func (s *PortStatusSyncer) queryDevicePort(ctx context.Context, deviceID int64, 
 func (s *PortStatusSyncer) Stats() map[string]interface{} {
 	return map[string]interface{}{
 		"checked":        s.statsChecked,
-		"mismatches":     s.statsMismatches,
 		"device_queries": s.statsDeviceQuery,
-		"auto_fixed":     s.statsAutoFixed,
 	}
 }

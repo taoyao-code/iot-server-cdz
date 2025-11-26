@@ -100,131 +100,49 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 	devicePhyID := c.Param("device_id")
 	requestID := c.GetString("request_id")
 
-	// 解析请求体
 	var req StartChargeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Error("invalid request body", zap.Error(err))
-		c.JSON(http.StatusBadRequest, StandardResponse{
-			Code: 400,
-			// EN: invalid request body
-			Message:   fmt.Sprintf("无效的请求: %v", err),
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
+		h.respondWithError(c, http.StatusBadRequest, requestID, fmt.Sprintf("无效的请求: %v", err), nil)
 		return
 	}
 
-	h.logger.Info("start charge requested",
-		zap.String("device_phy_id", devicePhyID),
-		zap.Int("port_no", req.PortNo),
-		zap.Int("charge_mode", req.ChargeMode),
-		zap.Int("amount", req.Amount),
-		zap.String("socket_uid", req.SocketUID))
-
-	// 2.1 解析 socket_uid 对应的映射，获取 socket_no（查不到则报错，禁止 port_no 兜底）
-	mapping, err := h.getSocketMappingByUID(ctx, req.SocketUID)
-	if err != nil {
-		status := http.StatusInternalServerError
-		msg := fmt.Sprintf("查询插座映射失败: %v", err)
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			status = http.StatusBadRequest
-			msg = fmt.Sprintf("未找到插座UID映射: %s", req.SocketUID)
+	run := func() error {
+		socketNo, err := h.resolveSocketNo(ctx, devicePhyID, req.SocketUID)
+		if err != nil {
+			return err
 		}
-		c.JSON(status, StandardResponse{
-			Code:      status,
-			Message:   msg,
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
-		return
-	}
-
-	if mapping.GatewayID != "" && mapping.GatewayID != devicePhyID {
-		c.JSON(http.StatusBadRequest, StandardResponse{
-			Code:    400,
-			Message: fmt.Sprintf("插座UID与设备不匹配: uid=%s, gateway=%s", req.SocketUID, mapping.GatewayID),
-			Data: map[string]interface{}{
-				"socket_uid": req.SocketUID,
-				"gateway_id": mapping.GatewayID,
-				"device_id":  devicePhyID,
-			},
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
-		return
-	}
-	socketNo := int(mapping.SocketNo)
-	if socketNo <= 0 {
-		c.JSON(http.StatusBadRequest, StandardResponse{
-			Code:      400,
-			Message:   fmt.Sprintf("非法的插座编号: %d (uid=%s)", socketNo, req.SocketUID),
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
-		return
-	}
-
-	orderNo := req.OrderNo
-	if strings.TrimSpace(orderNo) == "" {
-		// 订单不存在，直接返回错误信息提示
-		c.JSON(http.StatusBadRequest, StandardResponse{
-			Code:    400,
-			Message: "请求中缺少订单号，请提供有效订单号后重试",
-			Data: map[string]interface{}{
-				"order_no": orderNo,
-			},
-		})
-		return
-	}
-	// TODO : 16位业务号派生规则需与核心系统保持一致
-	businessNo := uint16(req.BusinessNo)
-	if businessNo == 0 {
-		businessNo = deriveBusinessNo(orderNo)
-	}
-	if err := h.dispatchStartChargeCommand(ctx, devicePhyID, 0, socketNo, &req, orderNo, businessNo); err != nil {
-		h.logger.Error("failed to dispatch start command",
-			zap.Error(err),
+		orderNo, businessNo, err := h.prepareOrderInfo(req.OrderNo, req.BusinessNo)
+		if err != nil {
+			return err
+		}
+		if err := h.dispatchStartChargeCommand(ctx, devicePhyID, 0, socketNo, &req, orderNo, businessNo); err != nil {
+			return err
+		}
+		h.logger.Info("charge command dispatched",
 			zap.String("order_no", orderNo),
 			zap.String("device_phy_id", devicePhyID),
+			zap.Int("port_no", req.PortNo),
 			zap.String("socket_uid", req.SocketUID),
 			zap.Int("socket_no", socketNo))
-
-		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code:    500,
-			Message: "充电命令发送失败，请稍后重试",
+		c.JSON(http.StatusOK, StandardResponse{
+			Code:    0,
+			Message: "充电指令发送成功",
 			Data: map[string]interface{}{
-				"order_no":   orderNo,
-				"device_id":  devicePhyID,
-				"reason":     "command_dispatch_failed",
-				"retry_hint": "pending订单将在5分钟后自动清理，请稍后重试",
+				"device_id":   devicePhyID,
+				"order_no":    orderNo,
+				"business_no": int(businessNo),
+				"port_no":     req.PortNo,
+				"amount":      req.Amount,
 			},
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
-		return
+		return nil
 	}
 
-	h.logger.Info("charge command dispatched",
-		zap.String("order_no", orderNo),
-		zap.String("device_phy_id", devicePhyID),
-		zap.Int("port_no", req.PortNo),
-		zap.String("socket_uid", req.SocketUID),
-		zap.Int("socket_no", socketNo))
-
-	// 9. 返回成功响应
-	c.JSON(http.StatusOK, StandardResponse{
-		Code:    0,
-		Message: "充电指令发送成功",
-		Data: map[string]interface{}{
-			"device_id":   devicePhyID,
-			"order_no":    orderNo,
-			"business_no": int(businessNo),
-			"port_no":     req.PortNo,
-			"amount":      req.Amount,
-		},
-		RequestID: requestID,
-		Timestamp: time.Now().Unix(),
-	})
+	if err := run(); err != nil {
+		h.handleStartError(c, err, requestID)
+	}
 }
 
 // dispatchStartChargeCommand
@@ -239,10 +157,6 @@ func (h *ThirdPartyHandler) dispatchStartChargeCommand(
 ) error {
 	if req == nil {
 		return fmt.Errorf("request required")
-	}
-
-	if h.driverCmd == nil {
-		return fmt.Errorf("驱动程序命令源未配置")
 	}
 
 	durationMin := uint16(req.GetDuration())
@@ -298,15 +212,11 @@ func (h *ThirdPartyHandler) sendStartChargeViaDriver(
 func (h *ThirdPartyHandler) dispatchStopChargeCommand(
 	ctx context.Context,
 	devicePhyID string,
-	deviceID int64,
 	socketNo int,
 	portNo int,
 	orderNo string,
 	businessNo uint16,
 ) (bool, error) {
-	if h.driverCmd == nil {
-		return false, fmt.Errorf("驱动程序命令源未配置")
-	}
 	if err := h.sendStopChargeViaDriver(ctx, devicePhyID, socketNo, portNo, businessNo, orderNo); err != nil {
 		return false, err
 	}
@@ -347,6 +257,65 @@ func (h *ThirdPartyHandler) sendStopChargeViaDriver(
 	return h.driverCmd.SendCoreCommand(ctx, cmd)
 }
 
+func (h *ThirdPartyHandler) resolveSocketNo(ctx context.Context, devicePhyID, socketUID string) (int, error) {
+	mapping, err := h.getSocketMappingByUID(ctx, socketUID)
+	if err != nil {
+		return 0, err
+	}
+	if mapping.GatewayID != "" && mapping.GatewayID != devicePhyID {
+		return 0, fmt.Errorf("插座UID与设备不匹配: uid=%s, gateway=%s", socketUID, mapping.GatewayID)
+	}
+	socketNo := int(mapping.SocketNo)
+	if socketNo <= 0 {
+		return 0, fmt.Errorf("非法的插座编号: %d (uid=%s)", socketNo, socketUID)
+	}
+	return socketNo, nil
+}
+
+func (h *ThirdPartyHandler) prepareOrderInfo(orderNo string, businessNo int) (string, uint16, error) {
+	orderNo = strings.TrimSpace(orderNo)
+	if orderNo == "" {
+		return "", 0, fmt.Errorf("请求中缺少订单号，请提供有效订单号后重试")
+	}
+	biz := uint16(businessNo)
+	if biz == 0 {
+		biz = deriveBusinessNo(orderNo)
+	}
+	return orderNo, biz, nil
+}
+
+func (h *ThirdPartyHandler) handleStartError(c *gin.Context, err error, requestID string) {
+	h.respondWithError(c, classifyError(err), requestID, err.Error(), map[string]interface{}{
+		"reason": "command_dispatch_failed",
+	})
+}
+
+func (h *ThirdPartyHandler) handleStopError(c *gin.Context, err error, requestID string) {
+	h.respondWithError(c, classifyError(err), requestID, err.Error(), map[string]interface{}{
+		"reason": "command_dispatch_failed",
+	})
+}
+
+func classifyError(err error) int {
+	if err == nil {
+		return http.StatusOK
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) || strings.Contains(err.Error(), "插座UID与设备不匹配") || strings.Contains(err.Error(), "非法的插座编号") || strings.Contains(err.Error(), "订单号") {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
+}
+
+func (h *ThirdPartyHandler) respondWithError(c *gin.Context, status int, requestID, message string, data map[string]interface{}) {
+	c.JSON(status, StandardResponse{
+		Code:      status,
+		Message:   message,
+		Data:      data,
+		RequestID: requestID,
+		Timestamp: time.Now().Unix(),
+	})
+}
+
 // getSocketMappingByUID 通过 socket_uid 查询插座映射。
 func (h *ThirdPartyHandler) getSocketMappingByUID(ctx context.Context, socketUID string) (*models.GatewaySocket, error) {
 	if h.core == nil {
@@ -385,122 +354,52 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 	devicePhyID := c.Param("device_id")
 	requestID := c.GetString("request_id")
 
-	// 解析请求体
 	var req StopChargeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Error("invalid request body", zap.Error(err))
-		c.JSON(http.StatusBadRequest, StandardResponse{
-			Code: 400,
-			// EN: invalid request body
-			Message:   fmt.Sprintf("无效的请求: %v", err),
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
+		h.respondWithError(c, http.StatusBadRequest, requestID, fmt.Sprintf("无效的请求: %v", err), nil)
 		return
 	}
 
-	h.logger.Info("stop charge requested",
-		zap.String("device_phy_id", devicePhyID),
-		zap.String("socket_uid", req.SocketUID),
-		zap.Int("port_no", *req.PortNo))
+	if req.PortNo == nil {
+		h.respondWithError(c, http.StatusBadRequest, requestID, "port_no 是必填项", nil)
+		return
+	}
 
-	// 1. 解析 socket_uid 获取 socket_no
-	mapping, err := h.getSocketMappingByUID(ctx, req.SocketUID)
-	if err != nil {
-		status := http.StatusInternalServerError
-		msg := fmt.Sprintf("查询插座映射失败: %v", err)
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			status = http.StatusBadRequest
-			msg = fmt.Sprintf("未找到插座UID映射: %s", req.SocketUID)
+	run := func() error {
+		socketNo, err := h.resolveSocketNo(ctx, devicePhyID, req.SocketUID)
+		if err != nil {
+			return err
 		}
-		c.JSON(status, StandardResponse{
-			Code:      status,
-			Message:   msg,
+		orderNo, businessNo, err := h.prepareOrderInfo(req.OrderNo, req.BusinessNo)
+		if err != nil {
+			return err
+		}
+		stopSent, dispatchErr := h.dispatchStopChargeCommand(ctx, devicePhyID, socketNo, *req.PortNo, orderNo, businessNo)
+		if dispatchErr != nil {
+			return dispatchErr
+		}
+		responseData := map[string]interface{}{
+			"device_id":    devicePhyID,
+			"port_no":      req.PortNo,
+			"business_no":  int(businessNo),
+			"command_sent": stopSent,
+			"order_no":     orderNo,
+			"status":       "stopping",
+			"note":         "无状态停止已下发，等待设备ACK",
+		}
+		c.JSON(http.StatusOK, StandardResponse{
+			Code:      0,
+			Message:   "停止指令已下发",
+			Data:      responseData,
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
 		})
-		return
-	}
-	if mapping.GatewayID != "" && mapping.GatewayID != devicePhyID {
-		c.JSON(http.StatusBadRequest, StandardResponse{
-			Code:    400,
-			Message: fmt.Sprintf("插座UID与设备不匹配: uid=%s, gateway=%s", req.SocketUID, mapping.GatewayID),
-			Data: map[string]interface{}{
-				"socket_uid": req.SocketUID,
-				"gateway_id": mapping.GatewayID,
-				"device_id":  devicePhyID,
-			},
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
-		return
-	}
-	socketNo := int(mapping.SocketNo)
-	if socketNo <= 0 {
-		c.JSON(http.StatusBadRequest, StandardResponse{
-			Code:      400,
-			Message:   fmt.Sprintf("非法的插座编号: %d (uid=%s)", socketNo, req.SocketUID),
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
-		return
+		return nil
 	}
 
-	// TODO：优先使用第三方提供的订单/业务号，否则生成临时号
-	orderNo := req.OrderNo
-	businessNo := int64(req.BusinessNo)
-	if businessNo == 0 {
-		businessNo = int64(deriveBusinessNo(orderNo))
+	if err := run(); err != nil {
+		h.handleStopError(c, err, requestID)
 	}
-
-	biz := uint16(businessNo)
-	if biz == 0 {
-		biz = deriveBusinessNo(orderNo)
-	}
-
-	stopCommandSent, dispatchErr := h.dispatchStopChargeCommand(ctx, devicePhyID, 0, socketNo, *req.PortNo, orderNo, biz)
-	if dispatchErr != nil {
-		h.logger.Error("failed to dispatch stop command",
-			zap.Error(dispatchErr),
-			zap.String("order_no", orderNo),
-			zap.String("device_phy_id", devicePhyID),
-			zap.String("socket_uid", req.SocketUID),
-			zap.Int("socket_no", socketNo))
-
-		c.JSON(http.StatusInternalServerError, StandardResponse{
-			Code: 500,
-			// EN: stop command dispatch failed
-			Message: "停止命令发送失败，请稍后重试",
-			Data: map[string]interface{}{
-				"order_no":   orderNo,
-				"device_id":  devicePhyID,
-				"reason":     "command_dispatch_failed",
-				"retry_hint": "若设备未响应，可重新发起停止请求",
-			},
-			RequestID: requestID,
-			Timestamp: time.Now().Unix(),
-		})
-		return
-	}
-
-	// 4. 返回成功响应（无订单时仍返回临时订单号）
-	responseData := map[string]interface{}{
-		"device_id":    devicePhyID,
-		"port_no":      req.PortNo,
-		"business_no":  int(biz),
-		"command_sent": stopCommandSent,
-		"order_no":     orderNo,
-		"status":       "stopping",
-		"note":         "无状态停止已下发，等待设备ACK",
-	}
-
-	c.JSON(http.StatusOK, StandardResponse{
-		Code:      0,
-		Message:   "停止指令已下发",
-		Data:      responseData,
-		RequestID: requestID,
-		Timestamp: time.Now().Unix(),
-	})
 }
 
 // GetDevice 查询设备状态
@@ -724,6 +623,18 @@ type ParamItem struct {
 	Value string `json:"value" binding:"required"` // 参数值
 }
 
+// NetworkNode 组网节点信息
+type NetworkNode struct {
+	SocketNo  int    `json:"socket_no" binding:"required,min=1,max=250"` // 插座编号
+	SocketMAC string `json:"socket_mac" binding:"required,len=12"`       // 插座MAC（6字节hex）
+}
+
+// NetworkConfigRequest 组网配置请求
+type NetworkConfigRequest struct {
+	Channel int           `json:"channel" binding:"required,min=1,max=15"` // 信道
+	Nodes   []NetworkNode `json:"nodes" binding:"required,min=1,max=250"`  // 插座列表
+}
+
 // ===== 辅助函数 =====
 
 // deriveBusinessNo 从订单号推导16位业务号
@@ -761,4 +672,101 @@ func (h *ThirdPartyHandler) GetStatusDefinitions(c *gin.Context) {
 		RequestID: requestID,
 		Timestamp: time.Now().Unix(),
 	})
+}
+
+// ConfigureNetwork 配置组网
+// @Summary 配置组网设备
+// @Description 为组网版网关配置插座列表（0x0005/0x08命令）
+// @Tags 第三方API - 设备管理
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param device_id path string true "网关设备物理ID"
+// @Param request body NetworkConfigRequest true "组网配置"
+// @Success 200 {object} StandardResponse "成功"
+// @Failure 400 {object} StandardResponse "参数错误"
+// @Failure 500 {object} StandardResponse "服务器错误"
+// @Router /api/v1/third/devices/{device_id}/network/configure [post]
+func (h *ThirdPartyHandler) ConfigureNetwork(c *gin.Context) {
+	ctx := c.Request.Context()
+	devicePhyID := c.Param("device_id")
+	requestID := c.GetString("request_id")
+
+	var req NetworkConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.respondWithError(c, http.StatusBadRequest, requestID, fmt.Sprintf("invalid request: %v", err), nil)
+		return
+	}
+
+	run := func() error {
+		if h.driverCmd == nil {
+			return fmt.Errorf("command dispatcher unavailable")
+		}
+		if _, err := h.repo.EnsureDevice(ctx, devicePhyID); err != nil {
+			return fmt.Errorf("failed to get device: %w", err)
+		}
+		nodes, err := buildNetworkNodes(req.Nodes)
+		if err != nil {
+			return err
+		}
+		cmd := &coremodel.CoreCommand{
+			Type:      coremodel.CommandConfigureNetwork,
+			CommandID: fmt.Sprintf("network:%s:%d", devicePhyID, time.Now().UnixNano()),
+			DeviceID:  coremodel.DeviceID(devicePhyID),
+			IssuedAt:  time.Now(),
+			ConfigureNetwork: &coremodel.ConfigureNetworkPayload{
+				Channel: int32(req.Channel),
+				Nodes:   nodes,
+			},
+		}
+		if err := h.driverCmd.SendCoreCommand(ctx, cmd); err != nil {
+			return fmt.Errorf("failed to send network config: %w", err)
+		}
+		c.JSON(http.StatusOK, StandardResponse{
+			Code:    0,
+			Message: "network configuration sent successfully",
+			Data: map[string]interface{}{
+				"device_id": devicePhyID,
+				"channel":   req.Channel,
+				"nodes":     len(req.Nodes),
+			},
+			RequestID: requestID,
+			Timestamp: time.Now().Unix(),
+		})
+		return nil
+	}
+
+	if err := run(); err != nil {
+		h.respondWithError(c, classifyError(err), requestID, err.Error(), nil)
+	}
+}
+
+// hexToBytes 将hex字符串转为字节数组
+func hexToBytes(s string) ([]byte, error) {
+	if len(s)%2 != 0 {
+		return nil, fmt.Errorf("odd length hex string")
+	}
+
+	result := make([]byte, len(s)/2)
+	for i := 0; i < len(result); i++ {
+		_, err := fmt.Sscanf(s[i*2:i*2+2], "%02x", &result[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func buildNetworkNodes(nodes []NetworkNode) ([]coremodel.NetworkNodePayload, error) {
+	res := make([]coremodel.NetworkNodePayload, 0, len(nodes))
+	for _, node := range nodes {
+		if _, err := hexToBytes(node.SocketMAC); err != nil {
+			return nil, fmt.Errorf("invalid socket MAC: %s", node.SocketMAC)
+		}
+		res = append(res, coremodel.NetworkNodePayload{
+			SocketNo:  int32(node.SocketNo),
+			SocketMAC: strings.ToLower(node.SocketMAC),
+		})
+	}
+	return res, nil
 }

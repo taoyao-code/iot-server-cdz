@@ -3,6 +3,7 @@ package middleware
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -12,63 +13,39 @@ import (
 
 // ThirdPartyAuth 第三方API Key认证中间件
 func ThirdPartyAuth(apiKeys []string, logger *zap.Logger) gin.HandlerFunc {
-	// 构建API Key映射表
-	keyMap := make(map[string]bool)
+	allowed := make(map[string]struct{}, len(apiKeys))
 	for _, key := range apiKeys {
-		if key != "" {
-			keyMap[key] = true
+		if strings.TrimSpace(key) != "" {
+			allowed[key] = struct{}{}
 		}
 	}
 
 	return func(c *gin.Context) {
-		// 获取API Key from Header（支持两种格式以保持兼容性）
-		apiKey := c.GetHeader("X-Api-Key")
+		apiKey := extractAPIKey(c, "X-Api-Key")
 		if apiKey == "" {
-			// 兼容标准格式（大写）
-			apiKey = c.GetHeader("X-API-Key")
-		}
-
-		if apiKey == "" {
-			logger.Warn("third party auth failed: missing api key",
-				zap.String("path", c.Request.URL.Path),
-				zap.String("method", c.Request.Method))
-
-			thirdparty.RecordAPIAuthFailure(c.Request.URL.Path, "missing_key")
-
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    401,
-				"message": "missing api key",
-			})
-			c.Abort()
+			recordThirdpartyFailure(c, logger, "missing_key", "missing api key")
 			return
 		}
-
-		// 验证API Key
-		if !keyMap[apiKey] {
-			logger.Warn("third party auth failed: invalid api key",
-				zap.String("path", c.Request.URL.Path),
-				zap.String("api_key_prefix", maskAPIKey(apiKey)))
-
-			thirdparty.RecordAPIAuthFailure(c.Request.URL.Path, "invalid_key")
-
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    401,
-				"message": "invalid api key",
-			})
-			c.Abort()
+		if _, ok := allowed[apiKey]; !ok {
+			recordThirdpartyFailure(c, logger, "invalid_key", "invalid api key")
 			return
 		}
-
-		// TODO: 可选的HMAC签名验证
-		// signature := c.GetHeader("X-Signature")
-		// if signature != "" {
-		//     验证HMAC签名
-		// }
-
-		// 认证成功，继续处理
 		c.Set("api_key", apiKey)
 		c.Next()
 	}
+}
+
+func recordThirdpartyFailure(c *gin.Context, logger *zap.Logger, reason, message string) {
+	logger.Warn("third party auth failed",
+		zap.String("path", c.Request.URL.Path),
+		zap.String("method", c.Request.Method),
+	)
+	thirdparty.RecordAPIAuthFailure(c.Request.URL.Path, reason)
+	c.JSON(http.StatusUnauthorized, gin.H{
+		"code":    http.StatusUnauthorized,
+		"message": message,
+	})
+	c.Abort()
 }
 
 // RequestTracing 请求追踪中间件（添加request_id）

@@ -101,9 +101,6 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	pricingEngine := service.NewPricingEngine()
 	cardService := service.NewCardService(repo, pricingEngine, log)
 
-	// AP3000 handlers 暂不启用（repo 未实现 ap3000.repoAPI 接口）
-	// 所有 ap3000.Handlers 方法都有 nil 安全检查，返回 nil 是安全的
-
 	// DriverCore: 协议驱动 -> 核心的事件收敛入口
 	driverCore := app.NewDriverCore(coreRepo, eventQueue, log)
 
@@ -166,31 +163,22 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	// Redis队列性能比PostgreSQL轮询快10倍
 	redisWorker := app.NewRedisWorker(redisQueue, cfg.Gateway.ThrottleMs, cfg.Gateway.RetryMax, log)
 
-	ctx, wcancel := context.WithCancel(context.Background())
-	defer wcancel()
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	defer workerCancel()
 
-	go redisWorker.Start(ctx)
 	redisWorker.SetGetConn(func(phyID string) (interface{}, bool) { return sess.GetConn(phyID) })
+	go redisWorker.Start(workerCtx)
 	log.Info("redis outbound worker started",
 		zap.Int("throttle_ms", cfg.Gateway.ThrottleMs),
 		zap.Int("retry_max", cfg.Gateway.RetryMax))
 
-	// ========== 阶段7.5: 启动事件队列Workers(如果启用)==========
-	app.StartEventQueueWorkers(ctx, eventQueue, cfg.Thirdparty.Push.WorkerCount, log)
+	// ========== 阶段7.5: 启动事件队列/推送器(若启用)==========
+	startEventPipeline(workerCtx, repo, eventQueue, cfg.Thirdparty.Push, log)
 
 	// ========== 阶段7.7: P1-4启动端口状态同步器(检测端口状态不一致)==========
 	// 修复：注入SessionManager用于实时在线判断
 	portSyncer := app.NewPortStatusSyncer(repo, sess, driverCommandSource, appm, log)
-	go portSyncer.Start(ctx)
-	log.Info("P1-4: port status syncer started",
-		zap.Duration("check_interval", 5*time.Minute))
-
-	// ========== 阶段7.8: P1-7启动事件推送器(Outbox模式)==========
-	eventPusher := app.NewEventPusher(repo, eventQueue, log)
-	go eventPusher.Start(ctx)
-	log.Info("P1-7: event pusher started",
-		zap.Duration("check_interval", 10*time.Second),
-		zap.Int("batch_size", 50))
+	go portSyncer.Start(workerCtx)
 
 	// ========== 阶段8: 最后启动TCP服务(此时所有依赖已就绪)==========
 	tcpSrv := app.NewTCPServer(cfg.TCP, log) // Week2: 传递logger以支持限流日志
@@ -219,15 +207,16 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
+	workerCancel()
 
 	log.Info("received shutdown signal, gracefully shutting down...")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_ = httpSrv.Shutdown(ctx)
+	_ = httpSrv.Shutdown(shutdownCtx)
 	log.Info("http server stopped")
 
-	_ = tcpSrv.Shutdown(ctx)
+	_ = tcpSrv.Shutdown(shutdownCtx)
 	log.Info("tcp server stopped")
 
 	// 清理Redis会话数据
@@ -253,4 +242,17 @@ func maskDSN(dsn string) string {
 		}
 	}
 	return dsn
+}
+
+func startEventPipeline(ctx context.Context, repo *pgstorage.Repository, queue *thirdparty.EventQueue, pushCfg cfgpkg.ThirdpartyPushConfig, log *zap.Logger) {
+	if queue == nil {
+		return
+	}
+	app.StartEventQueueWorkers(ctx, queue, pushCfg.WorkerCount, log)
+	eventPusher := app.NewEventPusher(repo, queue, log)
+	go eventPusher.Start(ctx)
+	log.Info("event pipeline started",
+		zap.Int("push_workers", pushCfg.WorkerCount),
+		zap.Duration("pusher_interval", 10*time.Second),
+		zap.Int("pusher_batch", 50))
 }

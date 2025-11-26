@@ -189,24 +189,6 @@ func (r *Repository) GetPort(ctx context.Context, deviceID int64, portNo int32) 
 	return &port, err
 }
 
-// UpdatePortStatus 仅更新端口状态位。
-func (r *Repository) UpdatePortStatus(ctx context.Context, deviceID int64, portNo int32, status int32) error {
-	res := r.db.WithContext(ctx).
-		Model(&models.Port{}).
-		Where("device_id = ? AND port_no = ?", deviceID, portNo).
-		Updates(map[string]interface{}{
-			"status":     status,
-			"updated_at": gorm.Expr("NOW()"),
-		})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
-}
-
 // AppendCmdLog 写入指令日志。
 func (r *Repository) AppendCmdLog(ctx context.Context, log *models.CmdLog) error {
 	return r.db.WithContext(ctx).Create(log).Error

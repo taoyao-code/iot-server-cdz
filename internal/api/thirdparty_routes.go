@@ -45,6 +45,4 @@ func RegisterThirdPartyRoutes(
 
 	// 组网管理API
 	api.POST("/devices/:device_id/network/configure", handler.ConfigureNetwork) // 配置组网
-
-	logger.Info("third party routes registered", zap.Int("endpoints", 7))
 }

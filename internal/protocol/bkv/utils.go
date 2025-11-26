@@ -32,21 +32,6 @@ func extractDeviceIDFromPayload(f *Frame, payload *BKVPayload) string {
 	return extractDeviceIDOrDefault(f)
 }
 
-// buildBaseMetadata 构建基础元数据
-func buildBaseMetadata(cmd uint16, data []byte) map[string]string {
-	return map[string]string{
-		"cmd":         fmt.Sprintf("0x%04X", cmd),
-		"raw_payload": fmt.Sprintf("%x", data),
-	}
-}
-
-// addMetadata 向元数据中添加键值对
-func addMetadata(metadata map[string]string, key, value string) {
-	if metadata != nil {
-		metadata[key] = value
-	}
-}
-
 // now 获取当前时间（便于测试时 mock）
 func now() time.Time {
 	return time.Now()

@@ -11,6 +11,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/storage"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // DriverCore 实现 driverapi.EventSink，将协议驱动上报的规范化事件
@@ -62,64 +63,26 @@ func (d *DriverCore) HandleCoreEvent(ctx context.Context, ev *coremodel.CoreEven
 	}
 }
 
+// handleSessionStarted 处理充电会话开始事件
 func (d *DriverCore) handleSessionStarted(ctx context.Context, ev *coremodel.CoreEvent) error {
 	payload := ev.SessionStarted
 	if payload == nil || d.core == nil {
 		return nil
 	}
 
-	phyID := pickDeviceID(ev.DeviceID, payload.DeviceID)
-	if phyID == "" {
-		return nil
-	}
-
-	_, bizPtr := parseBusiness(ev.BusinessNo, payload.BusinessNo)
-	portNo := int32(payload.PortNo)
-	startedAt := defaultTime(payload.StartedAt)
-	status := defaultChargingStatus(payload.Metadata)
-
-	// 获取设备信息
-	device, err := d.core.EnsureDevice(ctx, phyID)
-	if err != nil {
-		if d.log != nil {
-			d.log.Warn("driver core: ensure device failed on session started",
-				zap.String("device_phy_id", phyID),
-				zap.Error(err))
-		}
-		return err
-	}
-
-	// 生成业务号标识（用于事件推送）
-	businessNo := ""
-	if bizPtr != nil {
-		businessNo = fmt.Sprintf("%04X", *bizPtr)
-	}
-
-	// 更新端口状态为充电中
-	if err := d.core.UpsertPortSnapshot(ctx, device.ID, portNo, status, payload.TargetPowerW, startedAt); err != nil {
-		if d.log != nil {
-			d.log.Error("driver core: upsert port snapshot failed on session start",
-				zap.String("device_phy_id", phyID),
-				zap.Int32("port_no", portNo),
-				zap.Error(err))
-		}
-		return err
-	}
-
-	// 推送第三方事件（供业务系统消费）
-	d.pushThirdpartyEvent(coremodel.EventSessionStarted, phyID, map[string]interface{}{
-		"business_no": businessNo,
-		"port_no":     portNo,
+	return d.handleSessionState(ctx, sessionContext{
+		Event:         ev,
+		PayloadDevice: payload.DeviceID,
+		PortNo:        int32(payload.PortNo),
+		Business:      payload.BusinessNo,
+		FallbackBiz:   ev.BusinessNo,
+		Status:        defaultChargingStatus(payload.Metadata),
+		Power:         payload.TargetPowerW,
+		Timestamp:     payload.StartedAt,
+		ThirdpartyEvt: coremodel.EventSessionStarted,
+		LogMessage:    "driver core: session started",
+		LogLevel:      zapcore.InfoLevel,
 	})
-
-	if d.log != nil {
-		d.log.Info("driver core: session started",
-			zap.String("device_phy_id", phyID),
-			zap.Int32("port_no", portNo),
-			zap.String("business_no", businessNo))
-	}
-
-	return nil
 }
 
 func (d *DriverCore) handleSessionProgress(ctx context.Context, ev *coremodel.CoreEvent) error {
@@ -127,14 +90,6 @@ func (d *DriverCore) handleSessionProgress(ctx context.Context, ev *coremodel.Co
 	if payload == nil || d.core == nil {
 		return nil
 	}
-
-	phyID := pickDeviceID(ev.DeviceID, payload.DeviceID)
-	if phyID == "" {
-		return nil
-	}
-
-	_, bizPtr := parseBusiness(ev.BusinessNo, payload.BusinessNo)
-	portNo := int32(payload.PortNo)
 
 	energy := int32(0)
 	if payload.EnergyKWh01 != nil {
@@ -144,58 +99,32 @@ func (d *DriverCore) handleSessionProgress(ctx context.Context, ev *coremodel.Co
 	if payload.DurationSec != nil {
 		duration = *payload.DurationSec
 	}
-	occurredAt := defaultTime(payload.OccurredAt)
 	status := defaultChargingStatus(nil)
 	if payload.RawStatus != nil {
 		status = *payload.RawStatus
 	}
 
-	// 获取设备信息
-	device, err := d.core.EnsureDevice(ctx, phyID)
-	if err != nil {
-		if d.log != nil {
-			d.log.Warn("driver core: ensure device failed on session progress",
-				zap.String("device_phy_id", phyID),
-				zap.Error(err))
-		}
-		return err
-	}
-
-	// 生成业务号标识（用于事件推送）
-	businessNo := ""
-	if bizPtr != nil {
-		businessNo = fmt.Sprintf("%04X", *bizPtr)
-	}
-
-	// 更新端口状态
-	if err := d.core.UpsertPortSnapshot(ctx, device.ID, portNo, status, payload.PowerW, occurredAt); err != nil {
-		if d.log != nil {
-			d.log.Error("driver core: upsert port snapshot failed on progress",
-				zap.String("device_phy_id", phyID),
-				zap.Int32("port_no", portNo),
-				zap.Error(err))
-		}
-		return err
-	}
-
-	// 推送第三方事件（供业务系统消费）
-	d.pushThirdpartyEvent(coremodel.EventSessionProgress, phyID, map[string]interface{}{
-		"business_no": businessNo,
-		"port_no":     portNo,
-		"energy":      energy,
-		"duration":    duration,
-	})
-
-	if d.log != nil {
-		d.log.Debug("driver core: session progress",
-			zap.String("device_phy_id", phyID),
-			zap.Int32("port_no", portNo),
-			zap.String("business_no", businessNo),
+	return d.handleSessionState(ctx, sessionContext{
+		Event:         ev,
+		PayloadDevice: payload.DeviceID,
+		PortNo:        int32(payload.PortNo),
+		Business:      payload.BusinessNo,
+		FallbackBiz:   ev.BusinessNo,
+		Status:        status,
+		Power:         payload.PowerW,
+		Timestamp:     payload.OccurredAt,
+		ThirdpartyEvt: coremodel.EventSessionProgress,
+		ExtraPayload: map[string]interface{}{
+			"energy":   energy,
+			"duration": duration,
+		},
+		LogMessage: "driver core: session progress",
+		LogLevel:   zapcore.DebugLevel,
+		LogFields: []zap.Field{
 			zap.Int32("energy_kwh01", energy),
-			zap.Int32("duration_sec", duration))
-	}
-
-	return nil
+			zap.Int32("duration_sec", duration),
+		},
+	})
 }
 
 func (d *DriverCore) handleSessionEnded(ctx context.Context, ev *coremodel.CoreEvent) error {
@@ -540,26 +469,14 @@ func defaultTime(ts time.Time) time.Time {
 	return ts
 }
 
-func defaultChargingStatus(meta map[string]string) int32 {
-	if meta != nil {
-		if raw, ok := meta["raw_status"]; ok {
-			if v, err := strconv.ParseInt(raw, 0, 32); err == nil {
-				return int32(v)
-			}
-		}
-	}
-	return 0xA0 // 充电中: bit7(在线)+bit5(充电)
+// 默认充电状态为 1（空闲）
+func defaultIdleStatus(meta map[string]string) int32 {
+	return 1 // 空闲
 }
 
-func defaultIdleStatus(meta map[string]string) int32 {
-	if meta != nil {
-		if raw, ok := meta["raw_status_idle"]; ok {
-			if v, err := strconv.ParseInt(raw, 0, 32); err == nil {
-				return int32(v)
-			}
-		}
-	}
-	return 0x90 // 空闲: bit7(在线)+bit4(空载)
+// 默认充电状态为 2（充电中）
+func defaultChargingStatus(meta map[string]string) int32 {
+	return 2 // 充电中
 }
 
 func (d *DriverCore) pushThirdpartyEvent(eventType coremodel.CoreEventType, phyID string, data map[string]interface{}) {
@@ -639,6 +556,87 @@ func (d *DriverCore) handlePortSnapshot(ctx context.Context, ev *coremodel.CoreE
 			)
 		}
 		return err
+	}
+
+	return nil
+}
+
+type sessionContext struct {
+	Event         *coremodel.CoreEvent
+	PayloadDevice coremodel.DeviceID
+	PortNo        int32
+	Business      coremodel.BusinessNo
+	FallbackBiz   *coremodel.BusinessNo
+	Status        int32
+	Power         *int32
+	Timestamp     time.Time
+	ThirdpartyEvt coremodel.CoreEventType
+	ExtraPayload  map[string]interface{}
+	LogMessage    string
+	LogLevel      zapcore.Level
+	LogFields     []zap.Field
+}
+
+func (d *DriverCore) handleSessionState(ctx context.Context, sc sessionContext) error {
+	if d.core == nil || sc.Event == nil {
+		return nil
+	}
+
+	phyID := pickDeviceID(sc.Event.DeviceID, sc.PayloadDevice)
+	if phyID == "" {
+		return nil
+	}
+
+	device, err := d.core.EnsureDevice(ctx, phyID)
+	if err != nil {
+		if d.log != nil {
+			d.log.Warn("driver core: ensure device failed",
+				zap.String("device_phy_id", phyID),
+				zap.Error(err))
+		}
+		return err
+	}
+
+	_, bizPtr := parseBusiness(sc.FallbackBiz, sc.Business)
+	businessNo := ""
+	if bizPtr != nil {
+		businessNo = fmt.Sprintf("%04X", *bizPtr)
+	}
+
+	if err := d.core.UpsertPortSnapshot(ctx, device.ID, sc.PortNo, sc.Status, sc.Power, defaultTime(sc.Timestamp)); err != nil {
+		if d.log != nil {
+			d.log.Error("driver core: upsert port snapshot failed",
+				zap.String("device_phy_id", phyID),
+				zap.Int32("port_no", sc.PortNo),
+				zap.Error(err))
+		}
+		return err
+	}
+
+	payload := map[string]interface{}{
+		"business_no": businessNo,
+		"port_no":     sc.PortNo,
+	}
+	for k, v := range sc.ExtraPayload {
+		payload[k] = v
+	}
+	d.pushThirdpartyEvent(sc.ThirdpartyEvt, phyID, payload)
+
+	if d.log != nil && sc.LogMessage != "" {
+		fields := []zap.Field{
+			zap.String("device_phy_id", phyID),
+			zap.Int32("port_no", sc.PortNo),
+			zap.String("business_no", businessNo),
+		}
+		if len(sc.LogFields) > 0 {
+			fields = append(fields, sc.LogFields...)
+		}
+		switch sc.LogLevel {
+		case zapcore.DebugLevel:
+			d.log.Debug(sc.LogMessage, fields...)
+		default:
+			d.log.Info(sc.LogMessage, fields...)
+		}
 	}
 
 	return nil
