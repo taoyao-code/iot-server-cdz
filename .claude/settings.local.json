@@ -18,7 +18,8 @@
       "Bash(psql:*)",
       "Bash(go test:*)",
       "Bash(echo:*)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "mcp__serena__list_dir"
     ],
     "deny": [],
     "ask": []

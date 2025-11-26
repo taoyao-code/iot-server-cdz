@@ -207,45 +207,6 @@ func (r *Repository) UpdatePortStatus(ctx context.Context, deviceID int64, portN
 	return nil
 }
 
-// LockOrCreatePort 行锁定端口记录，若不存在则创建后返回
-func (r *Repository) LockOrCreatePort(ctx context.Context, deviceID int64, portNo int32) (*models.Port, error) {
-	var port models.Port
-	res := r.db.WithContext(ctx).
-		Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("device_id = ? AND port_no = ?", deviceID, portNo).
-		Take(&port)
-	if res.Error != nil {
-		if errors.Is(res.Error, gorm.ErrRecordNotFound) {
-			port = models.Port{
-				DeviceID:  deviceID,
-				PortNo:    portNo,
-				Status:    0,
-				UpdatedAt: time.Now(),
-			}
-			if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&port).Error; err != nil {
-				return nil, err
-			}
-			res = r.db.WithContext(ctx).
-				Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("device_id = ? AND port_no = ?", deviceID, portNo).
-				Take(&port)
-			if res.Error != nil {
-				return nil, res.Error
-			}
-			return &port, nil
-		}
-		return nil, res.Error
-	}
-	return &port, nil
-}
-
-// activeOrderStatuses 标记进行中订单状态。
-var activeOrderStatuses = []int32{0, 1, 2}
-
-// lockOrderStatuses 标记锁定端口的订单状态 - 排除过渡状态(8,9,10)
-// 过渡状态(cancelling/stopping/interrupted)的订单正在结束过程中，端口应该可以被重用
-var lockOrderStatuses = []int32{0, 1, 2}
-
 // AppendCmdLog 写入指令日志。
 func (r *Repository) AppendCmdLog(ctx context.Context, log *models.CmdLog) error {
 	return r.db.WithContext(ctx).Create(log).Error

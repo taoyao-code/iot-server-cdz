@@ -41,8 +41,6 @@ type CoreRepo interface {
 	GetPort(ctx context.Context, deviceID int64, portNo int32) (*models.Port, error)
 	// UpdatePortStatus 仅更新端口状态位（不改 updated_at 以外字段）
 	UpdatePortStatus(ctx context.Context, deviceID int64, portNo int32, status int32) error
-	// LockOrCreatePort 行锁定端口记录，不存在则创建
-	LockOrCreatePort(ctx context.Context, deviceID int64, portNo int32) (*models.Port, error)
 
 	// ---------- 指令日志 ----------
 	// AppendCmdLog 追加一条上下行指令日志

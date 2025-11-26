@@ -41,22 +41,6 @@ func (r *Repository) InsertCmdLog(ctx context.Context, deviceID int64, msgID int
 	return err
 }
 
-// UpsertPortState 更新端口快照（最小字段：status/power）
-func (r *Repository) UpsertPortState(ctx context.Context, deviceID int64, portNo int, status int, powerW *int) error {
-	const q = `INSERT INTO ports (device_id, port_no, status, power_w, updated_at)
-               VALUES ($1,$2,$3,$4,NOW())
-               ON CONFLICT (device_id, port_no)
-               DO UPDATE SET status=EXCLUDED.status, power_w=EXCLUDED.power_w, updated_at=NOW()`
-	var pw interface{}
-	if powerW == nil {
-		pw = nil
-	} else {
-		pw = *powerW
-	}
-	_, err := r.Pool.Exec(ctx, q, deviceID, portNo, status, pw)
-	return err
-}
-
 // AckOutboundByMsgID 根据 device_id+msg_id 标记下行队列完成或失败
 func (r *Repository) AckOutboundByMsgID(ctx context.Context, deviceID int64, msgID int, ok bool, errCode *int) error {
 	if ok {

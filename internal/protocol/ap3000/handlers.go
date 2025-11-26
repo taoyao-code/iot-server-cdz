@@ -35,10 +35,6 @@ func (h *Handlers) HandleRegister(ctx context.Context, f *Frame) error {
 	if err != nil {
 		return err
 	}
-	// 尝试解析端口状态并更新端口快照
-	if ps, derr := Decode20or21(f.Data); derr == nil {
-		_ = h.Repo.UpsertPortState(ctx, devID, ps.Port, ps.Status, ps.PowerW)
-	}
 	return h.Repo.InsertCmdLog(ctx, devID, int(f.MsgID), int(f.Cmd), 0, f.Data, true)
 }
 
