@@ -13,6 +13,19 @@ axios.defaults.headers.common['Content-Type'] = 'application/json';
 // --- Vue App ---
 createApp({
     setup() {
+        // 端口状态码定义（与后端 coremodel.PortStatusCode 保持一致）
+        // 必须在最前面定义，因为后面的 computed 会使用
+        // 0: offline  - 设备离线（不能充电）
+        // 1: idle     - 空闲可用（唯一可以充电的状态）
+        // 2: charging - 充电中（不能充电）
+        // 3: fault    - 故障（不能充电）
+        const PORT_STATUS = {
+            OFFLINE: 0,
+            IDLE: 1,
+            CHARGING: 2,
+            FAULT: 3
+        };
+
         // State
         const apiConnected = ref(false);
         const devices = ref([]);
@@ -60,13 +73,14 @@ createApp({
         });
 
         // 判断是否可以启动充电
+        // 核心规则：只有 status === 1 (idle/空闲) 才能充电
         const canStartCharge = computed(() => {
-            return selectedPortStatus.value === 0 && selectedDevice.value?.is_online && chargeParams.value.socket_uid;
+            return selectedPortStatus.value === PORT_STATUS.IDLE && selectedDevice.value?.is_online && chargeParams.value.socket_uid;
         });
 
         // 判断是否可以停止充电
         const canStopCharge = computed(() => {
-            return selectedPortStatus.value === 1 && selectedDevice.value?.is_online;
+            return selectedPortStatus.value === PORT_STATUS.CHARGING && selectedDevice.value?.is_online;
         });
 
         // Methods
@@ -103,26 +117,42 @@ createApp({
 
         const getPortStatusText = (status) => {
             const statusMap = {
-                0: '空闲',
-                1: '充电中',
-                2: '故障'
+                [PORT_STATUS.OFFLINE]: '离线',
+                [PORT_STATUS.IDLE]: '空闲',
+                [PORT_STATUS.CHARGING]: '充电中',
+                [PORT_STATUS.FAULT]: '故障'
             };
 
             return statusMap[status] || '未知';
         };
 
+        const getPortStatusColor = (status) => {
+            const colorMap = {
+                [PORT_STATUS.OFFLINE]: 'gray',
+                [PORT_STATUS.IDLE]: 'green',
+                [PORT_STATUS.CHARGING]: 'yellow',
+                [PORT_STATUS.FAULT]: 'red'
+            };
+
+            return colorMap[status] || 'gray';
+        };
+
         const getDeviceStatusText = (device) => {
             if (!device.is_online) return '离线';
 
-            // 检查是否有任何端口实际在充电（状态为1表示充电中）
-            const hasChargingPort = device.ports && device.ports.some(port => port.status === 1);
+            // 检查是否有任何端口实际在充电（状态为 CHARGING）
+            const hasChargingPort = device.ports && device.ports.some(port => port.status === PORT_STATUS.CHARGING);
 
             if (hasChargingPort) {
                 return '充电中';
             }
 
-            // 即使有活跃订单，如果没有端口在充电，也显示为空闲
-            // 这处理了数据不一致的情况：active_order_but_ports_not_charging
+            // 检查是否有故障端口
+            const hasFaultPort = device.ports && device.ports.some(port => port.status === PORT_STATUS.FAULT);
+            if (hasFaultPort) {
+                return '故障';
+            }
+
             return '空闲';
         };
 
@@ -341,6 +371,7 @@ createApp({
             autoRefresh,
             refreshIntervalSeconds,
             refreshIntervalOptions,
+            PORT_STATUS,
 
             selectDevice,
             startCharging,
@@ -351,6 +382,7 @@ createApp({
             toggleAutoRefresh,
             formatTime,
             getPortStatusText,
+            getPortStatusColor,
             getDeviceStatusText
         };
     }

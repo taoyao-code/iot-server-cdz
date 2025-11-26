@@ -3,6 +3,8 @@ package bkv
 import (
 	"fmt"
 	"time"
+
+	"github.com/taoyao-code/iot-server/internal/coremodel"
 )
 
 // extractDeviceID 从 Frame 中提取设备ID，如果为空则返回错误
@@ -82,13 +84,10 @@ func encodeHeartbeatAck(gatewayID string) []byte {
 	}
 }
 
-// extractEndReason 从插座状态中提取结束原因（简化版本）
+// extractEndReason 从插座状态中提取结束原因
+// 委托给 coremodel.DeriveEndReasonFromStatus 实现
 func extractEndReason(status uint8) int {
-	if status&0x08 != 0 { // 空载结束
-		return 1
-	}
-	if status&0x04 != 0 {
-		return 2
-	}
-	return 0
+	reasonCode := coremodel.DeriveEndReasonFromStatus(coremodel.RawPortStatus(status))
+	// 返回 coremodel 的结束原因码（int）
+	return int(reasonCode)
 }

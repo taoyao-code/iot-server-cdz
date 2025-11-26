@@ -554,13 +554,13 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 			powerW = *port.PowerW
 		}
 
-		portData := map[string]interface{}{
-			"port_no": port.PortNo,
-			"status":  portMappingStatus(port.Status),
-			"power":   powerW,
-		}
-
+		portData := buildPortData(port.PortNo, port.Status, powerW)
 		portList = append(portList, portData)
+
+		// 检查是否有充电中的端口
+		if portData["status"] == coremodel.StatusCodeCharging {
+			hasChargingPort = true
+		}
 	}
 
 	// 6. 确定设备整体状态
@@ -595,21 +595,31 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 	})
 }
 
-// 端口映射状态
+// portMappingStatus 将协议层原始状态转换为 API 状态码
+// 状态码定义：
+//   - 0: offline  - 设备离线
+//   - 1: idle     - 空闲可用（唯一可以开始充电的状态）
+//   - 2: charging - 充电中
+//   - 3: fault    - 故障
 func portMappingStatus(status int) int {
-	// 转换端口状态
-	// 协议规范：bit7=在线, bit5=充电, bit4=空载；若功率>0但未置充电位，也视为充电中
-	statusEnum := 0
-	isPortOnline := (status & 0x80) != 0 // bit7
-	isCharging := (status & 0x20) != 0   // bit5
+	return int(coremodel.RawStatusToCode(int32(status)))
+}
 
-	if !isPortOnline {
-		statusEnum = 2
-	} else if isCharging {
-		statusEnum = 1
+// buildPortData 构建端口完整数据（包含状态信息）
+// 返回的数据直接可供前端使用，无需额外判断
+func buildPortData(portNo int, rawStatus int, powerW int) map[string]interface{} {
+	statusCode := coremodel.RawStatusToCode(int32(rawStatus))
+	statusInfo := statusCode.ToInfo()
+
+	return map[string]interface{}{
+		"port_no":       portNo,
+		"status":        statusInfo.Code,         // 状态码: 0=离线, 1=空闲, 2=充电中, 3=故障
+		"status_name":   statusInfo.Name,         // 状态名: offline/idle/charging/fault
+		"status_text":   statusInfo.DisplayText,  // 显示文本: 设备离线/空闲可用/使用中/故障
+		"can_charge":    statusInfo.CanCharge,    // 能否充电: 只有 status=1 时为 true
+		"display_color": statusInfo.DisplayColor, // 显示颜色: gray/green/yellow/red
+		"power":         powerW,
 	}
-
-	return statusEnum
 }
 
 // ListDevices 查询设备列表
@@ -653,7 +663,7 @@ func (h *ThirdPartyHandler) ListDevices(c *gin.Context) {
 			ports = nil
 		}
 
-		// 构建端口列表
+		// 构建端口列表（使用统一的 buildPortData 函数）
 		portList := []map[string]interface{}{}
 		hasChargingPort := false
 		for _, port := range ports {
@@ -662,13 +672,13 @@ func (h *ThirdPartyHandler) ListDevices(c *gin.Context) {
 				powerW = *port.PowerW
 			}
 
-			portData := map[string]interface{}{
-				"port_no": port.PortNo,
-				"status":  portMappingStatus(port.Status),
-				"power":   powerW,
-			}
-
+			portData := buildPortData(port.PortNo, port.Status, powerW)
 			portList = append(portList, portData)
+
+			// 检查是否有充电中的端口
+			if portData["status"] == coremodel.StatusCodeCharging {
+				hasChargingPort = true
+			}
 		}
 
 		// 确定设备状态
@@ -730,5 +740,25 @@ func deriveBusinessNo(orderNo string) uint16 {
 
 // isBKVChargingStatus 判断端口状态位图是否表示充电中
 func isBKVChargingStatus(status int) bool {
-	return status&0x80 != 0
+	return coremodel.RawPortStatus(uint8(status)).IsCharging()
+}
+
+// GetStatusDefinitions 获取状态定义
+// @Summary 获取状态定义
+// @Description 获取所有端口状态和结束原因的定义，供前端显示和 API 文档使用
+// @Tags 第三方API - 状态定义
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} StandardResponse "成功"
+// @Router /api/v1/third/status/definitions [get]
+func (h *ThirdPartyHandler) GetStatusDefinitions(c *gin.Context) {
+	requestID := c.GetString("request_id")
+
+	c.JSON(http.StatusOK, StandardResponse{
+		Code:      0,
+		Message:   "成功",
+		Data:      coremodel.GetStatusDefinitions(),
+		RequestID: requestID,
+		Timestamp: time.Now().Unix(),
+	})
 }

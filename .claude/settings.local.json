@@ -16,7 +16,9 @@
       "Bash(go build:*)",
       "Bash(cat:*)",
       "Bash(psql:*)",
-      "Bash(go test:*)"
+      "Bash(go test:*)",
+      "Bash(echo:*)",
+      "Bash(git stash:*)"
     ],
     "deny": [],
     "ask": []

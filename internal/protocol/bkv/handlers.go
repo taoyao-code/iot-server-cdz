@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/taoyao-code/iot-server/internal/coremodel"
 	"github.com/taoyao-code/iot-server/internal/driverapi"
 	"github.com/taoyao-code/iot-server/internal/storage"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
@@ -107,7 +108,10 @@ func (h *Handlers) HandleBKVStatus(ctx context.Context, f *Frame) error {
 	}
 
 	// 2. 根据载荷类型分发处理
-	if payload.IsStatusReport() {
+	// 修复：同时检查 IsStatusReport() 和 HasSocketStatusFields()
+	// 某些设备固件可能使用非标准 BKV Cmd (如 0x1013 而非 0x1017)，
+	// 但仍然携带有效的端口状态数据（tag 0x65 + value 0x94）
+	if payload.IsStatusReport() || payload.HasSocketStatusFields() {
 		err := h.handleSocketStatusUpdate(ctx, payload)
 		h.sendStatusAck(ctx, f, payload, err == nil)
 		return err
@@ -166,7 +170,7 @@ func (h *Handlers) handleSocketStatusUpdate(ctx context.Context, payload *BKVPay
 		h.emitter().Emit(ctx, event)
 
 		// 如果正在充电，推送充电进度事件到Webhook
-		isCharging := (port.Status & 0x20) != 0 // bit5=充电
+		isCharging := coremodel.RawPortStatus(port.Status).IsCharging()
 		if isCharging && h.EventQueue != nil {
 			powerW := float64(port.Power) / 10.0       // 0.1W -> W
 			currentA := float64(port.Current) / 1000.0 // 0.001A -> A
@@ -256,7 +260,7 @@ func (h *Handlers) handleBKVChargingEnd(ctx context.Context, f *Frame, payload *
 		return fmt.Errorf("core events sink not configured for BKV charging end")
 	}
 
-	nextStatus := int32(0x90) // 0x90 = bit7(在线) + bit4(空载)
+	nextStatus := int32(coremodel.RawStatusOnlineNoLoad) // 充电结束后设为在线空载
 	rawReason := int32(reason)
 
 	event := NewEventBuilder(deviceID).
@@ -278,12 +282,7 @@ func (h *Handlers) handleBKVChargingEnd(ctx context.Context, f *Frame, payload *
 	// 推送充电结束事件到Webhook
 	totalKwh := float64(kwh01) / 100.0 // 0.01kWh -> kWh
 	durationMin := durationSec / 60
-	endReasonMsg := "正常结束"
-	if reason == 1 {
-		endReasonMsg = "用户停止"
-	} else if reason == 8 {
-		endReasonMsg = "空载结束"
-	}
+	endReasonMsg := h.getEndReasonDescription(reason)
 	h.pushChargingEndedEvent(ctx, deviceID, orderHex, actualPort, durationMin, totalKwh, fmt.Sprintf("%d", reason), endReasonMsg, nil)
 
 	success = true
@@ -393,7 +392,7 @@ func (h *Handlers) HandleChargingEnd(ctx context.Context, f *Frame) error {
 	// 发送充电结束事件
 	if h.emitter().IsConfigured() {
 		orderHex := fmt.Sprintf("%04X", orderID)
-		nextStatus := int32(0x90) // 0x90 = bit7(在线) + bit4(空载)
+		nextStatus := int32(coremodel.RawStatusOnlineNoLoad) // 充电结束后设为在线空载
 		rawReason := int32(reason)
 
 		event := NewEventBuilder(deviceID).
@@ -413,7 +412,6 @@ func (h *Handlers) HandleChargingEnd(ctx context.Context, f *Frame) error {
 	return nil
 }
 
-// extractEndReason 从插座状态中提取结束原因（简化版本）
 // HandleGeneric 通用处理器，记录所有其他指令
 func (h *Handlers) HandleGeneric(ctx context.Context, f *Frame) error {
 	deviceID := extractDeviceIDOrDefault(f)

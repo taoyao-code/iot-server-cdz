@@ -40,8 +40,11 @@ func RegisterThirdPartyRoutes(
 	api.POST("/devices/:device_id/charge", handler.StartCharge) // 启动充电
 	api.POST("/devices/:device_id/stop", handler.StopCharge)    // 停止充电
 
+	// 状态定义API
+	api.GET("/status/definitions", handler.GetStatusDefinitions) // 获取状态定义
+
 	// 组网管理API
 	api.POST("/devices/:device_id/network/configure", handler.ConfigureNetwork) // 配置组网
 
-	logger.Info("third party routes registered", zap.Int("endpoints", 6))
+	logger.Info("third party routes registered", zap.Int("endpoints", 7))
 }

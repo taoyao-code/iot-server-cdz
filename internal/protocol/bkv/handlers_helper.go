@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"time"
+
+	"github.com/taoyao-code/iot-server/internal/coremodel"
 )
 
 // handlersHelper 辅助方法集合
@@ -221,12 +223,13 @@ func (h *Handlers) collectChargingMetrics(deviceID string, portNo int, status ui
 	portStr := fmt.Sprintf("%d", portNo+1) // API端口=协议插孔+1
 
 	// 状态统计
+	rawStatus := coremodel.RawPortStatus(status)
 	statusLabel := "idle" // 充电结束=空闲
-	if status&0x10 != 0 {
-		statusLabel = "charging" // bit4=1表示充电中
+	if rawStatus.IsCharging() {
+		statusLabel = "charging"
 	}
-	if status&0x04 == 0 || status&0x02 == 0 {
-		statusLabel = "abnormal" // 温度或电流异常
+	if rawStatus.HasFault() {
+		statusLabel = "abnormal"
 	}
 	h.Metrics.GetChargeReportTotal().WithLabelValues(deviceID, portStr, statusLabel).Inc()
 
@@ -283,12 +286,7 @@ func (h *Handlers) handleControlChargingEnd(ctx context.Context, f *Frame, devic
 	// 推送充电结束事件到Webhook
 	totalKwh := float64(end.EnergyUsed) / 100.0 // 0.01kWh -> kWh
 	durationMin := int(end.ChargingTime)
-	endReasonMsg := "正常结束"
-	if end.EndReason == 1 {
-		endReasonMsg = "用户停止"
-	} else if end.EndReason == 8 {
-		endReasonMsg = "空载结束"
-	}
+	endReasonMsg := h.getEndReasonDescription(int(end.EndReason))
 	h.pushChargingEndedEvent(ctx, deviceID, bizNo, int(end.Port), durationMin, totalKwh, fmt.Sprintf("%d", end.EndReason), endReasonMsg, nil)
 
 	// 3. 回复 ACK
@@ -367,17 +365,17 @@ func (h *Handlers) sendDownlinkReply(deviceID string, cmd uint16, msgID uint32, 
 }
 
 // (h *Handlers) mapSocketStatusToRaw 映射插座状态枚举到原始状态位图
-// 协议规范：bit7=在线, bit5=充电, bit4=空载
+// 使用 coremodel 定义的常量，确保协议一致性
 func mapSocketStatusToRaw(status int) int32 {
 	switch status {
 	case 0:
-		return 0x90 // idle → 在线(bit7)+空载(bit4)
+		return int32(coremodel.RawStatusOnlineNoLoad) // idle → 在线空载
 	case 1:
-		return 0xA0 // charging → 在线(bit7)+充电(bit5)
+		return int32(coremodel.RawStatusOnlineCharging) // charging → 在线充电
 	case 2:
-		return 0x00 // fault → 离线/故障
+		return int32(coremodel.RawStatusOffline) // fault → 离线/故障
 	default:
-		return 0x00
+		return int32(coremodel.RawStatusOffline)
 	}
 }
 
@@ -387,4 +385,14 @@ func buildNetworkTopologyMetadata(cmd uint16, payload []byte) map[string]string 
 		"cmd":         fmt.Sprintf("0x%04X", cmd),
 		"raw_payload": fmt.Sprintf("%x", payload),
 	}
+}
+
+// (h *Handlers) getEndReasonDescription 获取结束原因描述
+// 优先使用 ReasonMap 配置，回退到默认描述
+func (h *Handlers) getEndReasonDescription(reason int) string {
+	if h.Reason != nil {
+		return h.Reason.GetReasonDescription(reason)
+	}
+	// 回退到默认描述（与 ReasonMap.GetReasonDescription 保持一致）
+	return DefaultReasonMap().GetReasonDescription(reason)
 }

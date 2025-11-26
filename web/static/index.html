@@ -350,7 +350,8 @@
                                     <span v-if="selectedPort === null">请选择端口</span>
                                     <span v-else-if="!selectedDevice?.is_online">设备离线</span>
                                     <span v-else-if="!chargeParams.socket_uid">请输入插座 UID</span>
-                                    <span v-else-if="selectedPortStatus === 0">已就绪（空闲状态）</span>
+                                    <span v-else-if="selectedPortStatus === 0">端口离线</span>
+                                    <span v-else-if="selectedPortStatus === 3">端口故障</span>
                                     <span v-else>端口状态: {{ getPortStatusText(selectedPortStatus) }}</span>
                                 </div>
                             </div>
@@ -376,9 +377,10 @@
                                             </div>
                                             <div class="text-xs text-gray-400 mt-1">
                                                 状态: <span :class="{
-                                                    'text-green-400': port.status === 0,
-                                                    'text-blue-400': port.status === 1,
-                                                    'text-red-400': port.status === 2
+                                                    'text-gray-400': port.status === 0,
+                                                    'text-green-400': port.status === 1,
+                                                    'text-yellow-400': port.status === 2,
+                                                    'text-red-400': port.status === 3
                                                 }">{{ getPortStatusText(port.status) }}</span>
                                             </div>
                                         </div>
@@ -451,7 +453,7 @@
         </main>
     </div>
 
-    <script src="/static/js/app.js?v=20251124-3"></script>
+    <script src="/static/js/app.js?v=20251126-1"></script>
 </body>
 
 </html>

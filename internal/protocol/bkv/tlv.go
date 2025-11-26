@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+
+	"github.com/taoyao-code/iot-server/internal/coremodel"
 )
 
 var (
@@ -265,23 +267,8 @@ type PortStatus struct {
 	ChargingTime uint16 // 充电时间 (分钟)
 }
 
-// IsCharging 判断端口是否正在充电
-// 状态位bit5=1表示充电中
-func (p *PortStatus) IsCharging() bool {
-	return (p.Status & 0x20) != 0
-}
-
-// IsIdle 判断端口是否空载
-// 状态位bit4=1表示空载
-func (p *PortStatus) IsIdle() bool {
-	return (p.Status & 0x10) != 0
-}
-
-// IsOnline 判断端口是否在线
-// 状态位bit7=1表示在线
-func (p *PortStatus) IsOnline() bool {
-	return (p.Status & 0x80) != 0
-}
+// 注：IsCharging/IsIdle/IsOnline 方法已迁移到 coremodel.RawPortStatus
+// 使用示例: coremodel.RawPortStatus(port.Status).IsCharging()
 
 // ParseSocketStatus 解析插座状态上报 (0x94字段)
 func ParseSocketStatus(data []byte) (*SocketStatus, error) {
@@ -711,8 +698,28 @@ func (p *BKVPayload) IsHeartbeat() bool {
 }
 
 // IsStatusReport 判断是否为状态上报
+// 支持多种 BKV Cmd：0x1017（标准状态上报）和 0x1013（部分设备固件使用）
 func (p *BKVPayload) IsStatusReport() bool {
-	return p.Cmd == 0x1017 // 状态上报也使用1017命令，通过0x94字段区分
+	// 标准状态上报命令
+	if p.Cmd == 0x1017 {
+		return true
+	}
+	// 兼容部分设备固件使用的命令
+	if p.Cmd == 0x1013 {
+		return true
+	}
+	return false
+}
+
+// HasSocketStatusFields 检查载荷是否包含插座状态字段（tag 0x65 + value 0x94）
+// 这是一种更可靠的检测方式，不依赖 BKV Cmd
+func (p *BKVPayload) HasSocketStatusFields() bool {
+	for _, field := range p.Fields {
+		if field.Tag == 0x65 && len(field.Value) > 0 && field.Value[0] == 0x94 {
+			return true
+		}
+	}
+	return false
 }
 
 // IsChargingEnd 判断是否为充电结束上报
@@ -893,30 +900,31 @@ func ParseBKVChargingEnd(data []byte) (*BKVChargingEnd, error) {
 }
 
 // deriveEndReasonFromStatus 从插座状态位推导结束原因
-// 状态位格式: bit7-在线 bit6-计量正常 bit5-充电 bit4-空载 bit3-温度正常 bit2-电流正常 bit1-功率正常 bit0-预留
+// 委托给 coremodel.DeriveEndReasonFromStatus 实现，并映射回 BKV 协议原因码
 func deriveEndReasonFromStatus(status uint8) ChargingEndReason {
-	// 检查离线 (bit7 = 0表示离线) - 最高优先级
-	if (status>>7)&0x01 == 0 {
-		return ReasonPowerOff
-	}
+	reasonCode := coremodel.DeriveEndReasonFromStatus(coremodel.RawPortStatus(status))
 
-	// 检查空载位 (bit4)
-	if (status>>4)&0x01 == 1 {
+	// 将 coremodel.EndReasonCode 映射回 BKV 协议的 ChargingEndReason
+	switch reasonCode {
+	case coremodel.ReasonCodeNormal:
+		return ReasonNormal
+	case coremodel.ReasonCodeUserStop:
+		return ReasonUserStop
+	case coremodel.ReasonCodeNoLoad:
 		return ReasonNoLoad
-	}
-
-	// 检查温度异常 (bit3 = 0表示异常)
-	if (status>>3)&0x01 == 0 {
-		return ReasonOverTemp
-	}
-
-	// 检查电流异常 (bit2 = 0表示异常)
-	if (status>>2)&0x01 == 0 {
+	case coremodel.ReasonCodeOverCurrent:
 		return ReasonOverCurrent
+	case coremodel.ReasonCodeOverTemp:
+		return ReasonOverTemp
+	case coremodel.ReasonCodeOverPower:
+		return ReasonOverCurrent // BKV 协议无单独过功率码，映射为过流
+	case coremodel.ReasonCodePowerOff:
+		return ReasonPowerOff
+	case coremodel.ReasonCodeFault:
+		return ReasonPowerOff // BKV 协议无单独故障码，映射为断电
+	default:
+		return ReasonNormal
 	}
-
-	// 默认正常结束
-	return ReasonNormal
 }
 
 // GetControlCommandType 判断控制指令类型
