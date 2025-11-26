@@ -2,338 +2,191 @@
 
 ## Purpose
 
-IOT Server 是一个高性能充电桩物联网服务器，用于管理和控制电动汽车充电桩设备。主要目标：
+IOT Server 是一个专为充电桩设备设计的高性能物联网服务器，核心目标包括：
 
-- 支持 50,000+ 并发设备连接的 TCP 长连接管理
-- 实时协议解析和命令分发（AP3000/BKV/GN 多协议支持）
-- 订单管理和自动结算系统
-- 第三方系统集成和事件推送
-- 高可用性和容错设计
+- **设备连接管理**：支持 50,000+ 并发 TCP 长连接
+- **多协议支持**：AP3000、BKV、GN 等主流充电桩协议
+- **实时数据采集**：设备状态、充电会话、计量数据
+- **远程控制**：启停充电、参数配置、OTA 升级
+- **第三方集成**：Webhook 事件推送、RESTful API 对接
+- **高可用运维**：健康检查、限流熔断、自动重连
 
 ## Tech Stack
 
-**核心技术**
+### 核心语言与框架
+- **Go 1.25.4** - 主开发语言
+- **Gin** - HTTP Web 框架
+- **GORM + pgx/v5** - ORM 与 PostgreSQL 驱动
+- **go-redis/v9** - Redis 客户端
+- **zap** - 结构化日志
+- **viper** - 配置管理
 
-- Go 1.24+ (主开发语言)
-- Gin (HTTP Web 框架)
-- pgx (PostgreSQL 驱动，直接 SQL 操作，无 ORM)
-- go-redis (Redis 客户端)
+### 存储层
+- **PostgreSQL 15** - 主数据库（设备、会话、事件）
+- **Redis 7** - 分布式会话、消息队列、缓存
 
-**基础设施**
+### 监控与可观测
+- **Prometheus** - 指标采集
+- **Grafana** - 可视化看板（可选）
+- **lumberjack** - 日志轮转
 
-- PostgreSQL 14+ (主存储：设备、订单、事件)
-- Redis 6+ (会话管理、消息队列、缓存)
-- Prometheus (监控指标)
-- Docker / Docker Compose (容器化)
-
-**开发工具**
-
-- golangci-lint (代码检查)
-- Testify (测试框架)
-- Swagger (API 文档生成)
-- Make (构建自动化)
+### 基础设施
+- **Docker / Docker Compose** - 容器化部署
+- **GitHub Actions** - CI/CD 自动化
+- **Swagger (swaggo)** - API 文档生成
 
 ## Project Conventions
 
 ### Code Style
 
-**格式化规则**
-
-- 使用 `gofmt` + `goimports` 自动格式化（运行 `make fmt`）
-- 强制执行 80-120 字符行宽建议
-- Tab 缩进（Go 标准）
-
-**命名约定**
-
-- 包名：小写单词，简短描述性（如 `gateway`, `session`, `storage`）
-- 接口：名词或动词 + "er" 后缀（如 `ProtocolHandler`, `SessionManager`）
-- 私有成员：小驼峰（`deviceID`, `portStatus`）
-- 导出成员：大驼峰（`DeviceID`, `PortStatus`）
-- 常量：大驼峰或全大写（配置常量使用 `const` 块）
-
-**注释规范**
-
-- 所有导出函数必须有注释（以函数名开头）
-- 复杂逻辑必须有行内注释
-- TODO 注释格式：`// TODO(username): description`
-
-**错误处理**
-
-- 使用 `fmt.Errorf` 包装错误，添加上下文
-- 避免 panic，除非不可恢复的初始化错误
-- 使用 `errors.Is` 和 `errors.As` 判断错误类型
+- **格式化**：使用 `gofmt -s` 自动格式化，CI 强制检查
+- **静态分析**：`go vet` + `golangci-lint` 全量检查
+- **命名规范**：
+  - 包名：小写单词，如 `session`、`storage`
+  - 接口名：动词或描述性名词，如 `Manager`、`Repository`
+  - 常量：全大写下划线分隔，如 `PortStatusIdle`
+- **注释语言**：中文注释（与现有代码保持一致）
+- **Pre-commit Hook**：自动格式化检查（`make install-hooks`）
 
 ### Architecture Patterns
 
-**多层事件驱动架构**
+采用**分层架构 + 依赖注入**设计：
 
 ```
-Gateway 层（TCP 服务器）
-    ↓ 协议检测
-Protocol 层（AP3000/BKV 解析器）
-    ↓ 命令分发
-Business Logic 层（处理器 + 服务）
-    ↓ 异步队列
-Persistence 层（PostgreSQL + Redis）
+cmd/server/              # 应用入口
+internal/
+├── app/                 # 应用引导、组件工厂
+│   └── bootstrap/       # 统一启动流程（9阶段）
+├── api/                 # HTTP 路由与处理器
+│   └── middleware/      # 认证、限流中间件
+├── gateway/             # TCP 连接处理器
+├── protocol/            # 协议适配层
+│   ├── ap3000/          # AP3000 协议解析器
+│   ├── bkv/             # BKV 协议解析器
+│   └── gn/              # GN 组网协议
+├── session/             # 分布式会话管理（Redis）
+├── storage/             # 数据访问层
+│   ├── pg/              # PostgreSQL 仓储
+│   └── redis/           # Redis 队列
+├── coremodel/           # 领域模型（设备/端口/会话）
+├── service/             # 业务服务（计费、刷卡）
+├── thirdparty/          # 第三方集成（Webhook）
+├── outbound/            # 下行消息队列
+├── health/              # 健康检查
+└── metrics/             # Prometheus 指标
 ```
 
-**关键设计模式**
-
-- **Repository 模式**：所有数据库操作封装在 `internal/storage/*_repository.go`
-- **适配器模式**：协议处理器实现 `ProtocolHandler` 接口
-- **策略模式**：定价引擎支持多种计费策略
-- **发布订阅**：事件推送使用 Redis 队列解耦
-- **Outbox 模式**：第三方事件推送保证最终一致性
-
-**依赖注入**
-
-- 使用构造函数注入（`New*` 函数）
-- 依赖在 `internal/app/bootstrap.go` 中组装
-- 避免全局变量（除日志器和配置）
-
-**并发模型**
-
-- Goroutine per Connection（TCP 连接）
-- Worker Pool（出站命令发送）
-- 使用 `context.Context` 传递取消信号
-- 数据库连接池大小根据负载调整
+**关键设计模式**：
+- **适配器模式**：协议驱动与核心解耦（`DriverCore`）
+- **事件驱动**：`CoreEvent` 标准化上报，`EventQueue` 异步推送
+- **Outbox 模式**：可靠事件投递，防止消息丢失
+- **熔断器模式**：TCP 连接限流保护（`circuit_breaker`）
 
 ### Testing Strategy
 
-**测试金字塔**
+- **单元测试**：`go test -race`，强制 race 检测
+- **覆盖率目标**：核心模块 > 70%
+- **测试分类**：按 package 并行执行（app/service/api/protocol/outbound/storage）
+- **集成测试**：CI 环境自动启动 PostgreSQL + Redis 容器
+- **E2E 测试**：`make test-e2e`（test/e2e 目录）
 
-- **单元测试**：覆盖业务逻辑和工具函数（目标 70%+ 覆盖率）
-  - 位置：`*_test.go` 与被测文件同目录
-  - 使用 `testify/assert` 和 `testify/mock`
-  - 运行：`make test`（带 race 检测）
-
-- **集成测试**：验证数据库操作和 Redis 交互
-  - 使用 Docker Compose 启动依赖
-  - 运行：`make test-integration`
-
-- **E2E 测试**：模拟完整设备交互流程
-  - 位置：`tests/e2e/`
-  - 运行：`make test-e2e`
-
-**测试要求**
-
-- 新功能必须包含单元测试
-- P0 Bug 修复必须包含回归测试
-- PR 合并前所有测试必须通过（`make test-all`）
+```bash
+make test-all      # 完整测试套件
+make test-quick    # 快速测试（无race）
+make test-coverage # 生成覆盖率报告
+```
 
 ### Git Workflow
 
-**分支策略**
-
-- `main`：主分支，保护分支，仅通过 PR 合并
-- `feature/*`：新功能开发分支
-- `fix/*`：Bug 修复分支
-- `refactor/*`：代码重构分支
-
-**提交规范**（遵循 Conventional Commits）
-
-```
-<type>(<scope>): <subject>
-
-<body>
-
-<footer>
-```
-
-**类型（type）**
-
-- `feat`: 新功能
-- `fix`: Bug 修复
-- `refactor`: 重构（不改变功能）
-- `test`: 添加或修改测试
-- `docs`: 文档更新
-- `chore`: 构建/工具变更
-- `perf`: 性能优化
-
-**示例**
-
-```
-feat(bkv): 添加心跳超时检测机制
-
-实现基于 Redis TTL 的心跳超时检测，解决设备假在线问题。
-超时时间设置为 60 秒，与设备心跳间隔一致。
-
-Closes #123
-```
-
-**PR 要求**
-
-- 标题遵循提交规范
-- 描述清晰说明变更内容和原因
-- 所有测试通过
-- 代码已格式化（`make fmt`）
+- **主分支**：`main`（生产）、`develop`（开发）
+- **提交规范**：[Conventional Commits](https://www.conventionalcommits.org/)
+  - `feat:` 新功能
+  - `fix:` 修复
+  - `refactor:` 重构
+  - `docs:` 文档
+  - `test:` 测试
+  - `chore:` 工具/配置
+- **PR 流程**：提交到 `main`/`develop` 触发 CI
+- **版本发布**：Git Tag 触发 `deploy-production.yml`
 
 ## Domain Context
 
-**充电桩领域知识**
+### 充电桩设备模型
 
-**设备类型**
+```
+设备(Device) 1:N 端口(Port) 1:N 充电会话(Session)
+```
 
-- **交流桩**：使用 AP3000 协议，功率 3.5-22kW，单枪
-- **直流桩**：使用 BKV 协议，功率 30-360kW，多枪（最多 12 枪）
-- **充电过程**：刷卡 → 鉴权 → 启动 → 充电中 → 停止 → 结算
+- **DeviceID**：设备物理标识（协议上报）
+- **PortNo**：端口编号（0-based）
+- **BusinessNo**：上游业务订单号（第三方下发）
 
-**关键业务流程**
+### 端口状态机
 
-1. **设备上线**：TCP 连接 → 协议握手 → 会话创建 → 上报状态
-2. **订单生命周期**：创建 → 等待确认 → 充电中 → 完成/失败 → 推送事件
-3. **心跳机制**：设备每 30 秒发送心跳，服务器 60 秒超时断线
-4. **端口状态同步**：周期性（5 分钟）扫描所有端口，修正状态不一致
+```
+offline -> idle -> charging -> completed/interrupted
+                            -> fault
+```
 
-**业务规则**
+- `idle`：空闲可用
+- `charging`：正在充电
+- `fault`：故障
+- `stopping`：停止中（中间态）
 
-- 端口只能同时服务一个订单（通过数据库行锁保证）
-- 订单取消需等待设备 ACK 确认（10 秒超时窗口）
-- 第三方事件推送使用 Outbox 模式保证最终一致性
-- 离线订单自动标记为失败（心跳超时触发）
+### 协议适配
 
-**协议特性**
+所有协议事件通过 `CoreEvent` 标准化上报：
+- `DeviceHeartbeat` - 设备心跳
+- `PortSnapshot` - 端口状态快照
+- `SessionStarted/Progress/Ended` - 会话生命周期
+- `ExceptionReported` - 异常告警
 
-- **AP3000**：帧格式 STX + 长度 + 数据 + CRC + ETX
-- **BKV**：25+ 命令类型，TLV 编码，支持多枪并发
-- **GN**：设备间组网通信，用于级联场景
+下行命令通过 `CoreCommand` 标准化下发：
+- `StartCharge/StopCharge` - 启停充电
+- `SetParams` - 参数配置
+- `TriggerOTA` - 固件升级
 
 ## Important Constraints
 
-**性能约束**
+### 技术约束
 
-- 支持 50,000 并发 TCP 连接（单实例）
-- 心跳处理延迟 < 100ms
-- 订单创建响应时间 < 500ms
-- 数据库查询超时 5 秒
+- **Redis 必选**：分布式会话管理必须依赖 Redis
+- **PostgreSQL 必选**：持久化存储唯一选择
+- **TCP 长连接**：设备侧不支持 HTTP，仅 TCP
+- **并发限制**：单实例最大 10,000 连接，需水平扩展
 
-**技术约束**
+### 业务约束
 
-- Go 版本 ≥ 1.24（使用泛型和新特性）
-- PostgreSQL 版本 ≥ 14（使用 JSONB 和分区表）
-- Redis 版本 ≥ 6（使用流和 ACL）
-- 所有 SQL 必须参数化（防 SQL 注入）
+- **心跳超时**：120 秒无心跳判定离线
+- **ACK 窗口**：下行命令 30 秒内需 ACK
+- **事件去重**：同一事件 1 小时内不重复推送
 
-**安全约束**
+### 运维约束
 
-- API 必须通过 `X-API-Key` 认证
-- 敏感数据（卡号）必须加密存储
-- 日志禁止打印密码、Token 等敏感信息
-- 生产环境禁用 debug 日志级别
-
-**业务约束**
-
-- 订单金额使用 `decimal` 类型（避免浮点误差）
-- 时间戳统一使用 UTC+0 存储
-- 设备 ID 全局唯一，不可重复分配
-- 端口状态变更必须记录审计日志
-
-**运维约束**
-
-- TCP 服务器必须最后启动（9 阶段启动流程）
-- 数据库迁移由应用启动时自动执行
-- 配置文件变更需重启服务（不支持热重载）
-- 部署前必须备份数据库（`make backup`）
+- **健康检查**：`/healthz`（存活）、`/readyz`（就绪）
+- **优雅停机**：10 秒超时
+- **资源限制**：4 CPU / 4GB 内存
 
 ## External Dependencies
 
-**核心依赖服务**
+### 必选依赖
 
-- **PostgreSQL**：主数据存储，保存设备、订单、事件
-  - 连接信息：`configs/*.yaml` 中 `database` 配置
-  - 数据备份：每次部署前自动备份（`scripts/backup.sh`）
+| 服务 | 版本 | 用途 |
+|------|------|------|
+| PostgreSQL | 15+ | 主数据库 |
+| Redis | 7+ | 会话/队列 |
 
-- **Redis**：会话管理、消息队列、缓存
-  - 会话 Key 格式：`session:{deviceID}` (TTL 90s)
-  - 队列 Key：`outbound:normal`, `outbound:high`, `outbound:realtime`
-  - 事件队列：`third_party_events` (Stream 结构)
+### 可选依赖
 
-**第三方集成**
+| 服务 | 用途 |
+|------|------|
+| Prometheus | 指标采集 |
+| Grafana | 可视化 |
+| 第三方 Webhook | 事件推送 |
 
-- **客户 Webhook**：推送订单事件（创建、确认、失败、完成）
-  - 配置：通过 `/api/v1/third-party` API 添加
-  - 签名：HMAC-SHA256（Header: `X-Signature`）
-  - 重试：最多 3 次，指数退避（1s, 2s, 4s）
+### 配置方式
 
-**监控服务**
-
-- **Prometheus**：指标采集（`/metrics` 端点）
-  - 关键指标：在线设备数、消息吞吐量、队列长度
-  - Grafana Dashboard：（待配置）
-
-**开发依赖**
-
-- **Docker Compose**：本地开发环境
-- **golangci-lint**：代码质量检查
-- **Swagger**：API 文档生成
-
-**外部 API**（未来集成）
-
-- 支付系统 API（待对接）
-- 短信通知 API（待对接）
-- 用户系统 API（待对接）
-
----
-
-## OpenSpec Change History
-
-本节记录所有已归档的 OpenSpec 变更提案及其正式规范。
-
-### 已归档变更
-
-#### 2025-11-20: Consistency Lifecycle Specification
-
-**变更 ID**: `add-consistency-lifecycle-spec`
-**规范路径**: `openspec/specs/consistency-lifecycle/spec.md`
-**归档路径**: `openspec/changes/archive/2025-11-20-add-consistency-lifecycle-spec/`
-
-**变更摘要:**
-
-定义了设备/端口/订单生命周期的统一一致性策略，确保 DB、Redis 会话、Redis 队列和设备状态之间的最终一致性。
-
-**核心规范:**
-
-1. **单一真相来源（Single Source of Truth）**
-   - 设备在线状态：以 SessionManager 为准，DB 视为缓存
-   - 端口状态：30 秒收敛窗口
-   - 订单状态机：与设备/端口/队列强一致性
-
-2. **订单生命周期状态机**
-   - 创建原子性：DB + 命令入队同时成功或失败
-   - 过渡状态（stopping/cancelling/interrupted）强制 30-60s 终态化
-   - 终态订单自动收敛端口状态
-
-3. **端口状态收敛机制**
-   - 订单终态 → 端口 idle/fault 自动更新
-   - 后台任务负责修复协议上报缺失场景
-
-4. **一致性感知读 API**
-   - 检测并返回 `consistency_status` 字段
-   - SessionManager 优先于 DB 状态
-
-5. **后台自愈机制**
-   - PortStatusSyncer：修复孤立充电端口
-   - OrderMonitor：清理超时过渡状态
-   - DeadLetterCleaner：处理命令失败
-
-**影响范围:**
-
-- 新增正式规范：`openspec/specs/consistency-lifecycle/spec.md`
-- 新增 6 个 Prometheus 监控指标
-- 新增 8 个 E2E 测试场景（100% 覆盖）
-- 修复 6 处活跃订单查询和一致性检测代码
-- 定义 9 条 OpenSpec 验证规则
-
-**SLA 承诺:**
-
-- 订单过渡状态收敛：stopping ≤30s, interrupted ≤60s
-- 端口状态收敛：正常 ≤15s, 异常修复 ≤60s
-- 自愈成功率 > 99%
-
-**相关文档:**
-
-- 提案：`archive/2025-11-20-add-consistency-lifecycle-spec/proposal.md`
-- 设计：`archive/2025-11-20-add-consistency-lifecycle-spec/design.md`
-- 任务清单：`archive/2025-11-20-add-consistency-lifecycle-spec/tasks.md`
-- 验收标准：`archive/2025-11-20-add-consistency-lifecycle-spec/acceptance-criteria.md`
-- 验证规则：`archive/2025-11-20-add-consistency-lifecycle-spec/.openspec-validation-rules.md`
+环境变量优先（`IOT_` 前缀），回退到 YAML 配置文件：
+- `IOT_DATABASE_DSN` - 数据库连接
+- `IOT_REDIS_ADDR` - Redis 地址
+- `WEBHOOK_URL` - 第三方推送地址

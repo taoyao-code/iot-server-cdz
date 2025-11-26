@@ -3,9 +3,8 @@ package bkv
 import (
 	"context"
 	"fmt"
-
-	"github.com/taoyao-code/iot-server/internal/storage/models"
-	"go.uber.org/zap"
+	"math"
+	"time"
 )
 
 // handlersHelper 辅助方法集合
@@ -92,6 +91,107 @@ func (h *Handlers) sendExceptionAck(ctx context.Context, f *Frame, payload *BKVP
 	h.deliverBKVAck(ctx, f, payload, data, "exception")
 }
 
+// (h *Handlers) buildParamResultMetadata 构建参数结果元数据
+func buildParamResultMetadata(cmd uint16, payload []byte) map[string]string {
+	return map[string]string{
+		"cmd":         fmt.Sprintf("0x%04X", cmd),
+		"raw_payload": fmt.Sprintf("%x", payload),
+	}
+}
+
+// (h *Handlers) validateLength 校验 payload 长度是否满足期望
+func (h *Handlers) validateLength(data []byte, expected int, label string) error {
+	if len(data) < expected {
+		return fmt.Errorf("%s payload too short: %d, expected >= %d", label, len(data), expected)
+	}
+	return nil
+}
+
+// (h *Handlers) parseControlPayload 提取 0x0015 长度前缀和子命令，返回子命令和内部数据
+func (h *Handlers) parseControlPayload(data []byte) (subCmd byte, inner []byte, err error) {
+	if err := h.validateLength(data, 3, "control"); err != nil {
+		return 0, nil, err
+	}
+	innerLen := int(data[0])<<8 | int(data[1])
+	total := 2 + innerLen
+	if len(data) < total {
+		return 0, nil, fmt.Errorf("control payload len mismatch: decl=%d actual=%d", innerLen, len(data)-2)
+	}
+	inner = data[2:total]
+	if len(inner) == 0 {
+		return 0, nil, fmt.Errorf("control inner payload empty")
+	}
+	return inner[0], inner, nil
+}
+
+// (h *Handlers) ackControlFailure 下行/上行控制失败时下发 ACK=失败（用于 0x0015）
+func (h *Handlers) ackControlFailure(deviceID string, msgID uint32) {
+	if h.Outbound == nil {
+		return
+	}
+	// 子命令 0x07 失败 ACK：长度1（sub=0x07） + result(0x00)
+	data := []byte{0x00, 0x02, 0x07, 0x00} // len=2, sub=0x07, result=0x00
+	_ = h.Outbound.SendDownlink(deviceID, 0x0015, msgID, data)
+}
+
+// (h *Handlers) validateControlStart 校验 0x07 开始/停止控制参数范围
+func (h *Handlers) validateControlStart(cmd *BKVControlCommand) error {
+	if cmd == nil {
+		return fmt.Errorf("control command is nil")
+	}
+	if cmd.SocketNo == 0 {
+		return fmt.Errorf("socket_no must be 1-250")
+	}
+	if cmd.Port > 1 {
+		return fmt.Errorf("invalid port: %d (must be 0 or 1)", cmd.Port)
+	}
+	if cmd.Mode != ChargingModeByTime && cmd.Mode != ChargingModeByPower && cmd.Mode != ChargingModeByLevel {
+		return fmt.Errorf("invalid mode: %d", cmd.Mode)
+	}
+	// 按时/按量时，Duration 1-900 分钟
+	if (cmd.Mode == ChargingModeByTime || cmd.Mode == ChargingModeByPower) && (cmd.Duration == 0 || cmd.Duration > 900) {
+		return fmt.Errorf("invalid duration_min: %d", cmd.Duration)
+	}
+	// 按量模式要求 Energy >0
+	if cmd.Mode == ChargingModeByPower && cmd.Energy == 0 {
+		return fmt.Errorf("invalid energy_wh: %d", cmd.Energy)
+	}
+	// 按功率模式检查档位
+	if cmd.Mode == ChargingModeByLevel {
+		if cmd.LevelCount == 0 || cmd.LevelCount > 5 {
+			return fmt.Errorf("invalid level_count: %d", cmd.LevelCount)
+		}
+		if len(cmd.PowerLevels) < int(cmd.LevelCount) {
+			return fmt.Errorf("power level entries mismatch: %d", len(cmd.PowerLevels))
+		}
+	}
+	if cmd.BusinessNo == 0 {
+		return fmt.Errorf("business_no is required")
+	}
+	return nil
+}
+
+// (h *Handlers) upsertGatewaySocketsFromEntries 将刷新列表入库（文档 2.2.5）
+func (h *Handlers) upsertGatewaySocketsFromEntries(ctx context.Context, gatewayID string, entries []SocketEntry) (int, int) {
+	if h.Core == nil {
+		return 0, len(entries)
+	}
+	now := time.Now()
+	upserted, failed := 0, 0
+	for _, e := range entries {
+		if e.SocketNo == 0 { // 文档要求编号 1-250
+			failed++
+			continue
+		}
+		if err := h.Core.UpsertGatewaySocket(ctx, e.SocketEntryToModel(gatewayID, now)); err != nil {
+			failed++
+			continue
+		}
+		upserted++
+	}
+	return upserted, failed
+}
+
 // (h *Handlers) deliverBKVAck 统一的BKV ACK下发逻辑
 func (h *Handlers) deliverBKVAck(ctx context.Context, f *Frame, payload *BKVPayload, data []byte, label string) {
 	if h == nil || h.Outbound == nil || payload == nil || len(data) == 0 {
@@ -110,43 +210,6 @@ func (h *Handlers) deliverBKVAck(ctx context.Context, f *Frame, payload *BKVPayl
 	if err := h.Outbound.SendDownlink(targetGateway, 0x1000, f.MsgID, data); err != nil {
 		_ = err
 	}
-}
-
-// (h *Handlers) upsertGatewaySockets 批量upsert网关插座
-func (h *Handlers) upsertGatewaySockets(ctx context.Context, devicePhyID string, sockets []SocketInfo, logger *zap.Logger) (upserted, errors int) {
-	if h.Core == nil {
-		return 0, 0
-	}
-
-	t := now()
-	for _, s := range sockets {
-		socket := &models.GatewaySocket{
-			GatewayID:  devicePhyID,
-			SocketNo:   int32(s.SocketNo),
-			SocketMAC:  s.SocketMAC,
-			LastSeenAt: &t,
-		}
-		if s.SocketUID != "" {
-			uid := s.SocketUID
-			socket.SocketUID = &uid
-		}
-		if s.Channel > 0 {
-			ch := int32(s.Channel)
-			socket.Channel = &ch
-		}
-		status := int32(s.Status)
-		socket.Status = &status
-		rssi := int32(s.SignalStrength)
-		socket.SignalStrength = &rssi
-
-		if e := h.Core.UpsertGatewaySocket(ctx, socket); e != nil {
-			errors++
-			continue
-		}
-		upserted++
-	}
-
-	return upserted, errors
 }
 
 // (h *Handlers) collectChargingMetrics 采集充电指标
@@ -184,13 +247,24 @@ func (h *Handlers) collectChargingMetrics(deviceID string, portNo int, status ui
 // 规范：端口收敛仅依赖 SessionEnded.NextPortStatus，不在充电结束路径发送 PortSnapshot
 func (h *Handlers) handleControlChargingEnd(ctx context.Context, f *Frame, deviceID string, end *BKVChargingEnd) {
 	// 发送 SessionEnded 事件，端口状态收敛由核心通过 NextPortStatus 完成
-	nextStatus := int32(0x90) // 空闲: bit7(在线)+bit4(空载)
+	nextStatus := int32(end.Status) // 使用设备上报的状态位，避免覆盖真实结束状态
 	rawReason := int32(end.EndReason)
+	if h.Reason != nil {
+		if mapped, ok := h.Reason.Translate(int(end.EndReason)); ok {
+			rawReason = int32(mapped)
+		}
+	}
 	bizNo := fmt.Sprintf("%04X", end.BusinessNo)
 	var powerW *int32
 	if end.InstantPower > 0 {
-		p := int32(end.InstantPower) / 10 // 0.1W -> W
+		p := int32(math.Round(float64(end.InstantPower) / 10.0)) // 0.1W -> W(四舍五入)
 		powerW = &p
+	}
+
+	if err := h.validateChargingEnd(end); err != nil {
+		// 解析到结束帧但字段非法，回复失败 ACK 并返回错误
+		h.sendChargingEndAck(ctx, f, nil, int(end.SocketNo), int(end.Port), false)
+		return
 	}
 
 	evEnd := NewEventBuilder(deviceID).
@@ -229,7 +303,7 @@ func (h *Handlers) handleControlChargingProgress(ctx context.Context, deviceID s
 	rawStatus := int32(end.Status)
 	var powerW *int32
 	if end.InstantPower > 0 {
-		p := int32(end.InstantPower) / 10 // 0.1W -> W
+		p := int32(math.Round(float64(end.InstantPower) / 10.0)) // 0.1W -> W(四舍五入)
 		powerW = &p
 	}
 
@@ -257,6 +331,24 @@ func (h *Handlers) handleControlChargingProgress(ctx context.Context, deviceID s
 func (h *Handlers) handleControlUplinkStatus(ctx context.Context, deviceID string, socketNo, portNo int, switchFlag byte, businessNo uint16) {
 	// 规范：仅保留日志，不发送 PortSnapshot 事件
 	// 端口状态应由状态上报(0x1000/0x1017)或 SessionEnded 事件决定
+}
+
+// (h *Handlers) validateChargingEnd 字段校验（插座/端口/时长/能量等基本范围）
+func (h *Handlers) validateChargingEnd(end *BKVChargingEnd) error {
+	if end == nil {
+		return fmt.Errorf("charging end is nil")
+	}
+	if end.SocketNo == 0 {
+		return fmt.Errorf("invalid socket_no: %d", end.SocketNo)
+	}
+	if end.Port > 1 {
+		return fmt.Errorf("invalid port: %d", end.Port)
+	}
+	// 充电时间分钟不应过大，按文档示例限制 <= 24h
+	if end.ChargingTime > 24*60 {
+		return fmt.Errorf("invalid charging_time_min: %d", end.ChargingTime)
+	}
+	return nil
 }
 
 // (h *Handlers) handleControlDownlinkCommand 处理控制下行命令
@@ -291,14 +383,6 @@ func mapSocketStatusToRaw(status int) int32 {
 
 // (h *Handlers) buildNetworkTopologyMetadata 构建网络拓扑元数据
 func buildNetworkTopologyMetadata(cmd uint16, payload []byte) map[string]string {
-	return map[string]string{
-		"cmd":         fmt.Sprintf("0x%04X", cmd),
-		"raw_payload": fmt.Sprintf("%x", payload),
-	}
-}
-
-// (h *Handlers) buildParamResultMetadata 构建参数结果元数据
-func buildParamResultMetadata(cmd uint16, payload []byte) map[string]string {
 	return map[string]string{
 		"cmd":         fmt.Sprintf("0x%04X", cmd),
 		"raw_payload": fmt.Sprintf("%x", payload),

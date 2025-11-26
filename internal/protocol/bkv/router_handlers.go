@@ -28,11 +28,6 @@ func RegisterHandlers(adapter *Adapter, handlers *Handlers) {
 		return handlers.HandleNetworkList(context.Background(), f)
 	}) // 0x0005: 网络节点列表相关 (2.2.5/2.2.6 ACK)
 
-	// OTA升级指令
-	adapter.Register(0x0007, func(f *Frame) error {
-		return handlers.HandleGeneric(context.Background(), f)
-	})
-
 	// Week4: 刷卡充电相关
 	// 0x0B: 刷卡上报/下发充电指令
 	adapter.Register(0x000B, func(f *Frame) error {
@@ -55,20 +50,7 @@ func RegisterHandlers(adapter *Adapter, handlers *Handlers) {
 	})
 
 	// Week 6: 组网管理
-	// 0x08: 刷新插座列表
-	adapter.Register(0x0008, func(f *Frame) error {
-		return handlers.HandleNetworkRefresh(context.Background(), f)
-	})
-
-	// 0x09: 添加插座
-	adapter.Register(0x0009, func(f *Frame) error {
-		return handlers.HandleNetworkAddNode(context.Background(), f)
-	})
-
-	// 0x0A: 删除插座
-	adapter.Register(0x000A, func(f *Frame) error {
-		return handlers.HandleNetworkDeleteNode(context.Background(), f)
-	})
+	// 组网ACK均走 0x0005 (子命令 0x08/0x09/0x0A)
 
 	// Week 7: OTA升级
 	// 0x07: OTA升级响应+进度上报（上行）

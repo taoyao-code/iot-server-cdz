@@ -420,12 +420,6 @@ func (p *BKVPayload) GetSocketStatus() (*SocketStatus, error) {
 func parseSocketStatusFields(fields []TLVField) (*SocketStatus, error) {
 	status := &SocketStatus{}
 
-	// 调试：打印所有字段
-	fmt.Printf("[DEBUG] parseSocketStatusFields: %d fields\n", len(fields))
-	for i, f := range fields {
-		fmt.Printf("[DEBUG] Field[%d]: Tag=0x%02X, Len=%d, Value=%x\n", i, f.Tag, f.Length, f.Value)
-	}
-
 	for _, field := range fields {
 		switch field.Tag {
 		case 0x4A: // 插座序号
@@ -450,7 +444,6 @@ func parseSocketStatusFields(fields []TLVField) (*SocketStatus, error) {
 				// 解析端口数据（跳过 0x5B 标识字节）
 				port := parsePortStatusFromFields(fields, field)
 				if port != nil {
-					fmt.Printf("[DEBUG] Parsed port: PortNo=%d, Status=0x%02X, Power=%d\n", port.PortNo, port.Status, port.Power)
 					if port.PortNo == 0 {
 						status.PortA = port
 					} else if port.PortNo == 1 {
@@ -463,14 +456,7 @@ func parseSocketStatusFields(fields []TLVField) (*SocketStatus, error) {
 
 	// 如果通过 0x28 没有解析到端口，尝试从 0x08 字段直接解析
 	if status.PortA == nil && status.PortB == nil {
-		fmt.Printf("[DEBUG] Fallback to parsePortsFromFields\n")
 		status.PortA, status.PortB = parsePortsFromFields(fields)
-		if status.PortA != nil {
-			fmt.Printf("[DEBUG] PortA: PortNo=%d, Status=0x%02X, Power=%d\n", status.PortA.PortNo, status.PortA.Status, status.PortA.Power)
-		}
-		if status.PortB != nil {
-			fmt.Printf("[DEBUG] PortB: PortNo=%d, Status=0x%02X, Power=%d\n", status.PortB.PortNo, status.PortB.Status, status.PortB.Power)
-		}
 	}
 
 	return status, nil
@@ -562,7 +548,7 @@ func parsePortsFromFields(fields []TLVField) (*PortStatus, *PortStatus) {
 	var pendingTag uint8
 	var pendingIsSingle bool // true=0x03单字节, false=0x04多字节
 
-	for i, f := range fields {
+	for _, f := range fields {
 		// 处理嵌套格式：0x03=单字节值，0x04=多字节值
 		if f.Tag == 0x03 && len(f.Value) >= 1 {
 			pendingTag = f.Value[0]
@@ -588,8 +574,6 @@ func parsePortsFromFields(fields []TLVField) (*PortStatus, *PortStatus) {
 				dataValue = []byte{f.Tag, f.Length}
 			}
 
-			fmt.Printf("[DEBUG] Nested data: pendingTag=0x%02X, f.Tag=0x%02X, f.Length=%d, dataValue=%x, f.Value=%x\n", pendingTag, f.Tag, f.Length, dataValue, f.Value)
-
 			if len(dataValue) > 0 {
 				switch pendingTag {
 				case 0x08: // 插孔号
@@ -601,11 +585,9 @@ func parsePortsFromFields(fields []TLVField) (*PortStatus, *PortStatus) {
 						} else {
 							portB = currentPort
 						}
-						fmt.Printf("[DEBUG] Nested parse: port number = %d\n", portNo)
 					}
 				case 0x09: // 状态
 					currentPort.Status = dataValue[0]
-					fmt.Printf("[DEBUG] Nested parse: port %d status = 0x%02X\n", currentPort.PortNo, currentPort.Status)
 				case 0x0A: // 业务号
 					if len(dataValue) >= 2 {
 						currentPort.BusinessNo = binary.BigEndian.Uint16(dataValue[0:2])
@@ -648,12 +630,9 @@ func parsePortsFromFields(fields []TLVField) (*PortStatus, *PortStatus) {
 					tag := f.Value[j]
 					value := f.Value[j+1]
 
-					fmt.Printf("[DEBUG] Packed field: tag=0x%02X, value=0x%02X\n", tag, value)
-
 					switch tag {
 					case 0x09: // 状态
 						currentPort.Status = value
-						fmt.Printf("[DEBUG] Packed parse: port %d status = 0x%02X\n", currentPort.PortNo, currentPort.Status)
 					case 0x08: // 端口号
 						if value <= 1 {
 							currentPort.PortNo = value
@@ -674,12 +653,10 @@ func parsePortsFromFields(fields []TLVField) (*PortStatus, *PortStatus) {
 				portA = &PortStatus{}
 				currentPort = portA
 				portAStarted = true
-				fmt.Printf("[DEBUG] Port container A started at field %d\n", i)
 			} else if !portBStarted {
 				portB = &PortStatus{}
 				currentPort = portB
 				portBStarted = true
-				fmt.Printf("[DEBUG] Port container B started at field %d\n", i)
 			}
 		case 0x08: // 插孔号（标准格式）
 			if currentPort != nil && len(f.Value) >= 1 {

@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/taoyao-code/iot-server/internal/driverapi"
@@ -51,21 +55,34 @@ func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
 	// 1. 提取设备ID
 	deviceID := extractDeviceIDOrDefault(f)
 
-	// 2. 发送心跳事件到核心
+	// 2. 心跳数据严格校验：长度=方向(1)+网关ID(7)+ICCID(20)+软版本(8可选)+信号(1) 等
+	meta := map[string]string{}
+	if len(f.Data) < 29 {
+		return fmt.Errorf("heartbeat payload too short: %d", len(f.Data))
+	}
+	// 方向1B，网关ID 7B 后，取 ICCID 20B，最后1B 信号强度
+	rssi := int8(f.Data[len(f.Data)-1])
+	meta["rssi"] = fmt.Sprintf("%d", rssi)
+	iccidRaw := strings.TrimSpace(string(f.Data[8 : 8+20])) // 文档示例 ICCID 20 字节
+	if iccidRaw != "" {
+		meta["iccid"] = iccidRaw
+	}
+
+	// 3. 发送心跳事件到核心
 	event := NewEventBuilder(deviceID).BuildHeartbeat()
+	if hb := event.DeviceHeartbeat; hb != nil {
+		if v, ok := meta["rssi"]; ok {
+			if n, err := strconv.Atoi(v); err == nil {
+				rssi := int32(n)
+				hb.RSSIDBm = &rssi
+			}
+		}
+	}
 	h.emitter().Emit(ctx, event)
 
-	// 3. 采样推送第三方心跳事件（每10次推送1次）
-	if h.shouldPushHeartbeat(f.MsgID) {
-		h.pushDeviceHeartbeatEvent(
-			ctx,
-			deviceID,
-			220.0, // voltage - 默认值，实际应解析
-			-50,   // rssi - 默认值，实际应解析
-			25.0,  // temp - 默认值，实际应解析
-			nil,   // ports - 可选
-			nil,   // logger可选
-		)
+	// 3.1 更新设备 last_seen_at（使用当前时间）
+	if h.Core != nil {
+		_ = h.Core.TouchDeviceLastSeen(ctx, deviceID, time.Now())
 	}
 
 	// 4. 回复心跳ACK（关键：否则设备会在60秒后断开连接）
@@ -82,6 +99,11 @@ func (h *Handlers) HandleBKVStatus(ctx context.Context, f *Frame) error {
 	payload, err := f.GetBKVPayload()
 	if err != nil {
 		return fmt.Errorf("failed to parse BKV payload: %w", err)
+	}
+
+	// 1.1 长度校验：BKV最小头部 5+11+10=26 字节
+	if err := h.validateLength(f.Data, 26, "bkv payload"); err != nil {
+		return err
 	}
 
 	// 2. 根据载荷类型分发处理
@@ -134,8 +156,8 @@ func (h *Handlers) handleSocketStatusUpdate(ctx context.Context, payload *BKVPay
 		rawStatus := int32(port.Status)
 		var power *int32
 		if port.Power > 0 {
-			p := int32(port.Power) / 10 // 0.1W → W
-			power = &p
+			roundedW := int32(math.Round(float64(port.Power) / 10.0)) // 0.1W → W(四舍五入)
+			power = &roundedW
 		}
 
 		event := NewEventBuilder(deviceID).
@@ -272,43 +294,63 @@ func (h *Handlers) handleBKVChargingEnd(ctx context.Context, f *Frame, payload *
 func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 	deviceID := extractDeviceIDOrDefault(f)
 
+	// 0x0015 data 长度前缀 + 子命令，最小长度 3（len_hi len_lo sub_cmd）
+	subCmd, inner, err := h.parseControlPayload(f.Data)
+	if err != nil {
+		h.ackControlFailure(deviceID, f.MsgID)
+		return err
+	}
+
 	if f.IsUplink() {
 		// 1. 处理子命令 0x02 / 0x18 的帧（充电结束上报）
 		// 修复：子命令 0x02/0x18 即表示充电结束，不再检查 Status 的 bit5 位
 		// 原因：设备上报充电结束时，Status 字段可能仍显示 bit5=1（充电中），这是协议正常行为
 		// 参考：minimal_bkv_service.go 中的 isChargingEnd() 只检查子命令，不检查 Status
-		if len(f.Data) >= 3 && (f.Data[2] == 0x02 || f.Data[2] == 0x18) {
-			if end, err := ParseBKVChargingEnd(f.Data); err == nil {
+		if subCmd == 0x02 || subCmd == 0x18 {
+			if end, err := ParseBKVChargingEnd(inner); err == nil {
 				// 子命令 0x02/0x18 直接触发充电结束流程
 				// Status 字段用于推导结束原因，不用于判断是否结束
 				h.handleControlChargingEnd(ctx, f, deviceID, end)
 				return nil
+			} else {
+				return fmt.Errorf("parse charging end failed: %w", err)
 			}
 		}
 
 		// 2. 处理其他格式的控制命令上行
-		if len(f.Data) >= 2 && len(f.Data) < 64 {
-			innerLen := (int(f.Data[0]) << 8) | int(f.Data[1])
-			totalLen := 2 + innerLen
-			if innerLen >= 5 && len(f.Data) >= totalLen {
-				inner := f.Data[2:totalLen]
-				if len(inner) >= 5 && inner[0] == 0x07 {
-					socketNo := int(inner[1])
-					portNo := int(inner[2])
-					switchFlag := inner[3]
-					var businessNo uint16
-					if len(inner) >= 6 {
-						businessNo = binary.BigEndian.Uint16(inner[4:6])
-					}
-					h.handleControlUplinkStatus(ctx, deviceID, socketNo, portNo, switchFlag, businessNo)
-				}
+		if len(inner) < 5 {
+			return fmt.Errorf("control uplink inner too short: %d", len(inner))
+		}
+		if inner[0] == 0x07 {
+			if len(inner) < 9 {
+				h.ackControlFailure(deviceID, f.MsgID)
+				return fmt.Errorf("control uplink sub_cmd 0x07 too short: %d", len(inner))
 			}
+			socketNo := int(inner[1])
+			portNo := int(inner[2])
+			switchFlag := inner[3]
+			var businessNo uint16
+			if len(inner) >= 6 {
+				businessNo = binary.BigEndian.Uint16(inner[4:6])
+			}
+			h.handleControlUplinkStatus(ctx, deviceID, socketNo, portNo, switchFlag, businessNo)
 		}
 	} else {
 		// 3. 处理控制下行命令
-		if cmd, err := ParseBKVControlCommand(f.Data); err == nil {
-			h.handleControlDownlinkCommand(ctx, deviceID, cmd)
+		if len(inner) < 6 {
+			h.ackControlFailure(deviceID, f.MsgID)
+			return fmt.Errorf("control downlink payload too short: %d", len(inner))
 		}
+		cmd, err := ParseBKVControlCommand(inner)
+		if err != nil {
+			h.ackControlFailure(deviceID, f.MsgID)
+			return fmt.Errorf("parse control downlink failed: %w", err)
+		}
+		if err := h.validateControlStart(cmd); err != nil {
+			h.ackControlFailure(deviceID, f.MsgID)
+			return err
+		}
+		h.handleControlDownlinkCommand(ctx, deviceID, cmd)
 	}
 
 	return nil
@@ -391,41 +433,54 @@ func (h *Handlers) HandleGeneric(ctx context.Context, f *Frame) error {
 // HandleNetworkList 处理0x0005 网络节点列表相关指令（2.2.5/2.2.6 ACK）
 func (h *Handlers) HandleNetworkList(ctx context.Context, f *Frame) error {
 	deviceID := extractDeviceIDOrDefault(f)
-	d := f.Data
 
-	// 构建基础元数据
+	ack, err := ParseNetworkAck(f.Data)
 	action := "network_ack"
-	result := "unknown"
-	msg := fmt.Sprintf("NetworkCmd0005: short payload len=%d payload=%x", len(d), d)
+	result := "failed"
+	msg := fmt.Sprintf("network ack invalid payload len=%d payload=%x", len(f.Data), f.Data)
 	metadata := map[string]string{"cmd": fmt.Sprintf("0x%04X", f.Cmd)}
 
-	// 解析子命令和结果
-	if len(d) >= 4 {
-		subCmd := d[2]
-		rawResult := d[3]
-		metadata["sub_cmd"] = fmt.Sprintf("0x%02X", subCmd)
-		metadata["raw_result"] = fmt.Sprintf("%d", rawResult)
-
-		switch subCmd {
+	if err == nil {
+		metadata["sub_cmd"] = fmt.Sprintf("0x%02X", ack.SubCmd)
+		metadata["raw_result"] = fmt.Sprintf("%d", ack.Result)
+		switch ack.SubCmd {
 		case 0x08:
 			action = "refresh_ack"
+			// 若设备返回列表（count + 14*N），解析数量以便上层检查映射
+			if ack.Result == 0x01 && len(f.Data) > 4 {
+				if entries, e := ParseNetworkRefreshList(f.Data[2:]); e == nil {
+					metadata["list_count"] = fmt.Sprintf("%d", len(entries))
+					upserted, failed := h.upsertGatewaySocketsFromEntries(ctx, deviceID, entries)
+					if upserted > 0 {
+						metadata["mapping_upserted"] = fmt.Sprintf("%d", upserted)
+					}
+					if failed > 0 {
+						metadata["mapping_failed"] = fmt.Sprintf("%d", failed)
+					}
+					if len(entries) == 0 {
+						result = "failed"
+						msg = "refresh ack without list entries"
+					}
+				}
+			}
 		case 0x09:
 			action = "add_ack"
+		case 0x0A:
+			action = "delete_ack"
 		default:
 			action = "network_ack"
 		}
-
-		result = "ok"
-		if rawResult != 0x01 {
-			result = "failed"
+		msg = fmt.Sprintf("%s result=%d", action, ack.Result)
+		if ack.Result == 0x01 {
+			result = "ok"
 		}
-		msg = fmt.Sprintf("%s result=%d", action, rawResult)
+	} else {
+		metadata["raw_payload"] = fmt.Sprintf("%x", f.Data)
 	}
 
-	// 发送网络拓扑事件
 	event := NewEventBuilder(deviceID).BuildNetworkTopology(action, result, msg, metadata)
 	h.emitter().Emit(ctx, event)
-	return nil
+	return err
 }
 
 // HandleParam 处理参数读写指令
@@ -467,6 +522,19 @@ func (h *Handlers) handleExceptionEvent(ctx context.Context, f *Frame, payload *
 		h.sendExceptionAck(ctx, f, payload, -1, false)
 		return fmt.Errorf("failed to parse exception event: %w", err)
 	}
+	if len(payload.Fields) == 0 {
+		h.sendExceptionAck(ctx, f, payload, -1, false)
+		return fmt.Errorf("exception payload empty")
+	}
+	// 必要字段校验：插座号、状态、原因至少其一存在
+	if event.SocketNo == 0 {
+		h.sendExceptionAck(ctx, f, payload, -1, false)
+		return fmt.Errorf("exception socket_no missing")
+	}
+	if event.SocketEventReason == 0 && event.SocketEventStatus == 0 && event.Port1EventReason == 0 && event.Port2EventReason == 0 {
+		h.sendExceptionAck(ctx, f, payload, int(event.SocketNo), false)
+		return fmt.Errorf("exception reason/status missing")
+	}
 
 	success := false
 	defer func() {
@@ -481,12 +549,18 @@ func (h *Handlers) handleExceptionEvent(ctx context.Context, f *Frame, payload *
 
 	// 发送异常事件
 	rawStatus := int32(event.SocketEventStatus)
-	meta := map[string]string{"reason": fmt.Sprintf("%d", event.SocketEventReason)}
+	reasonCode := event.SocketEventReason
+	if h.Reason != nil {
+		if mapped, ok := h.Reason.Translate(int(reasonCode)); ok {
+			reasonCode = uint8(mapped)
+		}
+	}
+	meta := map[string]string{"reason": fmt.Sprintf("%d", reasonCode)}
 
 	ev := NewEventBuilder(deviceID).
 		WithPort(int(event.SocketNo)).
 		BuildException(
-			fmt.Sprintf("socket_event_%d", event.SocketEventReason),
+			fmt.Sprintf("socket_event_%d", reasonCode),
 			fmt.Sprintf("status=%d", event.SocketEventStatus),
 			"error",
 			&rawStatus,
@@ -636,28 +710,30 @@ func (h *Handlers) handleBalanceQueryUplink(ctx context.Context, f *Frame) error
 
 // ===== Week 6: 组网管理处理器 =====
 
-// HandleNetworkRefresh 处理刷新插座列表响应（上行）
+// HandleNetworkRefresh 处理刷新列表 ACK（上行，cmd=0x0005 sub=0x08）
 func (h *Handlers) HandleNetworkRefresh(ctx context.Context, f *Frame) error {
 	deviceID := extractDeviceIDOrDefault(f)
 
-	resp, err := ParseNetworkRefreshResponse(f.Data)
+	ack, err := ParseNetworkAck(f.Data)
 	result := "ok"
 	msg := "network refresh"
-	metadata := map[string]string{"cmd": fmt.Sprintf("0x%04X", f.Cmd)}
+	metadata := map[string]string{
+		"cmd":     fmt.Sprintf("0x%04X", f.Cmd),
+		"sub_cmd": "0x08",
+	}
 
 	if err != nil {
 		result = "failed"
 		msg = err.Error()
 		metadata["raw_payload"] = fmt.Sprintf("%x", f.Data)
 	} else {
-		metadata["socket_count"] = fmt.Sprintf("%d", len(resp.Sockets))
-		// 批量更新插座映射
-		upserted, upsertErrors := h.upsertGatewaySockets(ctx, deviceID, resp.Sockets, nil)
-		if upserted > 0 {
-			metadata["mapping_upserted"] = fmt.Sprintf("%d", upserted)
+		if ack.SubCmd != 0x08 {
+			result = "failed"
+			msg = fmt.Sprintf("unexpected sub_cmd: 0x%02X", ack.SubCmd)
 		}
-		if upsertErrors > 0 {
-			metadata["mapping_upsert_errors"] = fmt.Sprintf("%d", upsertErrors)
+		if ack.Result != 0x01 {
+			result = "failed"
+			msg = "device reject refresh"
 		}
 	}
 
@@ -667,77 +743,67 @@ func (h *Handlers) HandleNetworkRefresh(ctx context.Context, f *Frame) error {
 	return err
 }
 
-// HandleNetworkAddNode 处理添加插座响应（上行）
+// HandleNetworkAddNode 处理添加插座 ACK（上行，cmd=0x0005 sub=0x09）
 func (h *Handlers) HandleNetworkAddNode(ctx context.Context, f *Frame) error {
 	deviceID := extractDeviceIDOrDefault(f)
 
-	resp, err := ParseNetworkAddNodeResponse(f.Data)
+	ack, err := ParseNetworkAck(f.Data)
 	result := "ok"
 	msg := "add socket success"
-	metadata := map[string]string{"cmd": fmt.Sprintf("0x%04X", f.Cmd)}
-	var socketNo *int32
+	metadata := map[string]string{
+		"cmd":     fmt.Sprintf("0x%04X", f.Cmd),
+		"sub_cmd": "0x09",
+	}
 
 	if err != nil {
 		result = "failed"
 		msg = err.Error()
 		metadata["raw_payload"] = fmt.Sprintf("%x", f.Data)
 	} else {
-		sn := int32(resp.SocketNo)
-		socketNo = &sn
-		metadata["raw_result"] = fmt.Sprintf("%d", resp.Result)
-		if resp.Result != 0 {
+		if ack.SubCmd != 0x09 {
 			result = "failed"
-			if resp.Reason != "" {
-				msg = resp.Reason
-			} else {
-				msg = "add socket failed"
-			}
+			msg = fmt.Sprintf("unexpected sub_cmd: 0x%02X", ack.SubCmd)
+		}
+		if ack.Result != 0x01 {
+			result = "failed"
+			msg = "add socket failed"
 		}
 	}
 
-	builder := NewEventBuilder(deviceID)
-	if socketNo != nil {
-		builder.WithSocketNo(int(*socketNo))
-	}
-	event := builder.BuildNetworkTopology("add_node", result, msg, metadata)
+	event := NewEventBuilder(deviceID).BuildNetworkTopology("add_node", result, msg, metadata)
 	h.emitter().Emit(ctx, event)
 
 	return err
 }
 
-// HandleNetworkDeleteNode 处理删除插座响应（上行）
+// HandleNetworkDeleteNode 处理删除插座 ACK（上行，cmd=0x0005 sub=0x0A）
 func (h *Handlers) HandleNetworkDeleteNode(ctx context.Context, f *Frame) error {
 	deviceID := extractDeviceIDOrDefault(f)
 
-	resp, err := ParseNetworkDeleteNodeResponse(f.Data)
+	ack, err := ParseNetworkAck(f.Data)
 	result := "ok"
 	msg := "delete socket success"
-	metadata := map[string]string{"cmd": fmt.Sprintf("0x%04X", f.Cmd)}
-	var socketNo *int32
+	metadata := map[string]string{
+		"cmd":     fmt.Sprintf("0x%04X", f.Cmd),
+		"sub_cmd": "0x0A",
+	}
 
 	if err != nil {
 		result = "failed"
 		msg = err.Error()
 		metadata["raw_payload"] = fmt.Sprintf("%x", f.Data)
 	} else {
-		sn := int32(resp.SocketNo)
-		socketNo = &sn
-		metadata["raw_result"] = fmt.Sprintf("%d", resp.Result)
-		if resp.Result != 0 {
+		if ack.SubCmd != 0x0A {
 			result = "failed"
-			if resp.Reason != "" {
-				msg = resp.Reason
-			} else {
-				msg = "delete socket failed"
-			}
+			msg = fmt.Sprintf("unexpected sub_cmd: 0x%02X", ack.SubCmd)
+		}
+		if ack.Result != 0x01 {
+			result = "failed"
+			msg = "delete socket failed"
 		}
 	}
 
-	builder := NewEventBuilder(deviceID)
-	if socketNo != nil {
-		builder.WithSocketNo(int(*socketNo))
-	}
-	event := builder.BuildNetworkTopology("delete_node", result, msg, metadata)
+	event := NewEventBuilder(deviceID).BuildNetworkTopology("delete_node", result, msg, metadata)
 	h.emitter().Emit(ctx, event)
 
 	return err
@@ -761,8 +827,13 @@ func (h *Handlers) HandleOTAProgress(ctx context.Context, f *Frame) error {
 
 // HandlePowerLevelEnd 处理按功率充电结束上报（上行）
 func (h *Handlers) HandlePowerLevelEnd(ctx context.Context, f *Frame) error {
+	if err := h.validateLength(f.Data, 20, "power level end"); err != nil {
+		h.sendDownlinkReply(extractDeviceIDOrDefault(f), f.Cmd, f.MsgID, EncodePowerLevelEndReply(0, 1)) // result=1 表示失败
+		return err
+	}
 	report, err := ParsePowerLevelEndReport(f.Data)
 	if err != nil {
+		h.sendDownlinkReply(extractDeviceIDOrDefault(f), f.Cmd, f.MsgID, EncodePowerLevelEndReply(0, 1))
 		return fmt.Errorf("parse power level end report: %w", err)
 	}
 
