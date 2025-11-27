@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -73,8 +72,7 @@ type StartChargeRequest struct {
 	Power           int    `json:"power"`                                      // 功率（瓦）
 	PricePerKwh     int    `json:"price_per_kwh"`                              // 电价（分/度）
 	ServiceFee      int    `json:"service_fee"`                                // 服务费率（千分比）
-	OrderNo         string `json:"order_no"`                                   // 第三方传入的订单号（可选）
-	BusinessNo      int    `json:"business_no"`                                // 第三方传入的业务号（可选，0表示使用派生值）
+	OrderNo         string `json:"order_no" binding:"required"`                // 订单号（必填，与停止充电一致）
 }
 
 // GetDuration 获取时长（优先使用 duration_minutes）
@@ -111,11 +109,11 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		if err != nil {
 			return err
 		}
-		orderNo, businessNo, err := h.prepareOrderInfo(req.OrderNo, req.BusinessNo)
+		orderNo, err := h.prepareOrderInfo(req.OrderNo)
 		if err != nil {
 			return err
 		}
-		if err := h.dispatchStartChargeCommand(ctx, devicePhyID, 0, socketNo, &req, orderNo, businessNo); err != nil {
+		if err := h.dispatchStartChargeCommand(ctx, devicePhyID, 0, socketNo, &req, orderNo); err != nil {
 			return err
 		}
 		h.logger.Info("charge command dispatched",
@@ -128,11 +126,10 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 			Code:    0,
 			Message: "充电指令发送成功",
 			Data: map[string]interface{}{
-				"device_id":   devicePhyID,
-				"order_no":    orderNo,
-				"business_no": int(businessNo),
-				"port_no":     req.PortNo,
-				"amount":      req.Amount,
+				"device_id": devicePhyID,
+				"order_no":  orderNo,
+				"port_no":   req.PortNo,
+				"amount":    req.Amount,
 			},
 			RequestID: requestID,
 			Timestamp: time.Now().Unix(),
@@ -153,7 +150,6 @@ func (h *ThirdPartyHandler) dispatchStartChargeCommand(
 	socketNo int,
 	req *StartChargeRequest,
 	orderNo string,
-	businessNo uint16,
 ) error {
 	if req == nil {
 		return fmt.Errorf("request required")
@@ -164,7 +160,7 @@ func (h *ThirdPartyHandler) dispatchStartChargeCommand(
 		durationMin = 1
 	}
 
-	return h.sendStartChargeViaDriver(ctx, devicePhyID, socketNo, req.PortNo, businessNo, orderNo, req.ChargeMode, durationMin)
+	return h.sendStartChargeViaDriver(ctx, devicePhyID, socketNo, req.PortNo, orderNo, req.ChargeMode, durationMin)
 }
 
 // sendStartChargeViaDriver
@@ -173,7 +169,6 @@ func (h *ThirdPartyHandler) sendStartChargeViaDriver(
 	devicePhyID string,
 	socketNo int,
 	portNo int,
-	businessNo uint16,
 	orderNo string,
 	chargeMode int,
 	durationMin uint16,
@@ -181,8 +176,6 @@ func (h *ThirdPartyHandler) sendStartChargeViaDriver(
 	if h.driverCmd == nil {
 		return fmt.Errorf("驱动程序命令源未配置")
 	}
-	bizStr := strconv.Itoa(int(businessNo)) //
-	biz := coremodel.BusinessNo(bizStr)
 	modeCode := int32(chargeMode)
 	durationSec := int32(durationMin) * 60
 	socket := int32(socketNo)
@@ -194,9 +187,6 @@ func (h *ThirdPartyHandler) sendStartChargeViaDriver(
 		PortNo:    coremodel.PortNo(portNo),
 		SocketNo: func() *int32 {
 			return &socket
-		}(),
-		BusinessNo: func() *coremodel.BusinessNo {
-			return &biz
 		}(),
 		IssuedAt: time.Now(),
 		StartCharge: &coremodel.StartChargePayload{
@@ -215,9 +205,8 @@ func (h *ThirdPartyHandler) dispatchStopChargeCommand(
 	socketNo int,
 	portNo int,
 	orderNo string,
-	businessNo uint16,
 ) (bool, error) {
-	if err := h.sendStopChargeViaDriver(ctx, devicePhyID, socketNo, portNo, businessNo, orderNo); err != nil {
+	if err := h.sendStopChargeViaDriver(ctx, devicePhyID, socketNo, portNo, orderNo); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -228,13 +217,11 @@ func (h *ThirdPartyHandler) sendStopChargeViaDriver(
 	devicePhyID string,
 	socketNo int,
 	portNo int,
-	businessNo uint16,
 	orderNo string,
 ) error {
 	if h.driverCmd == nil {
 		return fmt.Errorf("驱动程序命令源未配置")
 	}
-	biz := coremodel.BusinessNo(strconv.Itoa(int(businessNo)))
 	socket := int32(socketNo)
 
 	cmd := &coremodel.CoreCommand{
@@ -244,9 +231,6 @@ func (h *ThirdPartyHandler) sendStopChargeViaDriver(
 		PortNo:    coremodel.PortNo(portNo),
 		SocketNo: func() *int32 {
 			return &socket
-		}(),
-		BusinessNo: func() *coremodel.BusinessNo {
-			return &biz
 		}(),
 		IssuedAt: time.Now(),
 		StopCharge: &coremodel.StopChargePayload{
@@ -272,16 +256,12 @@ func (h *ThirdPartyHandler) resolveSocketNo(ctx context.Context, devicePhyID, so
 	return socketNo, nil
 }
 
-func (h *ThirdPartyHandler) prepareOrderInfo(orderNo string, businessNo int) (string, uint16, error) {
+func (h *ThirdPartyHandler) prepareOrderInfo(orderNo string) (string, error) {
 	orderNo = strings.TrimSpace(orderNo)
 	if orderNo == "" {
-		return "", 0, fmt.Errorf("请求中缺少订单号，请提供有效订单号后重试")
+		return "", fmt.Errorf("请求中缺少订单号，请提供有效订单号后重试")
 	}
-	biz := uint16(businessNo)
-	if biz == 0 {
-		biz = deriveBusinessNo(orderNo)
-	}
-	return orderNo, biz, nil
+	return orderNo, nil
 }
 
 func (h *ThirdPartyHandler) handleStartError(c *gin.Context, err error, requestID string) {
@@ -330,10 +310,9 @@ func (h *ThirdPartyHandler) getSocketMappingByUID(ctx context.Context, socketUID
 
 // StopChargeRequest 停止充电请求
 type StopChargeRequest struct {
-	SocketUID  string `json:"socket_uid" binding:"required"`    // 插座 UID（必填）
-	PortNo     *int   `json:"port_no" binding:"required,min=0"` // 端口号：0=A端口, 1=B端口, ...（必填，使用指针避免0值validation问题）
-	OrderNo    string `json:"order_no"`                         // 第三方传入订单号（可选）
-	BusinessNo int    `json:"business_no"`                      // 第三方传入业务号（可选）
+	SocketUID string `json:"socket_uid" binding:"required"`    // 插座 UID（必填）
+	PortNo    *int   `json:"port_no" binding:"required,min=0"` // 端口号：0=A端口, 1=B端口, ...（必填，使用指针避免0值validation问题）
+	OrderNo   string `json:"order_no" binding:"required"`      // 订单号（必填，需与启动充电时一致）
 }
 
 // StopCharge 停止充电
@@ -370,18 +349,17 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		if err != nil {
 			return err
 		}
-		orderNo, businessNo, err := h.prepareOrderInfo(req.OrderNo, req.BusinessNo)
+		orderNo, err := h.prepareOrderInfo(req.OrderNo)
 		if err != nil {
 			return err
 		}
-		stopSent, dispatchErr := h.dispatchStopChargeCommand(ctx, devicePhyID, socketNo, *req.PortNo, orderNo, businessNo)
+		stopSent, dispatchErr := h.dispatchStopChargeCommand(ctx, devicePhyID, socketNo, *req.PortNo, orderNo)
 		if dispatchErr != nil {
 			return dispatchErr
 		}
 		responseData := map[string]interface{}{
 			"device_id":    devicePhyID,
 			"port_no":      req.PortNo,
-			"business_no":  int(businessNo),
 			"command_sent": stopSent,
 			"order_no":     orderNo,
 			"status":       "stopping",

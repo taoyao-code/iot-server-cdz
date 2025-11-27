@@ -56,7 +56,7 @@ database:
   maxIdleConns: 20
   connMaxLifetime: 2h
   autoMigrate: true
-  logLevel: "info" # GORM日志级别: silent(关闭), error(仅错误), warn(警告), info(完整SQL)
+  logLevel: "error" # GORM日志级别: silent(关闭), error(仅错误), warn(警告), info(完整SQL)
 
 redis:
   enabled: true

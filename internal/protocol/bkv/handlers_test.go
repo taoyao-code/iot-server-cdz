@@ -2,6 +2,7 @@ package bkv
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/taoyao-code/iot-server/internal/coremodel"
@@ -24,7 +25,12 @@ func TestHandleControl_SubCmd02TriggersEnd(t *testing.T) {
 	sink := &mockEventSink{}
 	h := &Handlers{
 		CoreEvents: sink,
+		sessions:   &sync.Map{},
 	}
+
+	// 模拟已有的会话（业务号 = 0x002B = 43）
+	sessionKey := "TEST-DEVICE:0"
+	h.sessions.Store(sessionKey, "002B")
 
 	// 构造一个 subCmd=0x02 的帧，Status bit5=1（充电中）
 	// 关键点：即使 Status 显示充电中，子命令 0x02 也表示充电结束
@@ -74,7 +80,12 @@ func TestHandleControl_ChargingEnded(t *testing.T) {
 	sink := &mockEventSink{}
 	h := &Handlers{
 		CoreEvents: sink,
+		sessions:   &sync.Map{},
 	}
+
+	// 模拟已有的会话（业务号 = 0x002B = 43）
+	sessionKey := "TEST-DEVICE:0"
+	h.sessions.Store(sessionKey, "002B")
 
 	// 构造一个 subCmd=0x02 且 Status bit5=0（非充电）的帧
 	// Status = 0x90 = 10010000: bit7=1(在线), bit5=0(非充电), bit4=1(空载)
@@ -139,7 +150,12 @@ func TestHandleControl_SubCmd02_18_AlwaysEnd(t *testing.T) {
 			sink := &mockEventSink{}
 			h := &Handlers{
 				CoreEvents: sink,
+				sessions:   &sync.Map{},
 			}
+
+			// 模拟已有的会话（业务号 = 0x002B = 43）
+			sessionKey := "TEST-DEVICE:0"
+			h.sessions.Store(sessionKey, "002B")
 
 			data := []byte{
 				0x00, 0x11, // 长度 = 17
@@ -186,7 +202,12 @@ func TestHandleControl_SessionEndedCarriesNextPortStatus(t *testing.T) {
 	sink := &mockEventSink{}
 	h := &Handlers{
 		CoreEvents: sink,
+		sessions:   &sync.Map{},
 	}
+
+	// 模拟已有的会话（业务号 = 0x002B = 43）
+	sessionKey := "TEST-DEVICE:0"
+	h.sessions.Store(sessionKey, "002B")
 
 	data := []byte{
 		0x00, 0x11, // 长度 = 17

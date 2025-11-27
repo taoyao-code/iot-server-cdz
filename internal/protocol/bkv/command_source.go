@@ -75,9 +75,16 @@ func (c *CommandSource) handleStartCharge(ctx context.Context, cmd *coremodel.Co
 		return fmt.Errorf("device id is required")
 	}
 
-	biz, err := parseBusinessNo(cmd.BusinessNo)
-	if err != nil {
-		return err
+	// 协议文档2.2.8：平台不发送业务号，设备会在ACK中生成并返回
+	// 这里计算充电电量（单位wh），按时充电时传0
+	energyWh := uint16(0)
+	if payload.MaxEnergyKWh01 != nil && *payload.MaxEnergyKWh01 > 0 {
+		// MaxEnergyKWh01单位是0.01kWh，转换为wh: 0.01kWh = 10wh
+		energy := *payload.MaxEnergyKWh01 * 10
+		if energy > 0xFFFF {
+			energy = 0xFFFF
+		}
+		energyWh = uint16(energy)
 	}
 
 	port := uint8(MapPort(int(cmd.PortNo)))
@@ -88,7 +95,7 @@ func (c *CommandSource) handleStartCharge(ctx context.Context, cmd *coremodel.Co
 	durationMin := toDurationMinute(payload.TargetDurationSec)
 	mode := toModeCode(payload)
 
-	inner := EncodeStartControlPayload(socket, port, mode, durationMin, biz)
+	inner := EncodeStartControlPayload(socket, port, mode, durationMin, energyWh)
 	data := WrapControlPayload(inner)
 	msgID := c.nextMsgID()
 
@@ -101,9 +108,9 @@ func (c *CommandSource) handleStartCharge(ctx context.Context, cmd *coremodel.Co
 			zap.String("device_id", deviceID),
 			zap.Uint8("socket_no", socket),
 			zap.Uint8("port", port),
-			zap.Uint16("business_no", biz),
 			zap.Uint8("mode", mode),
-			zap.Uint16("duration_min", durationMin))
+			zap.Uint16("duration_min", durationMin),
+			zap.Uint16("energy_wh", energyWh))
 	}
 
 	return nil

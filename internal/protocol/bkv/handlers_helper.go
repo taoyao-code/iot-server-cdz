@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/taoyao-code/iot-server/internal/coremodel"
@@ -195,15 +196,15 @@ func (h *Handlers) validateControlStart(cmd *BKVControlCommand) error {
 	if cmd.Port > 1 {
 		return fmt.Errorf("invalid port: %d (must be 0 or 1)", cmd.Port)
 	}
-	if cmd.Mode != ChargingModeByTime && cmd.Mode != ChargingModeByPower && cmd.Mode != ChargingModeByLevel {
+	if cmd.Mode != ChargingModeByTime && cmd.Mode != ChargingModeByEnergy && cmd.Mode != ChargingModeByLevel {
 		return fmt.Errorf("invalid mode: %d", cmd.Mode)
 	}
 	// 按时/按量时，Duration 1-900 分钟
-	if (cmd.Mode == ChargingModeByTime || cmd.Mode == ChargingModeByPower) && (cmd.Duration == 0 || cmd.Duration > 900) {
+	if (cmd.Mode == ChargingModeByTime || cmd.Mode == ChargingModeByEnergy) && (cmd.Duration == 0 || cmd.Duration > 900) {
 		return fmt.Errorf("invalid duration_min: %d", cmd.Duration)
 	}
 	// 按量模式要求 Energy >0
-	if cmd.Mode == ChargingModeByPower && cmd.Energy == 0 {
+	if cmd.Mode == ChargingModeByEnergy && cmd.Energy == 0 {
 		return fmt.Errorf("invalid energy_wh: %d", cmd.Energy)
 	}
 	// 按功率模式检查档位
@@ -365,6 +366,28 @@ func (h *Handlers) handleControlChargingEnd(ctx context.Context, f *Frame, devic
 		return
 	}
 
+	// 【方案二：状态位验证】
+	// 检查 status bit5（充电状态位），记录状态信息用于监控和调试
+	rawStatus := coremodel.RawPortStatus(end.Status)
+	isCharging := rawStatus.IsCharging() // bit5=1
+
+	if !isCharging {
+		// status bit5=0 表示未充电，可能是：
+		// 1. 充电已经结束的确认（正常）
+		// 2. 设备异常状态（需关注）
+		// 由于已通过业务号验证，这里记录详细信息供后续分析
+		zap.L().Info("charging end with non-charging status",
+			zap.String("device_id", deviceID),
+			zap.Uint8("port", uint8(end.Port)),
+			zap.Uint8("status", end.Status),
+			zap.String("status_bits", fmt.Sprintf("0b%08b", end.Status)),
+			zap.Bool("is_online", rawStatus.IsOnline()),
+			zap.Bool("is_charging", isCharging),
+			zap.Bool("is_no_load", rawStatus.IsNoLoad()),
+			zap.Bool("has_fault", rawStatus.HasFault()),
+			zap.String("note", "Status indicates device not charging, but processing as charging end due to valid business_no match"))
+	}
+
 	nextStatus := int32(coremodel.RawStatusOnlineNoLoad)
 	h.emitChargingEndEvents(ctx, deviceID, end, &nextStatus, false)
 
@@ -403,8 +426,17 @@ func (h *Handlers) handleControlChargingProgress(ctx context.Context, deviceID s
 	}
 }
 
-// (h *Handlers) handleControlUplinkStatus 处理控制上行状态更新
-// 规范：在收到开/关控制ACK时即时推送 PortSnapshot，保证UI与端口状态同步
+// (h *Handlers) handleControlUplinkStatus 处理控制上行ACK
+// 协议规范（文档2.3.1节）：
+//
+//	07   命令（控制ACK）
+//	01   结果：1=成功，0=失败  ← switchFlag 是成功/失败标志，不是状态！
+//	02   插座号
+//	00   插孔号
+//	0068 业务号
+//
+// 重要：switchFlag=0x01 表示命令执行成功，switchFlag=0x00 表示失败
+// 不能将 switchFlag 当作端口状态位图处理！
 func (h *Handlers) handleControlUplinkStatus(ctx context.Context, deviceID string, socketNo, portNo int, switchFlag byte, businessNo uint16) {
 	if deviceID == "" {
 		return
@@ -420,21 +452,46 @@ func (h *Handlers) handleControlUplinkStatus(ctx context.Context, deviceID strin
 		return
 	}
 
-	rawStatus := normalizeRawStatusByte(switchFlag)
-	statusCode := coremodel.NormalizePortStatus(rawStatus)
+	sessionKey := fmt.Sprintf("%s:%d", deviceID, portNo)
 
-	zap.L().Info("control uplink ack processed",
+	// switchFlag: 1=命令成功, 0=命令失败
+	// 注意：这不是端口状态位图！
+	if switchFlag == 0x00 {
+		// 命令执行失败，记录警告日志，不更新状态，不记录会话
+		zap.L().Warn("control command failed (ACK result=0)",
+			zap.String("device_id", deviceID),
+			zap.Int("socket_no", socketNo),
+			zap.Int("port_no", portNo),
+			zap.Uint16("business_no", businessNo))
+		return
+	}
+
+	// 命令成功（switchFlag=0x01）
+	// 充电命令成功 → 设置端口状态为"充电中"
+	rawStatus := int32(coremodel.RawStatusOnlineCharging) // 0xA0 = 在线充电中
+
+	zap.L().Info("control uplink ack success, setting port to charging",
 		zap.String("device_id", deviceID),
 		zap.Int("socket_no", socketNo),
 		zap.Int("port_no", portNo),
 		zap.Uint16("business_no", businessNo),
 		zap.Uint8("switch_flag", switchFlag),
-		zap.Int32("raw_status", rawStatus),
-		zap.String("status_code", statusCode.String()))
+		zap.Int32("raw_status", rawStatus))
 
 	if event := NewEventBuilder(deviceID).WithPort(portNo).BuildPortSnapshot(rawStatus, nil); event != nil {
 		h.emitter().Emit(ctx, event)
 	}
+
+	// 只在命令成功时记录会话
+	if h.sessions == nil {
+		h.sessions = &sync.Map{}
+	}
+	h.sessions.Store(sessionKey, fmt.Sprintf("%04X", businessNo))
+
+	zap.L().Info("session tracked from control uplink (command success)",
+		zap.String("device_id", deviceID),
+		zap.Int("port_no", portNo),
+		zap.String("business_no", fmt.Sprintf("%04X", businessNo)))
 }
 
 // (h *Handlers) validateChargingEnd 字段校验（插座/端口/时长/能量等基本范围）
@@ -470,23 +527,37 @@ func (h *Handlers) sendDownlinkReply(deviceID string, cmd uint16, msgID uint32, 
 	_ = h.Outbound.SendDownlink(deviceID, cmd, msgID, data)
 }
 
+// normalizeRawStatusByte 直接返回协议层的原始状态字节
+// 协议规范：状态是位图格式(bit7=在线, bit5=充电中, bit4=空载等)
+// 注意：不在此处做值映射，原始状态应由 coremodel.NormalizePortStatus 处理
 func normalizeRawStatusByte(statusByte byte) int32 {
-	if statusByte <= 3 {
-		return mapSocketStatusToRaw(int(statusByte))
-	}
 	return int32(statusByte)
 }
 
-// (h *Handlers) mapSocketStatusToRaw 映射插座状态枚举到原始状态位图
-// 使用 coremodel 定义的常量，确保协议一致性
+// mapSocketStatusToRaw 映射API状态码到原始状态位图
+// API状态码定义（coremodel.StatusCode*）：
+//
+//	0 = StatusCodeOffline  离线
+//	1 = StatusCodeIdle     空闲
+//	2 = StatusCodeCharging 充电中
+//	3 = StatusCodeFault    故障
+//
+// 原始状态位图（coremodel.RawStatus*）：
+//
+//	0x00 = RawStatusOffline        离线
+//	0x90 = RawStatusOnlineNoLoad   在线空载 (bit7+bit4)
+//	0xA0 = RawStatusOnlineCharging 在线充电中 (bit7+bit5)
+//	0xC0 = 在线+故障 (bit7+bit6)
 func mapSocketStatusToRaw(status int) int32 {
 	switch status {
-	case 0:
-		return int32(coremodel.RawStatusOnlineNoLoad) // idle → 在线空载
-	case 1:
-		return int32(coremodel.RawStatusOnlineCharging) // charging → 在线充电
-	case 2:
-		return int32(coremodel.RawStatusOffline) // fault → 离线/故障
+	case int(coremodel.StatusCodeOffline): // 0
+		return int32(coremodel.RawStatusOffline) // 0x00
+	case int(coremodel.StatusCodeIdle): // 1
+		return int32(coremodel.RawStatusOnlineNoLoad) // 0x90
+	case int(coremodel.StatusCodeCharging): // 2
+		return int32(coremodel.RawStatusOnlineCharging) // 0xA0
+	case int(coremodel.StatusCodeFault): // 3
+		return int32(0x80 | 0x40) // 0xC0 在线+故障
 	default:
 		return int32(coremodel.RawStatusOffline)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/taoyao-code/iot-server/internal/coremodel"
@@ -20,6 +21,11 @@ type DriverCore struct {
 	core   storage.CoreRepo
 	events *thirdparty.EventQueue
 	log    *zap.Logger
+
+	// sessions 跟踪活跃充电会话，用于防止无效状态升级
+	// key: "devicePhyID:portNo" -> value: sessionStartTime (time.Time)
+	// 当新状态要升级为"充电中"时，检查是否有活跃会话
+	sessions sync.Map
 }
 
 func NewDriverCore(core storage.CoreRepo, events *thirdparty.EventQueue, log *zap.Logger) *DriverCore {
@@ -28,6 +34,36 @@ func NewDriverCore(core storage.CoreRepo, events *thirdparty.EventQueue, log *za
 		events: events,
 		log:    log,
 	}
+}
+
+// sessionKey 生成会话跟踪键
+func sessionKey(phyID string, portNo int32) string {
+	return fmt.Sprintf("%s:%d", phyID, portNo)
+}
+
+// trackSession 记录活跃会话
+func (d *DriverCore) trackSession(phyID string, portNo int32) {
+	d.sessions.Store(sessionKey(phyID, portNo), time.Now())
+}
+
+// clearSession 清除会话记录
+func (d *DriverCore) clearSession(phyID string, portNo int32) {
+	d.sessions.Delete(sessionKey(phyID, portNo))
+}
+
+// hasActiveSession 检查是否有活跃会话
+// 会话有效期为 chargingSessionTimeout，超时后视为无效
+func (d *DriverCore) hasActiveSession(phyID string, portNo int32) bool {
+	val, ok := d.sessions.Load(sessionKey(phyID, portNo))
+	if !ok {
+		return false
+	}
+	startTime, ok := val.(time.Time)
+	if !ok {
+		return false
+	}
+	// 会话超过24小时视为过期（防止内存泄漏）
+	return time.Since(startTime) < 24*time.Hour
 }
 
 // HandleCoreEvent 处理驱动上报的规范化事件。
@@ -71,6 +107,12 @@ func (d *DriverCore) handleSessionStarted(ctx context.Context, ev *coremodel.Cor
 	}
 
 	status := int32(coremodel.NormalizePortStatus(defaultChargingStatus(payload.Metadata)))
+
+	// 记录活跃会话，用于后续状态升级验证
+	phyID := pickDeviceID(ev.DeviceID, payload.DeviceID)
+	if phyID != "" {
+		d.trackSession(phyID, int32(payload.PortNo))
+	}
 
 	return d.handleSessionState(ctx, sessionContext{
 		Event:         ev,
@@ -148,6 +190,9 @@ func (d *DriverCore) handleSessionEnded(ctx context.Context, ev *coremodel.CoreE
 	if payload.RawReason != nil {
 		rawReason = int(*payload.RawReason)
 	}
+
+	// 清除活跃会话记录，防止后续状态上报错误升级
+	d.clearSession(phyID, portNo)
 
 	// 确定端口终态（统一转换为 API 状态码）
 	var (
@@ -455,6 +500,11 @@ func parseBusiness(eventBiz *coremodel.BusinessNo, payloadBiz coremodel.Business
 	if strings.HasPrefix(raw, "0x") || strings.HasPrefix(raw, "0X") {
 		base = 16
 		raw = raw[2:]
+	} else if isBKVHexFormat(raw) {
+		// BKV协议层使用fmt.Sprintf("%04X", businessNo)格式化业务号
+		// 识别4位十六进制字符串（如"0041"）并强制按十六进制解析
+		// 避免"0041"被错误解析为十进制41，导致输出"0029"
+		base = 16
 	}
 
 	val, err := strconv.ParseInt(raw, base, 32)
@@ -469,6 +519,37 @@ func parseBusiness(eventBiz *coremodel.BusinessNo, payloadBiz coremodel.Business
 	}
 	biz := int32(val)
 	return strings.ToUpper(fmt.Sprintf("%04X", val)), &biz
+}
+
+// isBKVHexFormat 检测字符串是否为BKV协议的4位十六进制格式（无0x前缀）
+// 判断逻辑：必须是4位字符串，且满足以下任一条件：
+// 1. 包含A-F字母（如"00A3", "FFFF"）
+// 2. 以'0'开头且非"0000"（有前导零，如"0041"表示65而非41）
+//
+// 这样避免将纯数字"1234"误判为十六进制0x1234=4660
+// 例如：
+//
+//	"0041" → true (前导零) → 解析为65
+//	"00A3" → true (包含A) → 解析为163
+//	"1234" → false (无前导零,无A-F) → 保持十进制解析��1234
+//	"FFFF" → true (包含F) → 解析为65535
+func isBKVHexFormat(s string) bool {
+	if len(s) != 4 {
+		return false
+	}
+
+	hasHexLetter := false
+	hasLeadingZero := s[0] == '0' && s != "0000"
+
+	for _, c := range s {
+		if (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f') {
+			hasHexLetter = true
+		} else if !(c >= '0' && c <= '9') {
+			return false // 包含非法字符
+		}
+	}
+
+	return hasHexLetter || hasLeadingZero
 }
 
 func defaultTime(ts time.Time) time.Time {
@@ -519,6 +600,11 @@ func (d *DriverCore) pushThirdpartyEvent(eventType coremodel.CoreEventType, phyI
 	_ = d.events.Enqueue(context.Background(), ev)
 }
 
+// chargingEstablishmentPeriod 充电建立期时长
+// 在此期间内，不允许将端口状态从"充电中"降级为"空闲"
+// 这是为了防止充电命令 ACK 后的状态上报立即覆盖充电状态
+const chargingEstablishmentPeriod = 30 * time.Second
+
 // handlePortSnapshot 处理端口状态快照事件
 func (d *DriverCore) handlePortSnapshot(ctx context.Context, ev *coremodel.CoreEvent) error {
 	ps := ev.PortSnapshot
@@ -544,7 +630,7 @@ func (d *DriverCore) handlePortSnapshot(ctx context.Context, ev *coremodel.CoreE
 
 	deviceID := device.ID
 	portNo := int32(ps.PortNo)
-	status := int32(coremodel.NormalizePortStatus(ps.RawStatus))
+	newStatus := int32(coremodel.NormalizePortStatus(ps.RawStatus))
 	var power *int32
 	if ps.PowerW != nil {
 		p := *ps.PowerW
@@ -556,12 +642,61 @@ func (d *DriverCore) handlePortSnapshot(ctx context.Context, ev *coremodel.CoreE
 		at = time.Now()
 	}
 
-	if err := d.core.UpsertPortSnapshot(ctx, deviceID, portNo, status, power, at); err != nil {
+	// 充电建立期保护：防止刚下发充电命令后的充电状态被状态上报立即覆盖
+	// 场景：充电命令 ACK 后，设备立即上报空载状态（可能是检测延迟），导致充电状态丢失
+	if newStatus == int32(coremodel.StatusCodeIdle) {
+		existingPort, getErr := d.core.GetPort(ctx, deviceID, portNo)
+		if getErr == nil && existingPort != nil {
+			// 当前状态是"充电中"，新状态要降级为"空闲"
+			if existingPort.Status == int32(coremodel.StatusCodeCharging) {
+				timeSinceUpdate := time.Since(existingPort.UpdatedAt)
+				// 在充电建立期内，忽略空闲状态上报
+				if timeSinceUpdate < chargingEstablishmentPeriod {
+					if d.log != nil {
+						d.log.Warn("driver core: port snapshot ignored during charging establishment period",
+							zap.String("device_phy_id", phyID),
+							zap.Int32("port_no", portNo),
+							zap.Int32("current_status", existingPort.Status),
+							zap.Int32("new_status", newStatus),
+							zap.Duration("time_since_update", timeSinceUpdate),
+							zap.Duration("establishment_period", chargingEstablishmentPeriod),
+						)
+					}
+					return nil // 忽略这次状态更新
+				}
+			}
+		}
+	}
+
+	// 无效升级保护：防止无活跃会话时将状态错误升级为"充电中"
+	// 场景：设备断连重连后上报旧的"充电中"状态，但实际充电已结束
+	if newStatus == int32(coremodel.StatusCodeCharging) {
+		existingPort, getErr := d.core.GetPort(ctx, deviceID, portNo)
+		if getErr == nil && existingPort != nil {
+			// 当前状态不是"充电中"，但新状态要升级为"充电中"
+			if existingPort.Status != int32(coremodel.StatusCodeCharging) {
+				// 检查是否有活跃会话
+				if !d.hasActiveSession(phyID, portNo) {
+					if d.log != nil {
+						d.log.Warn("driver core: port snapshot ignored: no active session for charging upgrade",
+							zap.String("device_phy_id", phyID),
+							zap.Int32("port_no", portNo),
+							zap.Int32("current_status", existingPort.Status),
+							zap.Int32("new_status", newStatus),
+						)
+					}
+					return nil // 拒绝无效的充电状态升级
+				}
+			}
+		}
+	}
+
+	if err := d.core.UpsertPortSnapshot(ctx, deviceID, portNo, newStatus, power, at); err != nil {
 		if d.log != nil {
 			d.log.Error("driver core: upsert port snapshot failed",
 				zap.String("device_phy_id", phyID),
 				zap.Int32("port_no", portNo),
-				zap.Int32("status", status),
+				zap.Int32("status", newStatus),
 				zap.Error(err),
 			)
 		}

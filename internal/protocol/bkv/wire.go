@@ -1,6 +1,8 @@
 package bkv
 
 import (
+	"sync"
+
 	"github.com/taoyao-code/iot-server/internal/driverapi"
 	"github.com/taoyao-code/iot-server/internal/storage"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
@@ -16,6 +18,7 @@ func NewHandlers(repo *pgstorage.Repository, core storage.CoreRepo, reason *Reas
 		Outbound:   nil,
 		EventQueue: nil,
 		Deduper:    nil,
+		sessions:   &sync.Map{},
 	}
 }
 
@@ -29,5 +32,6 @@ func NewHandlersWithServices(repo *pgstorage.Repository, core storage.CoreRepo, 
 		EventQueue: eventQueue,
 		Deduper:    deduper,
 		CoreEvents: events,
+		sessions:   &sync.Map{},
 	}
 }

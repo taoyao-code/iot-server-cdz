@@ -49,7 +49,50 @@ createApp({
             charge_mode: 1,  // 默认按时长
             amount: 100,     // 默认100分
             duration_minutes: 1,  // 默认60分钟
-            port_no: 0
+            port_no: 0,
+            order_no: ''      // 当前端口订单号，停止充电必填
+        });
+
+        // 记录每个设备/端口最近使用的订单号，便于停止充电
+        const portOrders = ref({});
+        const currentOrderKey = computed(() => {
+            if (!selectedDevice.value || selectedPort.value === null) {
+                return null;
+            }
+            return `${selectedDevice.value.device_phy_id}:${selectedPort.value}`;
+        });
+
+        const syncOrderFields = () => {
+            const key = currentOrderKey.value;
+            const memo = key ? portOrders.value[key] : null;
+            chargeParams.value.order_no = memo?.order_no || '';
+        };
+
+        const rememberOrder = (orderNo) => {
+            const key = currentOrderKey.value;
+            if (!key || !orderNo) return;
+            portOrders.value[key] = {
+                order_no: orderNo
+            };
+            chargeParams.value.order_no = orderNo;
+        };
+
+        watch([selectedDevice, selectedPort], () => {
+            syncOrderFields();
+        });
+
+        // 手动修改订单号时，同步到当前端口的缓存
+        watch(() => chargeParams.value.order_no, (newOrder) => {
+            const key = currentOrderKey.value;
+            if (!key) return;
+            const trimmed = (newOrder || '').trim();
+            if (!trimmed) {
+                delete portOrders.value[key];
+                return;
+            }
+            portOrders.value[key] = {
+                order_no: trimmed
+            };
         });
 
         let refreshInterval = null;
@@ -82,6 +125,14 @@ createApp({
         const canStopCharge = computed(() => {
             return selectedPortStatus.value === PORT_STATUS.CHARGING && selectedDevice.value?.is_online;
         });
+
+        const getCurrentOrderInfo = () => {
+            const key = currentOrderKey.value;
+            const memo = key ? portOrders.value[key] : null;
+            return {
+                orderNo: (chargeParams.value.order_no || memo?.order_no || '').trim()
+            };
+        };
 
         // Methods
         const addLog = (type, message, payload = null) => {
@@ -189,34 +240,9 @@ createApp({
             }
         };
 
-        const fetchDeviceDetail = async (devicePhyId) => {
-            try {
-                const response = await axios.get(`${API_BASE}/api/v1/third/devices/${devicePhyId}`);
-                if (response.data.code === 0) {
-                    const deviceData = response.data.data;
-                    return {
-                        ...deviceData,
-                        id: deviceData.device_phy_id,
-                        isOnline: deviceData.is_online,
-                        activeOrdersCount: deviceData.active_orders ? deviceData.active_orders.length : 0
-                    };
-                }
-            } catch (error) {
-                console.error('Failed to fetch device detail:', error);
-                addLog('错误', `获取设备详情失败: ${error.message}`);
-            }
-            return null;
-        };
-
         const refreshData = async () => {
             loading.value = true;
             await fetchDevices();
-            if (selectedDevice.value) {
-                const detail = await fetchDeviceDetail(selectedDevice.value.device_phy_id);
-                if (detail) {
-                    selectedDevice.value = detail;
-                }
-            }
             loading.value = false;
         };
 
@@ -249,13 +275,11 @@ createApp({
         });
 
         // Actions
-        const selectDevice = async (device) => {
+        const selectDevice = (device) => {
             addLog('信息', `选择设备: ${device.device_phy_id}`);
-            const detail = await fetchDeviceDetail(device.device_phy_id);
-            if (detail) {
-                selectedDevice.value = detail;
-                selectedPort.value = detail.ports && detail.ports.length > 0 ? detail.ports[0].port_no : null;
-            }
+            selectedDevice.value = device;
+            selectedPort.value = device.ports && device.ports.length > 0 ? device.ports[0].port_no : null;
+            syncOrderFields();
         };
 
         const startCharging = async () => {
@@ -266,8 +290,10 @@ createApp({
 
             loading.value = true;
 
-            // 生成订单号：THD + 时间戳（毫秒）
-            const orderNo = 'THD' + Date.now();
+            // 生成或复用订单号：THD + 时间戳（毫秒）
+            const { orderNo: memoOrderNo } = getCurrentOrderInfo();
+            const orderNo = memoOrderNo || 'THD' + Date.now();
+            chargeParams.value.order_no = orderNo;
             addLog('信息', `正在启动充电: ${selectedDevice.value.device_phy_id} 端口 ${selectedPort.value}，订单号: ${orderNo}`);
 
             try {
@@ -290,7 +316,9 @@ createApp({
                 );
 
                 if (response.data.code === 0) {
-                    addLog('成功', '充电启动成功', response.data.data);
+                    const responseData = response.data.data || {};
+                    rememberOrder(responseData.order_no || orderNo);
+                    addLog('成功', '充电启动成功', responseData);
                     // 刷新设备信息
                     await refreshData();
                 } else {
@@ -310,17 +338,29 @@ createApp({
                 return;
             }
 
+            const { orderNo } = getCurrentOrderInfo();
+            if (!orderNo) {
+                addLog('警告', '停止充电失败: 缺少订单号，请先填写订单号或使用控制台启动充电以生成订单');
+                return;
+            }
+
             loading.value = true;
-            addLog('信息', `正在停止充电: ${selectedDevice.value.device_phy_id} 端口 ${selectedPort.value}`);
+            addLog('信息', `正在停止充电: ${selectedDevice.value.device_phy_id} 端口 ${selectedPort.value}，订单号: ${orderNo}`);
 
             try {
+                const payload = {
+                    socket_uid: chargeParams.value.socket_uid,
+                    port_no: selectedPort.value,
+                    order_no: orderNo
+                };
+
                 const response = await axios.post(
                     `${API_BASE}/api/v1/third/devices/${selectedDevice.value.device_phy_id}/stop`,
-                    { socket_uid: chargeParams.value.socket_uid, port_no: selectedPort.value }  // 使用JSON body传递 socket_uid + port_no
+                    payload  // 使用JSON body传递 socket_uid + port_no + order_no
                 );
 
                 if (response.data.code === 0) {
-                    addLog('成功', '充电已停止');
+                    addLog('成功', '充电已停止', response.data.data || {});
                     // 刷新设备信息
                     await refreshData();
                 } else {

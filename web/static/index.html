@@ -299,6 +299,14 @@
                                 </select>
                             </div>
 
+                            <!-- Order No -->
+                            <div class="space-y-2">
+                                <label class="text-sm font-medium text-gray-300">订单号（停止充电必填）</label>
+                                <input v-model="chargeParams.order_no" type="text" placeholder="为空时启动自动生成"
+                                    class="w-full bg-gray-800 text-gray-200 text-sm rounded-md px-3 py-2 border border-gray-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none">
+                                <p class="text-xs text-gray-500">停止充电必须携带订单号；启动时留空会自动生成并记忆当前端口。</p>
+                            </div>
+
                             <!-- Charge Mode Selection -->
                             <div class="space-y-2">
                                 <label class="text-sm font-medium text-gray-300">充电模式</label>

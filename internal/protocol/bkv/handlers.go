@@ -7,6 +7,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -14,6 +15,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/driverapi"
 	"github.com/taoyao-code/iot-server/internal/storage"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
+	"go.uber.org/zap"
 )
 
 // repoAPI 占位（保持构造函数兼容），驱动侧不直接写库。
@@ -49,6 +51,10 @@ type Handlers struct {
 
 	// CoreEvents 为驱动 -> 核心 的事件上报入口
 	CoreEvents driverapi.EventSink
+
+	// sessions 跟踪活跃充电会话，用于验证充电结束数据包
+	// key: "deviceID:portNo" -> value: businessNo (string, 十六进制格式如 "D3BA")
+	sessions *sync.Map
 }
 
 // HandleHeartbeat 处理心跳帧 (cmd=0x0000 或 BKV cmd=0x1017)
@@ -108,10 +114,9 @@ func (h *Handlers) HandleBKVStatus(ctx context.Context, f *Frame) error {
 	}
 
 	// 2. 根据载荷类型分发处理
-	// 修复：同时检查 IsStatusReport() 和 HasSocketStatusFields()
-	// 某些设备固件可能使用非标准 BKV Cmd (如 0x1013 而非 0x1017)，
-	// 但仍然携带有效的端口状态数据（tag 0x65 + value 0x94）
-	if payload.IsStatusReport() || payload.HasSocketStatusFields() {
+	// 协议规范：0x1017是状态上报，必须同时包含状态字段(tag 0x65 + value 0x94)
+	// 同时检查命令码和字段存在性，确保只处理真正的状态上报
+	if payload.IsStatusReport() && payload.HasSocketStatusFields() {
 		err := h.handleSocketStatusUpdate(ctx, payload)
 		h.sendStatusAck(ctx, f, payload, err == nil)
 		return err
@@ -308,23 +313,46 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 		// 参考：minimal_bkv_service.go 中的 isChargingEnd() 只检查子命令，不检查 Status
 		if subCmd == 0x02 || subCmd == 0x18 {
 			if end, err := ParseBKVChargingEnd(f.Data); err == nil {
-				// 补丁：部分设备仅在充电结束帧(0x0015)中携带最新端口状态
-				// 为确保端口快照及时落库，在处理充电结束的同时发送PortSnapshot事件
-				// 这解决了某些设备不发送独立的端口状态查询响应(0x000D/0x000E/0x001D)的问题
-				portNo := int(end.Port)
-				rawStatus := int32(end.Status)
-				var powerW *int32
-				if end.InstantPower > 0 {
-					p := int32(math.Round(float64(end.InstantPower) / 10.0)) // 0.1W -> W(四舍五入)
-					powerW = &p
+				// 【方案一：业务号和端口号验证】
+				// 验证数据包的业务号和端口号是否匹配当前活跃会话
+				sessionKey := fmt.Sprintf("%s:%d", deviceID, end.Port)
+				expectedBizNo, hasSession := h.sessions.Load(sessionKey)
+
+				// 将接收到的 BusinessNo (uint16) 转换为十六进制字符串进行比较
+				receivedBizNo := fmt.Sprintf("%04X", end.BusinessNo)
+
+				if !hasSession {
+					// 无活跃会话时接收充电结束，记录信息日志并忽略
+					zap.L().Info("charging end ignored: no active session",
+						zap.String("device_id", deviceID),
+						zap.Uint8("port", uint8(end.Port)),
+						zap.String("business_no", receivedBizNo),
+						zap.Uint8("status", end.Status))
+					return nil
 				}
-				if ev := NewEventBuilder(deviceID).WithPort(portNo).BuildPortSnapshot(rawStatus, powerW); ev != nil {
-					h.emitter().Emit(ctx, ev)
+
+				if receivedBizNo != expectedBizNo.(string) {
+					// 业务号不匹配，记录警告日志并拒绝处理
+					zap.L().Warn("charging end ignored: business number mismatch",
+						zap.String("device_id", deviceID),
+						zap.Uint8("port", uint8(end.Port)),
+						zap.String("received_business_no", receivedBizNo),
+						zap.String("expected_business_no", expectedBizNo.(string)),
+						zap.Uint8("status", end.Status))
+					return nil
 				}
 
 				// 子命令 0x02/0x18 直接触发充电结束流程
 				// Status 字段用于推导结束原因，不用于判断是否结束
 				h.handleControlChargingEnd(ctx, f, deviceID, end)
+
+				// 充电结束后清理会话记录
+				h.sessions.Delete(sessionKey)
+
+				zap.L().Info("charging end processed and session cleared",
+					zap.String("device_id", deviceID),
+					zap.Uint8("port", uint8(end.Port)),
+					zap.String("business_no", receivedBizNo))
 				return nil
 			} else {
 				return fmt.Errorf("parse charging end failed: %w", err)
@@ -628,6 +656,18 @@ func (h *Handlers) handleOrderConfirmUplink(ctx context.Context, f *Frame) error
 
 	event := h.buildSessionStartedEvent(deviceID, 0, conf.OrderNo, "order_confirm", nil, metadata)
 	h.emitter().Emit(ctx, event)
+
+	// 【方案一：会话跟踪】
+	// 记录会话信息，用于后续充电结束验证
+	// 注意：这里假设端口号为 0，因为订单确认中未明确指定端口
+	sessionKey := fmt.Sprintf("%s:%d", deviceID, 0)
+	h.sessions.Store(sessionKey, conf.OrderNo)
+
+	zap.L().Info("session started and tracked",
+		zap.String("device_id", deviceID),
+		zap.Int("port", 0),
+		zap.String("business_no", conf.OrderNo))
+
 	return nil
 }
 

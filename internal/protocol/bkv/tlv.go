@@ -109,9 +109,9 @@ type SocketStatus struct {
 type ChargingMode uint8
 
 const (
-	ChargingModeByTime  ChargingMode = 1 // 按时长充电
-	ChargingModeByPower ChargingMode = 0 // 按电量充电
-	ChargingModeByLevel ChargingMode = 3 // 按功率充电
+	ChargingModeByTime   ChargingMode = 1 // 按时长充电
+	ChargingModeByEnergy ChargingMode = 0 // 按电量充电
+	ChargingModeByLevel  ChargingMode = 3 // 按功率充电
 )
 
 // SwitchState 开关状态
@@ -698,17 +698,16 @@ func (p *BKVPayload) IsHeartbeat() bool {
 }
 
 // IsStatusReport 判断是否为状态上报
-// 支持多种 BKV Cmd：0x1017（标准状态上报）和 0x1013（部分设备固件使用）
+// 协议规范（BKV子命令码，非帧命令码）：
+//
+//	0x1017 = 插座状态上报（包含 tag=0x65 + value=0x94）
+//	0x1013 = 参数设置ACK（不包含状态字段！）
+//	0x1004 = BKV充电结束上报（见 IsChargingEnd）
+//
+// 注意：仅0x1017是状态上报命令，0x1013是参数设置ACK，不应包含在此
+// 注意：0x0018是帧层命令码（按功率充电结束），与BKV子命令码0x1004不同！
 func (p *BKVPayload) IsStatusReport() bool {
-	// 标准状态上报命令
-	if p.Cmd == 0x1017 {
-		return true
-	}
-	// 兼容部分设备固件使用的命令
-	if p.Cmd == 0x1013 {
-		return true
-	}
-	return false
+	return p.Cmd == 0x1017
 }
 
 // HasSocketStatusFields 检查载荷是否包含插座状态字段（tag 0x65 + value 0x94）
@@ -811,18 +810,28 @@ func ParseBKVChargingEnd(data []byte) (*BKVChargingEnd, error) {
 		return nil, ErrTLVShort
 	}
 
+	// 【方案三：修复长度处理逻辑】
 	// 兼容 0x0015 data：0011 02 01 ffff...
 	// 判定条件：
 	//   - 至少包含 length(2) + cmd(1) + 最小字段(15)
 	//   - 第3字节为 0x02(普通结束) 或 0x18(按功率结束)
-	//   - length 字段 + 3 == 总长度（length不包括自身2字节和subCmd 1字节）
-	//   协议示例：0x0011(17) + 2(length本身) + 1(subCmd) = 20字节总长
+	//   - 放宽长度匹配条件：允许尾部有额外字节（如校验和）
+	//   协议示例：0x0011(17) + 2(length本身) + 1(subCmd) = 20字节基础长度
 	if len(data) >= 18 {
 		subCmd := data[2]
 		if subCmd == 0x02 || subCmd == 0x18 {
 			declLen := binary.BigEndian.Uint16(data[0:2])
-			if int(declLen)+3 == len(data) {
+			expectedMinLen := int(declLen) + 3 // length + 2字节length自身 + 1字节subCmd
+
+			// 修复：改为大于等于判断，容忍尾部额外字节（如校验和）
+			// 原逻辑：严格等于，导致有校验和时不跳过前导字节，字段错位
+			// 新逻辑：只要实际长度 >= 预期最小长度，就认为格式正确
+			if len(data) >= expectedMinLen && expectedMinLen >= 18 {
 				data = data[3:] // 跳过 length(2字节) + subCmd(1字节)，使 data[0] 对齐为插座号
+			} else if len(data) < expectedMinLen {
+				// 数据长度不足，记录详细错误信息
+				return nil, fmt.Errorf("data length mismatch: declared=%d, expected_min=%d, actual=%d",
+					declLen, expectedMinLen, len(data))
 			}
 		}
 	}
@@ -937,7 +946,7 @@ func GetControlCommandType(data []byte) string {
 	switch mode {
 	case ChargingModeByTime:
 		return "charging_by_time"
-	case ChargingModeByPower:
+	case ChargingModeByEnergy:
 		return "charging_by_energy"
 	case ChargingModeByLevel:
 		return "charging_by_power_level"
