@@ -26,11 +26,13 @@ type networkNode struct {
 
 // 配置结构体（保持最小化，仅监听地址和基础组网/控制参数）
 type serverConfig struct {
-	Addr         string
-	AutoControl  bool
-	PowerControl bool          // 是否自动下发按功率充电命令(0x17)
-	NetChannel   uint8         // 组网信道(1-15)
-	NetNodes     []networkNode // 需要下发的插座列表（对所有网关生效）
+	Addr          string
+	AutoControl   bool
+	PowerControl  bool          // 是否自动下发按功率充电命令(0x17)
+	NetChannel    uint8         // 组网信道(1-15)
+	NetNodes      []networkNode // 需要下发的插座列表（对所有网关生效）
+	ControlDelay  time.Duration // 组网完成后多长时间才允许自动控制
+	QueryInterval time.Duration // 周期性查询插座状态间隔
 }
 
 func main() {
@@ -61,23 +63,29 @@ func main() {
 func loadConfig() serverConfig {
 	defaultAddr := getEnv("BKV_TEST_ADDR", ":7065")
 	// 默认开启自动控制（无需显式设置环境变量或命令行参数）
-	autoFromEnv := parseBoolEnv("BKV_TEST_AUTO_CONTROL", true)
-	powerFromEnv := parseBoolEnv("BKV_TEST_POWER_CONTROL", false)
+	autoFromEnv := parseBoolEnv("BKV_TEST_AUTO_CONTROL", true)              // 默认开启自动控制
+	powerFromEnv := parseBoolEnv("BKV_TEST_POWER_CONTROL", false)           // 默认关闭按功率控制
+	defaultCtrlDelay := parseDurationEnv("BKV_TEST_CONTROL_DELAY", 40)      // 默认40秒
+	defaultQueryInterval := parseDurationEnv("BKV_TEST_QUERY_INTERVAL", 20) // 默认5秒
 
 	addrFlag := flag.String("addr", defaultAddr, "TCP 监听地址，例如 :7065")
 	autoFlag := flag.Bool("auto-control", autoFromEnv, "收到心跳后自动下发一次开始充电命令")
 	powerFlag := flag.Bool("power-control", powerFromEnv, "收到心跳后自动下发一次按功率充电命令")
 	netConfigFlag := flag.String("net-config", "network_config.json", "组网配置文件路径(JSON)，例如 ./network_config.json")
+	controlDelayFlag := flag.Duration("control-delay", defaultCtrlDelay, "组网完成后等待多长时间再下发自动控制命令，例如 2s/500ms")
+	queryIntervalFlag := flag.Duration("query-interval", defaultQueryInterval, "周期性下发查询插座状态命令的间隔，例如 30s；0 表示只查询一次")
 	flag.Parse()
 
 	netChannel, netNodes := loadNetworkConfig(*netConfigFlag)
 
 	return serverConfig{
-		Addr:         *addrFlag,
-		AutoControl:  *autoFlag,
-		PowerControl: *powerFlag,
-		NetChannel:   netChannel,
-		NetNodes:     netNodes,
+		Addr:          *addrFlag,
+		AutoControl:   *autoFlag,
+		PowerControl:  *powerFlag,
+		NetChannel:    netChannel,
+		NetNodes:      netNodes,
+		ControlDelay:  *controlDelayFlag,
+		QueryInterval: *queryIntervalFlag,
 	}
 }
 
@@ -101,6 +109,19 @@ func parseBoolEnv(key string, def bool) bool {
 	default:
 		return def
 	}
+}
+
+func parseDurationEnv(key string, def time.Duration) time.Duration {
+	val, ok := os.LookupEnv(key)
+	if !ok || val == "" {
+		return def
+	}
+	d, err := time.ParseDuration(val)
+	if err != nil {
+		log.Printf("环境变量 %s 的时间格式无效(%q): %v，使用默认值 %s", key, val, err, def)
+		return def
+	}
+	return d
 }
 
 // parseMAC 支持纯HEX或带分隔符的MAC字符串
@@ -239,7 +260,10 @@ func handleConn(conn net.Conn, cfg serverConfig) {
 	sentPowerControl := false // 是否已下发按功率控制命令(0x17)
 	netSent := false          // 是否已下发组网刷新命令
 	netAcked := false         // 是否已收到组网刷新ACK
-	querySent := false        // 是否已发送查询插座状态命令(0x1D)
+	initialQuerySent := false // 是否已发送查询插座状态命令(0x1D)
+	var netAckTime time.Time
+	var lastQueryAt time.Time
+	connStart := time.Now()
 
 	for {
 		n, err := conn.Read(buf)
@@ -301,10 +325,11 @@ func handleConn(conn net.Conn, cfg serverConfig) {
 			// 识别设备对2.2.5组网刷新的ACK
 			if frame.Cmd == 0x0005 && frame.IsUplink() && isNetworkRefreshAck(frame) {
 				netAcked = true
+				netAckTime = time.Now()
 				log.Printf("收到组网刷新ACK(%s)", remote)
 
 				// 在组网成功后，平台主动下发一次“查询插座状态”命令 (0x0015 子命令0x1D)
-				if !querySent {
+				if !initialQuerySent {
 					queryCmd := buildQuerySocketStatus(frame, cfg.NetNodes)
 					if len(queryCmd) > 0 {
 						if _, err := conn.Write(queryCmd); err != nil {
@@ -316,8 +341,9 @@ func handleConn(conn net.Conn, cfg serverConfig) {
 						} else {
 							log.Printf("TX(%s) 查询插座状态帧解析失败: %v raw=%s", remote, err, hex.EncodeToString(queryCmd))
 						}
+						lastQueryAt = time.Now()
 					}
-					querySent = true
+					initialQuerySent = true
 				}
 			}
 
@@ -326,8 +352,43 @@ func handleConn(conn net.Conn, cfg serverConfig) {
 				logSocketStatusQueryResponse(remote, frame)
 			}
 
+			if cfg.QueryInterval > 0 && netAcked && !lastQueryAt.IsZero() && frame.IsHeartbeat() {
+				if time.Since(lastQueryAt) >= cfg.QueryInterval {
+					queryCmd := buildQuerySocketStatus(frame, cfg.NetNodes)
+					if len(queryCmd) > 0 {
+						if _, err := conn.Write(queryCmd); err != nil {
+							log.Printf("周期查询插座状态命令发送失败(%s): %v", remote, err)
+							return
+						}
+						if qFrame, err := bkv.Parse(queryCmd); err == nil {
+							logFrame("TX", remote, queryCmd, qFrame)
+						} else {
+							log.Printf("TX(%s) 周期查询帧解析失败: %v raw=%s", remote, err, hex.EncodeToString(queryCmd))
+						}
+						lastQueryAt = time.Now()
+					}
+				}
+			}
+
+			autoReady := func(requireNet bool) bool {
+				if requireNet && !netAcked {
+					return false
+				}
+				if cfg.ControlDelay <= 0 {
+					return true
+				}
+				base := connStart
+				if requireNet {
+					base = netAckTime
+				}
+				if base.IsZero() {
+					return false
+				}
+				return time.Since(base) >= cfg.ControlDelay
+			}
+
 			// 若启用自动控制，在组网完成后首次心跳时下发一次开始充电命令
-			if cfg.AutoControl && !sentControl && frame.IsHeartbeat() && (len(cfg.NetNodes) == 0 || netAcked) {
+			if cfg.AutoControl && !sentControl && frame.IsHeartbeat() && autoReady(len(cfg.NetNodes) > 0) {
 				ctrl := buildStartChargeCommand(frame, cfg.NetNodes)
 				if _, err := conn.Write(ctrl); err != nil {
 					log.Printf("发送开始充电命令失败(%s): %v", remote, err)
@@ -342,7 +403,7 @@ func handleConn(conn net.Conn, cfg serverConfig) {
 			}
 
 			// 若启用按功率控制，在组网完成后首次心跳时下发一次按功率充电命令 (cmd=0x0015, 子命令0x17)
-			if cfg.PowerControl && !sentPowerControl && frame.IsHeartbeat() && (len(cfg.NetNodes) == 0 || netAcked) {
+			if cfg.PowerControl && !sentPowerControl && frame.IsHeartbeat() && autoReady(len(cfg.NetNodes) > 0) {
 				powerCmd := buildPowerLevelChargeCommand(frame, cfg.NetNodes)
 				if len(powerCmd) > 0 {
 					if _, err := conn.Write(powerCmd); err != nil {

@@ -252,11 +252,14 @@ func (s RawPortStatus) ToStatusCode() PortStatusCode {
 	if !s.IsOnline() {
 		return StatusCodeOffline
 	}
-	if s.HasFault() {
-		return StatusCodeFault
-	}
 	if s.IsCharging() {
 		return StatusCodeCharging
+	}
+	if s.IsNoLoad() {
+		return StatusCodeIdle
+	}
+	if s.HasFault() {
+		return StatusCodeFault
 	}
 	return StatusCodeIdle
 }

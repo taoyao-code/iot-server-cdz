@@ -157,7 +157,7 @@ func (h *Handlers) handleSocketStatusUpdate(ctx context.Context, payload *BKVPay
 			return nil
 		}
 
-		rawStatus := int32(port.Status)
+		rawStatus := normalizeRawStatusByte(port.Status)
 		var power *int32
 		if port.Power > 0 {
 			roundedW := int32(math.Round(float64(port.Power) / 10.0)) // 0.1W → W(四舍五入)
@@ -170,7 +170,8 @@ func (h *Handlers) handleSocketStatusUpdate(ctx context.Context, payload *BKVPay
 		h.emitter().Emit(ctx, event)
 
 		// 如果正在充电，推送充电进度事件到Webhook
-		isCharging := coremodel.RawPortStatus(port.Status).IsCharging()
+		statusBits := coremodel.RawPortStatus(uint8(rawStatus))
+		isCharging := statusBits.IsCharging()
 		if isCharging && h.EventQueue != nil {
 			powerW := float64(port.Power) / 10.0       // 0.1W -> W
 			currentA := float64(port.Current) / 1000.0 // 0.001A -> A
@@ -335,17 +336,14 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 			return fmt.Errorf("control uplink inner too short: %d", len(inner))
 		}
 		if inner[0] == 0x07 {
-			if len(inner) < 9 {
+			if len(inner) < 6 {
 				h.ackControlFailure(deviceID, f.MsgID)
 				return fmt.Errorf("control uplink sub_cmd 0x07 too short: %d", len(inner))
 			}
-			socketNo := int(inner[1])
-			portNo := int(inner[2])
-			switchFlag := inner[3]
-			var businessNo uint16
-			if len(inner) >= 6 {
-				businessNo = binary.BigEndian.Uint16(inner[4:6])
-			}
+			switchFlag := inner[1]
+			socketNo := int(inner[2])
+			portNo := int(inner[3])
+			businessNo := binary.BigEndian.Uint16(inner[4:6])
 			h.handleControlUplinkStatus(ctx, deviceID, socketNo, portNo, switchFlag, businessNo)
 		}
 	} else {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/taoyao-code/iot-server/internal/coremodel"
+	"go.uber.org/zap"
 )
 
 // handlersHelper 辅助方法集合
@@ -162,6 +163,11 @@ func (h *Handlers) parseControlPayload(data []byte) (subCmd byte, inner []byte, 
 		return 0, nil, fmt.Errorf("control payload len mismatch: decl=%d actual=%d", innerLen, len(data)-2)
 	}
 	inner = data[2:total]
+	if len(data) > total {
+		// 某些设备的长度字段不包含子命令本身，此时多出1字节
+		// 也有固件直接把剩余所有字节都视为控制payload
+		inner = data[2:]
+	}
 	if len(inner) == 0 {
 		return 0, nil, fmt.Errorf("control inner payload empty")
 	}
@@ -398,10 +404,37 @@ func (h *Handlers) handleControlChargingProgress(ctx context.Context, deviceID s
 }
 
 // (h *Handlers) handleControlUplinkStatus 处理控制上行状态更新
-// 规范：控制 ACK 路径不写入 PortSnapshot，端口状态由状态上报或 SessionEnded 决定
+// 规范：在收到开/关控制ACK时即时推送 PortSnapshot，保证UI与端口状态同步
 func (h *Handlers) handleControlUplinkStatus(ctx context.Context, deviceID string, socketNo, portNo int, switchFlag byte, businessNo uint16) {
-	// 规范：仅保留日志，不发送 PortSnapshot 事件
-	// 端口状态应由状态上报(0x1000/0x1017)或 SessionEnded 事件决定
+	if deviceID == "" {
+		return
+	}
+
+	if portNo < 0 || portNo > 1 {
+		zap.L().Warn("control uplink ack ignored: invalid port range",
+			zap.String("device_id", deviceID),
+			zap.Int("socket_no", socketNo),
+			zap.Int("port_no", portNo),
+			zap.Uint8("switch_flag", switchFlag),
+			zap.Uint16("business_no", businessNo))
+		return
+	}
+
+	rawStatus := normalizeRawStatusByte(switchFlag)
+	statusCode := coremodel.NormalizePortStatus(rawStatus)
+
+	zap.L().Info("control uplink ack processed",
+		zap.String("device_id", deviceID),
+		zap.Int("socket_no", socketNo),
+		zap.Int("port_no", portNo),
+		zap.Uint16("business_no", businessNo),
+		zap.Uint8("switch_flag", switchFlag),
+		zap.Int32("raw_status", rawStatus),
+		zap.String("status_code", statusCode.String()))
+
+	if event := NewEventBuilder(deviceID).WithPort(portNo).BuildPortSnapshot(rawStatus, nil); event != nil {
+		h.emitter().Emit(ctx, event)
+	}
 }
 
 // (h *Handlers) validateChargingEnd 字段校验（插座/端口/时长/能量等基本范围）
@@ -435,6 +468,13 @@ func (h *Handlers) sendDownlinkReply(deviceID string, cmd uint16, msgID uint32, 
 		return
 	}
 	_ = h.Outbound.SendDownlink(deviceID, cmd, msgID, data)
+}
+
+func normalizeRawStatusByte(statusByte byte) int32 {
+	if statusByte <= 3 {
+		return mapSocketStatusToRaw(int(statusByte))
+	}
+	return int32(statusByte)
 }
 
 // (h *Handlers) mapSocketStatusToRaw 映射插座状态枚举到原始状态位图

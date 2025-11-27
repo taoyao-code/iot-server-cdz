@@ -81,9 +81,8 @@ func TestRawPortStatus_ToStatusCode(t *testing.T) {
 		{"fault_overcurrent_0x84", 0x84, StatusCodeFault}, // 在线+过流
 		{"fault_overpower_0x82", 0x82, StatusCodeFault},   // 在线+过功率
 
-		// 常见设备值
-		// 0x98 = 10011000 = 在线 + 空载 + 过温(bit3) → 应该是故障
-		{"device_0x98", 0x98, StatusCodeFault},
+		// 常见设备值：只要带空载位，无论额外告警位如何都视为空闲
+		{"device_0x98", 0x98, StatusCodeIdle},
 	}
 
 	for _, tt := range tests {
@@ -223,7 +222,7 @@ func TestNormalizePortStatus(t *testing.T) {
 		{"already_fault", int32(StatusCodeFault), StatusCodeFault},
 		{"raw_idle", 0x90, StatusCodeIdle},
 		{"raw_charging", 0xA0, StatusCodeCharging},
-		{"raw_fault_bits", 0x98, StatusCodeFault},
+		{"raw_fault_bits", 0x98, StatusCodeIdle},
 	}
 
 	for _, tt := range tests {
