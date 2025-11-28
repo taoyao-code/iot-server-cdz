@@ -1,25 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git for-each-ref:*)",
-      "Bash(git config:*)",
-      "WebFetch(domain:doc.hummingbird.winc-link.com)",
-      "mcp__context7__resolve-library-id",
-      "mcp__context7__get-library-docs",
-      "Bash(find:*)",
-      "Bash(openspec list:*)",
-      "Bash(openspec validate:*)",
-      "Bash(openspec show:*)",
-      "Bash(xxd:*)",
-      "Bash(python3:*)",
-      "Bash(xargs:*)",
-      "Bash(go build:*)",
-      "Bash(cat:*)",
-      "Bash(psql:*)",
-      "Bash(go test:*)",
-      "Bash(echo:*)",
-      "Bash(git stash:*)",
-      "mcp__serena__list_dir"
+      "mcp__serena__read_memory",
+      "Bash(ls:*)",
+      "Bash(wc:*)"
     ],
     "deny": [],
     "ask": []
