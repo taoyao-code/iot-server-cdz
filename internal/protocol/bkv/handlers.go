@@ -57,7 +57,8 @@ type Handlers struct {
 	sessions *sync.Map
 }
 
-// HandleHeartbeat 处理心跳帧 (cmd=0x0000 或 BKV cmd=0x1017)
+// HandleHeartbeat 处理心跳帧 (仅帧命令 cmd=0x0000)
+// 注意：BKV子命令0x1017是"插座状态上报"，不是心跳！
 func (h *Handlers) HandleHeartbeat(ctx context.Context, f *Frame) error {
 	// 1. 提取设备ID
 	deviceID := extractDeviceIDOrDefault(f)
@@ -130,6 +131,14 @@ func (h *Handlers) HandleBKVStatus(ctx context.Context, f *Frame) error {
 		return h.handleExceptionEvent(ctx, f, payload)
 	}
 
+	if payload.IsParameterSet() {
+		return h.handleParameterSet(ctx, f, payload)
+	}
+
+	if payload.IsParameterSetAck() {
+		return h.handleParameterSetAck(ctx, payload)
+	}
+
 	if payload.IsParameterQuery() {
 		return h.handleParameterQuery(ctx, payload)
 	}
@@ -138,6 +147,10 @@ func (h *Handlers) HandleBKVStatus(ctx context.Context, f *Frame) error {
 		return h.handleBKVControlCommand(ctx, payload)
 	}
 
+	// 记录未知BKV子命令
+	zap.L().Debug("unknown BKV sub_cmd",
+		zap.Uint16("bkv_cmd", payload.Cmd),
+		zap.Int("fields_count", len(payload.Fields)))
 	return nil
 }
 
@@ -296,102 +309,160 @@ func (h *Handlers) handleBKVChargingEnd(ctx context.Context, f *Frame, payload *
 }
 
 // HandleControl 处理控制指令 (cmd=0x0015)
+// 协议规范：0x0015帧包含多种子命令，需要根据子命令分发到对应处理器
+// 子命令列表：
+//   - 0x02: 充电结束上报（按时/按量）- 2.2.9
+//   - 0x07: 控制设备（按时/按量）- 2.2.8
+//   - 0x0B: 刷卡上报 - 2.2.3进阶
+//   - 0x0C: 刷卡充电结束 - 2.2.3进阶
+//   - 0x0F: 订单确认 - 2.2.3进阶
+//   - 0x17: 按功率下发充电命令 - 2.2.1进阶
+//   - 0x18: 按功率充电结束上报 - 2.2.2进阶
+//   - 0x1A: 刷卡查询余额 - 2.2.4进阶
+//   - 0x1B: 设置语音播报时间 - 2.2.5进阶
+//   - 0x1D: 查询插座状态 - 2.2.4
 func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 	deviceID := extractDeviceIDOrDefault(f)
 
 	// 0x0015 data 长度前缀 + 子命令，最小长度 3（len_hi len_lo sub_cmd）
 	subCmd, inner, err := h.parseControlPayload(f.Data)
 	if err != nil {
-		h.ackControlFailure(deviceID, f.MsgID)
+		h.ackControlFailureWithSubCmd(deviceID, f.MsgID, subCmd)
 		return err
 	}
 
+	// inner[0] 是子命令，inner[1:] 是子命令后的载荷数据
+	payload := inner[1:]
+
 	if f.IsUplink() {
-		// 1. 处理子命令 0x02 / 0x18 的帧（充电结束上报）
-		// 修复：子命令 0x02/0x18 即表示充电结束，不再检查 Status 的 bit5 位
-		// 原因：设备上报充电结束时，Status 字段可能仍显示 bit5=1（充电中），这是协议正常行为
-		// 参考：minimal_bkv_service.go 中的 isChargingEnd() 只检查子命令，不检查 Status
-		if subCmd == 0x02 || subCmd == 0x18 {
-			if end, err := ParseBKVChargingEnd(f.Data); err == nil {
-				// 【方案一：业务号和端口号验证】
-				// 验证数据包的业务号和端口号是否匹配当前活跃会话
-				sessionKey := fmt.Sprintf("%s:%d", deviceID, end.Port)
-				expectedBizNo, hasSession := h.sessions.Load(sessionKey)
+		// === 上行命令分发 ===
+		switch subCmd {
+		case 0x02, 0x18:
+			// 充电结束上报（0x02=按时/按量，0x18=按功率）
+			return h.handleControlChargingEndUplink(ctx, f, deviceID, subCmd)
 
-				// 将接收到的 BusinessNo (uint16) 转换为十六进制字符串进行比较
-				receivedBizNo := fmt.Sprintf("%04X", end.BusinessNo)
-
-				if !hasSession {
-					// 无活跃会话时接收充电结束，记录信息日志并忽略
-					zap.L().Info("charging end ignored: no active session",
-						zap.String("device_id", deviceID),
-						zap.Uint8("port", uint8(end.Port)),
-						zap.String("business_no", receivedBizNo),
-						zap.Uint8("status", end.Status))
-					return nil
-				}
-
-				if receivedBizNo != expectedBizNo.(string) {
-					// 业务号不匹配，记录警告日志并拒绝处理
-					zap.L().Warn("charging end ignored: business number mismatch",
-						zap.String("device_id", deviceID),
-						zap.Uint8("port", uint8(end.Port)),
-						zap.String("received_business_no", receivedBizNo),
-						zap.String("expected_business_no", expectedBizNo.(string)),
-						zap.Uint8("status", end.Status))
-					return nil
-				}
-
-				// 子命令 0x02/0x18 直接触发充电结束流程
-				// Status 字段用于推导结束原因，不用于判断是否结束
-				h.handleControlChargingEnd(ctx, f, deviceID, end)
-
-				// 充电结束后清理会话记录
-				h.sessions.Delete(sessionKey)
-
-				zap.L().Info("charging end processed and session cleared",
-					zap.String("device_id", deviceID),
-					zap.Uint8("port", uint8(end.Port)),
-					zap.String("business_no", receivedBizNo))
-				return nil
-			} else {
-				return fmt.Errorf("parse charging end failed: %w", err)
+		case 0x07, 0x17:
+			// 控制命令ACK上行（0x07=按时/按量，0x17=按功率）
+			if len(payload) < 5 {
+				h.ackControlFailureWithSubCmd(deviceID, f.MsgID, subCmd)
+				return fmt.Errorf("control uplink sub_cmd 0x%02x too short: %d", subCmd, len(payload))
 			}
-		}
-
-		// 2. 处理其他格式的控制命令上行
-		if len(inner) < 5 {
-			return fmt.Errorf("control uplink inner too short: %d", len(inner))
-		}
-		if inner[0] == 0x07 {
-			if len(inner) < 6 {
-				h.ackControlFailure(deviceID, f.MsgID)
-				return fmt.Errorf("control uplink sub_cmd 0x07 too short: %d", len(inner))
-			}
-			switchFlag := inner[1]
-			socketNo := int(inner[2])
-			portNo := int(inner[3])
-			businessNo := binary.BigEndian.Uint16(inner[4:6])
+			switchFlag := payload[0]
+			socketNo := int(payload[1])
+			portNo := int(payload[2])
+			businessNo := binary.BigEndian.Uint16(payload[3:5])
 			h.handleControlUplinkStatus(ctx, deviceID, socketNo, portNo, switchFlag, businessNo)
+			return nil
+
+		case 0x0B:
+			// 刷卡上报
+			return h.handleCardSwipeUplink(ctx, f)
+
+		case 0x0C:
+			// 刷卡充电结束
+			return h.handleChargeEndUplink(ctx, f)
+
+		case 0x0F:
+			// 订单确认
+			return h.handleOrderConfirmUplink(ctx, f)
+
+		case 0x1A:
+			// 余额查询
+			return h.handleBalanceQueryUplink(ctx, f)
+
+		case 0x1B:
+			// 语音配置响应
+			return h.HandleVoiceConfigResponse(ctx, f)
+
+		case 0x1D:
+			// 查询插座状态响应
+			return h.HandleSocketStateResponse(ctx, f)
+
+		default:
+			zap.L().Debug("unknown control uplink sub_cmd",
+				zap.String("device_id", deviceID),
+				zap.Uint8("sub_cmd", subCmd),
+				zap.Int("payload_len", len(payload)))
+			return nil
 		}
 	} else {
-		// 3. 处理控制下行命令
-		if len(inner) < 6 {
-			h.ackControlFailure(deviceID, f.MsgID)
-			return fmt.Errorf("control downlink payload too short: %d", len(inner))
+		// === 下行命令分发 ===
+		switch subCmd {
+		case 0x07, 0x17:
+			// 控制命令下行（0x07=按时/按量，0x17=按功率分档）
+			// payload是去掉子命令字节后的数据，ParseBKVControlCommand期望从socketNo开始
+			// 0x07最小长度6字节: [socket][port][switch][mode][duration:2]
+			// 0x17最小长度6字节: [socket][port][switch][amount:2][levelCount]
+			minLen := 6
+			if len(payload) < minLen {
+				h.ackControlFailureWithSubCmd(deviceID, f.MsgID, subCmd)
+				return fmt.Errorf("control downlink sub_cmd 0x%02X payload too short: %d (need %d)", subCmd, len(payload), minLen)
+			}
+			cmd, err := ParseBKVControlCommand(subCmd, payload)
+			if err != nil {
+				h.ackControlFailureWithSubCmd(deviceID, f.MsgID, subCmd)
+				return fmt.Errorf("parse control downlink failed: %w", err)
+			}
+			if err := h.validateControlStart(cmd); err != nil {
+				h.ackControlFailureWithSubCmd(deviceID, f.MsgID, subCmd)
+				return err
+			}
+			h.handleControlDownlinkCommand(ctx, deviceID, cmd)
+			return nil
+
+		default:
+			zap.L().Debug("unknown control downlink sub_cmd",
+				zap.String("device_id", deviceID),
+				zap.Uint8("sub_cmd", subCmd),
+				zap.Int("payload_len", len(payload)))
+			return nil
 		}
-		cmd, err := ParseBKVControlCommand(inner)
-		if err != nil {
-			h.ackControlFailure(deviceID, f.MsgID)
-			return fmt.Errorf("parse control downlink failed: %w", err)
-		}
-		if err := h.validateControlStart(cmd); err != nil {
-			h.ackControlFailure(deviceID, f.MsgID)
-			return err
-		}
-		h.handleControlDownlinkCommand(ctx, deviceID, cmd)
+	}
+}
+
+// handleControlChargingEndUplink 处理充电结束上报上行（子命令0x02或0x18）
+func (h *Handlers) handleControlChargingEndUplink(ctx context.Context, f *Frame, deviceID string, subCmd byte) error {
+	end, err := ParseBKVChargingEnd(f.Data)
+	if err != nil {
+		return fmt.Errorf("parse charging end failed: %w", err)
 	}
 
+	// 业务号和端口号验证
+	sessionKey := fmt.Sprintf("%s:%d", deviceID, end.Port)
+	expectedBizNo, hasSession := h.sessions.Load(sessionKey)
+	receivedBizNo := fmt.Sprintf("%04X", end.BusinessNo)
+
+	if !hasSession {
+		zap.L().Info("charging end ignored: no active session",
+			zap.String("device_id", deviceID),
+			zap.Uint8("port", uint8(end.Port)),
+			zap.String("business_no", receivedBizNo),
+			zap.Uint8("status", end.Status),
+			zap.Uint8("sub_cmd", subCmd))
+		return nil
+	}
+
+	if receivedBizNo != expectedBizNo.(string) {
+		zap.L().Warn("charging end ignored: business number mismatch",
+			zap.String("device_id", deviceID),
+			zap.Uint8("port", uint8(end.Port)),
+			zap.String("received_business_no", receivedBizNo),
+			zap.String("expected_business_no", expectedBizNo.(string)),
+			zap.Uint8("status", end.Status))
+		return nil
+	}
+
+	// 触发充电结束流程
+	h.handleControlChargingEnd(ctx, f, deviceID, end)
+
+	// 清理会话记录
+	h.sessions.Delete(sessionKey)
+
+	zap.L().Info("charging end processed and session cleared",
+		zap.String("device_id", deviceID),
+		zap.Uint8("port", uint8(end.Port)),
+		zap.String("business_no", receivedBizNo),
+		zap.Uint8("sub_cmd", subCmd))
 	return nil
 }
 
@@ -581,9 +652,47 @@ func (h *Handlers) handleExceptionEvent(ctx context.Context, f *Frame, payload *
 	return nil
 }
 
-// handleParameterQuery 处理参数查询
+// handleParameterSet 处理参数设置命令 (BKV子命令0x1011)
+// 协议文档2.2.6：平台下发参数设置
+func (h *Handlers) handleParameterSet(ctx context.Context, f *Frame, payload *BKVPayload) error {
+	deviceID := extractDeviceIDFromPayload(f, payload)
+	zap.L().Debug("parameter set command received",
+		zap.String("device_id", deviceID),
+		zap.Uint16("bkv_cmd", payload.Cmd),
+		zap.Int("fields_count", len(payload.Fields)))
+	// TODO: 实现参数设置命令处理
+	return nil
+}
+
+// handleParameterSetAck 处理参数设置ACK (BKV子命令0x1013)
+// 协议文档2.2.6：设备回复参数设置ACK
+// 注意：0x1013是ACK响应，不包含状态字段！
+func (h *Handlers) handleParameterSetAck(ctx context.Context, payload *BKVPayload) error {
+	deviceID := extractDeviceIDFromPayload(nil, payload)
+
+	// 从ACK中提取结果
+	success := false
+	for _, field := range payload.Fields {
+		if field.Tag == 0x0F && len(field.Value) >= 1 {
+			success = field.Value[0] == 0x01
+			break
+		}
+	}
+
+	zap.L().Debug("parameter set ACK received",
+		zap.String("device_id", deviceID),
+		zap.Bool("success", success))
+	return nil
+}
+
+// handleParameterQuery 处理参数查询响应 (BKV子命令0x1012)
+// 协议文档2.2.7：参数查询响应
 func (h *Handlers) handleParameterQuery(ctx context.Context, payload *BKVPayload) error {
-	// TODO 暂时不需要实现
+	deviceID := extractDeviceIDFromPayload(nil, payload)
+	zap.L().Debug("parameter query response received",
+		zap.String("device_id", deviceID),
+		zap.Int("fields_count", len(payload.Fields)))
+	// TODO: 实现参数查询响应处理
 	return nil
 }
 

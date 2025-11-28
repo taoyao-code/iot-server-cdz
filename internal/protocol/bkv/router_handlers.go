@@ -74,6 +74,12 @@ func RegisterHandlers(adapter *Adapter, handlers *Handlers) {
 		return handlers.HandleOrderConfirm(context.Background(), f)
 	})
 
+	// 0x0017: [扩展] 按功率下发充电 - 标准协议使用0x0015+子命令0x17
+	// (协议文档 2.2.1 按功率下发充电命令)
+	adapter.Register(0x0017, func(f *Frame) error {
+		return handlers.HandleControl(context.Background(), f)
+	})
+
 	// 0x0018: [扩展] 按功率充电结束 - 标准协议使用0x0015+子命令0x18
 	adapter.Register(0x0018, func(f *Frame) error {
 		return handlers.HandlePowerLevelEnd(context.Background(), f)
@@ -148,7 +154,7 @@ var FrameCommands = map[uint16]string{
 	0x0000: "心跳上报/回复 (2.1.1)",
 	0x1000: "BKV兼容包 (2.2.2) - 包含BKV子协议",
 	0x0005: "网络节点列表 (2.2.5-2.2.7) - 子命令: 0x08刷新/0x09添加/0x0A删除",
-	0x0015: "控制命令 (2.2.8-2.2.9) - 子命令: 0x07控制/0x02结束/0x0B刷卡等",
+	0x0015: "控制命令 (2.2.4/2.2.8/2.2.9/进阶) - 子命令: 0x02/0x18(充电结束)、0x07/0x17(控制)、0x0B/0x0C/0x0F(刷卡流程)、0x1A(余额)、0x1B(语音)、0x1D(状态查询)",
 	0x0007: "OTA升级 (OTA章节)",
 
 	// === 扩展帧命令码（部分固件使用独立帧命令码） ===

@@ -41,16 +41,32 @@ type OrderConfirmReply struct {
 }
 
 // ChargeEndReport 充电结束上报 (0x0C上行)
-// 格式1: 完整信息
+// 协议文档 2.2.3 刷卡充电结束上报格式
 type ChargeEndReport struct {
-	OrderNo   string    // 订单号
-	CardNo    string    // 卡号
-	StartTime time.Time // 开始时间
-	EndTime   time.Time // 结束时间
-	Duration  uint32    // 时长（分钟）
-	Energy    uint32    // 电量（Wh）
-	Amount    uint32    // 金额（分）
-	EndReason uint8     // 结束原因：0=正常,1=异常,2=手动停止
+	SocketNo        uint8    // 插座号
+	Version         uint16   // 插座软件版本
+	Temperature     uint8    // 插座温度
+	RSSI            uint8    // 信号强度
+	Port            uint8    // 插孔号: 0=A孔, 1=B孔
+	Status          uint8    // 插座状态位
+	BusinessNo      uint16   // 业务号（与开始充电时对应）
+	Power           uint16   // 瞬时功率
+	Current         uint16   // 瞬时电流
+	Energy          uint32   // 用电量（Wh）
+	Duration        uint32   // 充电时间（分钟）
+	CardNo          string   // 卡号（6字节）
+	CardType        uint8    // 卡类型: 0=在线卡
+	ChargeMode      uint8    // 计费模式: 1=按时, 2=按量, 3=按功率
+	Amount          uint32   // 花费金额（分，仅按功率模式）
+	SettlementPower uint16   // 结算功率（仅按功率模式）
+	LevelCount      uint8    // 档位数（仅按功率模式）
+	LevelDurations  []uint16 // 每档充电时间（仅按功率模式）
+
+	// 兼容旧字段（用于上层业务逻辑）
+	OrderNo   string    // 订单号（由业务号生成）
+	EndReason uint8     // 结束原因（从状态位推导）
+	StartTime time.Time // 协议未提供，留空
+	EndTime   time.Time // 协议未提供，留空
 }
 
 // ChargeEndReply 充电结束回复 (0x0C下行)
@@ -175,42 +191,94 @@ func EncodeOrderConfirmReply(reply *OrderConfirmReply) []byte {
 	return buf
 }
 
-// ParseChargeEndReport 解析充电结束上报
+// ParseChargeEndReport 解析刷卡充电结束上报 (0x0C上行)
+// 协议文档 2.2.3 刷卡充电结束格式
+//
+// 输入格式 (f.Data):
+//
+//	[length:2][subCmd=0x0C][socketNo][version:2][temp][rssi][port][status]
+//	[businessNo:2][power:2][current:2][energy:2][duration:2][cardNo:6][cardType]
+//	[chargeMode][amount:2?][settlementPower:2?][levelCount?][levelDurations:2*n?]
+//
+// 最小长度: 2+1+25 = 28 字节
 func ParseChargeEndReport(data []byte) (*ChargeEndReport, error) {
-	if len(data) < 41 {
-		return nil, fmt.Errorf("charge end data too short: %d", len(data))
+	// 最小长度检查: length(2) + subCmd(1) + payload(25)
+	if len(data) < 28 {
+		return nil, fmt.Errorf("charge end data too short: %d (need at least 28)", len(data))
 	}
 
-	report := &ChargeEndReport{}
-
-	// 订单号（16字节）
-	report.OrderNo = string(data[0:16])
-
-	// 卡号（10字节BCD）
-	cardBytes := data[16:26]
-	report.CardNo = bcdToString(cardBytes)
-
-	// 开始时间（4字节Unix时间戳）
-	startTs := binary.BigEndian.Uint32(data[26:30])
-	report.StartTime = time.Unix(int64(startTs), 0)
-
-	// 结束时间（4字节Unix时间戳）
-	endTs := binary.BigEndian.Uint32(data[30:34])
-	report.EndTime = time.Unix(int64(endTs), 0)
-
-	// 时长（2字节，分钟）
-	report.Duration = uint32(binary.BigEndian.Uint16(data[34:36]))
-
-	// 电量（4字节，Wh）
-	report.Energy = binary.BigEndian.Uint32(data[36:40])
-
-	// 金额（4字节，分）
-	report.Amount = binary.BigEndian.Uint32(data[40:44])
-
-	// 结束原因（1字节）
-	if len(data) > 44 {
-		report.EndReason = data[44]
+	// 解析帧长度和子命令
+	declLen := int(binary.BigEndian.Uint16(data[0:2]))
+	subCmd := data[2]
+	if subCmd != 0x0C {
+		return nil, fmt.Errorf("invalid sub_cmd for charge end: 0x%02X (expected 0x0C)", subCmd)
 	}
+
+	// payload 从 data[3] 开始
+	payload := data[3:]
+	expectedLen := declLen - 1 // 减去 subCmd 占用的 1 字节
+	if len(payload) < expectedLen {
+		// 使用可用长度继续解析
+		if len(payload) < 25 {
+			return nil, fmt.Errorf("charge end payload too short: %d (need at least 25)", len(payload))
+		}
+	}
+
+	report := &ChargeEndReport{
+		SocketNo:    payload[0],
+		Version:     binary.BigEndian.Uint16(payload[1:3]),
+		Temperature: payload[3],
+		RSSI:        payload[4],
+		Port:        payload[5],
+		Status:      payload[6],
+		BusinessNo:  binary.BigEndian.Uint16(payload[7:9]),
+		Power:       binary.BigEndian.Uint16(payload[9:11]),
+		Current:     binary.BigEndian.Uint16(payload[11:13]),
+		Energy:      uint32(binary.BigEndian.Uint16(payload[13:15])), // Wh
+		Duration:    uint32(binary.BigEndian.Uint16(payload[15:17])), // 分钟
+	}
+
+	// 卡号 (6字节)
+	if len(payload) >= 23 {
+		report.CardNo = bcdToString(payload[17:23])
+	}
+
+	// 卡类型
+	if len(payload) >= 24 {
+		report.CardType = payload[23]
+	}
+
+	// 计费模式
+	if len(payload) >= 25 {
+		report.ChargeMode = payload[24]
+	}
+
+	// 按功率模式的额外字段
+	if report.ChargeMode == 3 {
+		if len(payload) >= 27 {
+			report.Amount = uint32(binary.BigEndian.Uint16(payload[25:27]))
+		}
+		if len(payload) >= 29 {
+			report.SettlementPower = binary.BigEndian.Uint16(payload[27:29])
+		}
+		if len(payload) >= 30 {
+			report.LevelCount = payload[29]
+			// 解析每档充电时间
+			pos := 30
+			for i := uint8(0); i < report.LevelCount && i < 5; i++ {
+				if pos+2 > len(payload) {
+					break
+				}
+				levelDur := binary.BigEndian.Uint16(payload[pos : pos+2])
+				report.LevelDurations = append(report.LevelDurations, levelDur)
+				pos += 2
+			}
+		}
+	}
+
+	// 生成兼容字段
+	report.OrderNo = fmt.Sprintf("%04X", report.BusinessNo)
+	report.EndReason = uint8(deriveEndReasonFromStatus(report.Status))
 
 	return report, nil
 }

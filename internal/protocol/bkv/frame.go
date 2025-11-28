@@ -67,14 +67,10 @@ func (f *Frame) IsBKVFrame() bool {
 }
 
 // IsHeartbeat 判断是否为心跳帧
+// 协议规范：心跳命令仅为帧命令0x0000，BKV子协议没有心跳命令
+// 注意：0x1000帧（BKV兼容包）不可能是心跳，即使其BKV子命令是0x1017（状态上报）
 func (f *Frame) IsHeartbeat() bool {
-	if f.Cmd == 0x0000 {
-		return true // 简单心跳
-	}
-	if payload, err := f.GetBKVPayload(); err == nil {
-		return payload.IsHeartbeat()
-	}
-	return false
+	return f.Cmd == 0x0000 // 仅帧命令0x0000是心跳
 }
 
 var (

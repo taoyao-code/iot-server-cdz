@@ -112,6 +112,7 @@ const (
 	ChargingModeByTime   ChargingMode = 1 // 按时长充电
 	ChargingModeByEnergy ChargingMode = 0 // 按电量充电
 	ChargingModeByLevel  ChargingMode = 3 // 按功率充电
+	ChargingModeByFull   ChargingMode = 4 // 充满模式
 )
 
 // SwitchState 开关状态
@@ -693,8 +694,11 @@ func parsePortsFromFields(fields []TLVField) (*PortStatus, *PortStatus) {
 }
 
 // IsHeartbeat 判断是否为心跳命令
+// 注意：BKV子协议没有心跳命令！心跳是帧命令0x0000，不是BKV子命令。
+// 0x1017是"插座状态上报"，不是心跳！此函数始终返回false。
+// 保留此函数是为了接口兼容性，但不应依赖它来判断心跳。
 func (p *BKVPayload) IsHeartbeat() bool {
-	return p.Cmd == 0x1017
+	return false // BKV子协议没有心跳命令
 }
 
 // IsStatusReport 判断是否为状态上报
@@ -736,9 +740,23 @@ func (p *BKVPayload) IsExceptionReport() bool {
 	return p.Cmd == 0x1010 // 异常事件上报使用1010命令
 }
 
+// IsParameterSet 判断是否为参数设置命令
+// 协议文档2.2.6：参数设置使用BKV子命令0x1011
+func (p *BKVPayload) IsParameterSet() bool {
+	return p.Cmd == 0x1011
+}
+
+// IsParameterSetAck 判断是否为参数设置ACK
+// 协议文档2.2.6：设备回复参数设置使用BKV子命令0x1013
+// 注意：0x1013是ACK响应，不包含状态字段！
+func (p *BKVPayload) IsParameterSetAck() bool {
+	return p.Cmd == 0x1013
+}
+
 // IsParameterQuery 判断是否为参数查询
+// 协议文档2.2.7：参数查询使用BKV子命令0x1012
 func (p *BKVPayload) IsParameterQuery() bool {
-	return p.Cmd == 0x1012 // 参数查询使用1012命令
+	return p.Cmd == 0x1012
 }
 
 // IsCardCharging 判断是否为刷卡充电相关
@@ -753,45 +771,61 @@ func (p *BKVPayload) IsCardCharging() bool {
 	return false
 }
 
-// ParseBKVControlCommand 解析BKV控制指令（0x0015）
-// 根据协议文档支持按时/按量/按功率三种模式
-func ParseBKVControlCommand(data []byte) (*BKVControlCommand, error) {
-	if len(data) < 6 {
+// ParseBKVControlCommand 解析BKV控制指令（0x0015帧）
+// subCmd: 0x07(按时/按量)、0x17(按功率分档)
+//
+// 0x07格式 (协议2.2.8):
+//
+//	[socketNo][port][switch][mode][duration:2][energy:2]
+//
+// 0x17格式 (协议2.2.1 按功率下发充电命令):
+//
+//	[socketNo][port][switch][paymentAmount:2][levelCount][levels:6*n]
+func ParseBKVControlCommand(subCmd byte, data []byte) (*BKVControlCommand, error) {
+	if len(data) < 3 {
 		return nil, ErrTLVShort
 	}
 
 	cmd := &BKVControlCommand{
-		SocketNo: data[0],                            // 插座号
-		Port:     PortType(data[1]),                  // 插孔号
-		Switch:   SwitchState(data[2]),               // 开关状态
-		Mode:     ChargingMode(data[3]),              // 充电模式
-		Duration: binary.BigEndian.Uint16(data[4:6]), // 充电时长
+		SocketNo: data[0],              // 插座号
+		Port:     PortType(data[1]),    // 插孔号
+		Switch:   SwitchState(data[2]), // 开关状态
 	}
 
-	if len(data) >= 8 {
-		cmd.Energy = binary.BigEndian.Uint16(data[6:8]) // 充电电量
-	}
+	switch subCmd {
+	case 0x17: // 按功率分档计费模式（协议 2.2.1）
+		// 格式: [socket][port][switch][amount:2][levelCount][level:6*n]
+		if len(data) < 6 {
+			return nil, fmt.Errorf("0x17 command too short: %d (need at least 6)", len(data))
+		}
+		cmd.Mode = ChargingModeByLevel
+		cmd.PaymentAmount = binary.BigEndian.Uint16(data[3:5]) // 支付金额（分）
+		cmd.LevelCount = data[5]                               // 档位数
 
-	// 按功率充电模式有额外字段
-	if cmd.Mode == ChargingModeByLevel && len(data) >= 13 {
-		pos := 8
-		cmd.PaymentAmount = binary.BigEndian.Uint16(data[pos : pos+2]) // 支付金额
-		pos += 2
-		cmd.LevelCount = data[pos] // 挡位个数
-		pos++
-
-		// 解析各挡位信息 (每个挡位6字节: 功率2+价格2+时长2)
-		expectedLen := pos + int(cmd.LevelCount)*6
-		if len(data) >= expectedLen {
-			for i := uint8(0); i < cmd.LevelCount && i < 5; i++ { // 最多5档
-				level := PowerLevel{
-					Power:    binary.BigEndian.Uint16(data[pos : pos+2]),
-					Price:    binary.BigEndian.Uint16(data[pos+2 : pos+4]),
-					Duration: binary.BigEndian.Uint16(data[pos+4 : pos+6]),
-				}
-				cmd.PowerLevels = append(cmd.PowerLevels, level)
-				pos += 6
+		// 解析各档位信息 (每个档位6字节: 功率2+价格2+时长2)
+		pos := 6
+		for i := uint8(0); i < cmd.LevelCount && i < 5; i++ {
+			if pos+6 > len(data) {
+				return nil, fmt.Errorf("0x17 level %d data truncated at pos %d", i, pos)
 			}
+			level := PowerLevel{
+				Power:    binary.BigEndian.Uint16(data[pos : pos+2]),   // 功率阈值 (0.1W)
+				Price:    binary.BigEndian.Uint16(data[pos+2 : pos+4]), // 单价 (分)
+				Duration: binary.BigEndian.Uint16(data[pos+4 : pos+6]), // 时长 (分钟)
+			}
+			cmd.PowerLevels = append(cmd.PowerLevels, level)
+			pos += 6
+		}
+
+	default: // 0x07 按时/按量模式（协议 2.2.8）
+		// 格式: [socket][port][switch][mode][duration:2][energy:2]
+		if len(data) < 6 {
+			return nil, fmt.Errorf("0x07 command too short: %d (need at least 6)", len(data))
+		}
+		cmd.Mode = ChargingMode(data[3])                  // 充电模式: 0x01按时, 0x00按量
+		cmd.Duration = binary.BigEndian.Uint16(data[4:6]) // 时长（分钟）
+		if len(data) >= 8 {
+			cmd.Energy = binary.BigEndian.Uint16(data[6:8]) // 电量（Wh）
 		}
 	}
 

@@ -314,12 +314,16 @@ func toDurationMinute(secPtr *int32) uint16 {
 }
 
 func toModeCode(payload *coremodel.StartChargePayload) uint8 {
+	// 协议规范（文档2.2.8）：
+	// 0x00 = 按量充电 (energy)
+	// 0x01 = 按时充电 (duration/time)
+	// 0x03 = 按功率充电 (power)
 	if payload == nil {
-		return 1
+		return 1 // 默认按时
 	}
-	if payload.ModeCode != nil && *payload.ModeCode > 0 {
+	if payload.ModeCode != nil && *payload.ModeCode >= 0 {
 		code := *payload.ModeCode
-		if code > 0 && code < 256 {
+		if code >= 0 && code < 256 {
 			return uint8(code)
 		}
 	}
@@ -327,13 +331,13 @@ func toModeCode(payload *coremodel.StartChargePayload) uint8 {
 	mode := strings.ToLower(payload.Mode)
 	switch mode {
 	case "duration", "time", "mode_1":
-		return 1
-	case "energy", "mode_2":
-		return 2
+		return 1 // 按时充电
+	case "energy", "mode_0", "mode_2":
+		return 0 // 按量充电（协议规定0x00）
 	case "power", "mode_3":
-		return 3
+		return 3 // 按功率充电
 	case "full", "mode_4":
-		return 4
+		return 4 // 充满模式
 	}
 
 	if payload.Mode != "" {

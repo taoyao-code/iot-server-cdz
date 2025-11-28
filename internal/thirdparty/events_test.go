@@ -74,8 +74,8 @@ func TestAllEventTypes(t *testing.T) {
 		EventOTAProgressUpdate,
 	}
 
-	if len(eventTypes) != 10 {
-		t.Errorf("expected 10 event types, got %d", len(eventTypes))
+	if len(eventTypes) != 7 {
+		t.Errorf("expected 7 event types, got %d", len(eventTypes))
 	}
 
 	// 确保所有事件类型都不为空

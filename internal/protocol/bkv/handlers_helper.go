@@ -175,13 +175,21 @@ func (h *Handlers) parseControlPayload(data []byte) (subCmd byte, inner []byte, 
 	return inner[0], inner, nil
 }
 
-// (h *Handlers) ackControlFailure 下行/上行控制失败时下发 ACK=失败（用于 0x0015）
+// ackControlFailure 下行/上行控制失败时下发 ACK=失败（用于 0x0015）
+// 已废弃：请使用 ackControlFailureWithSubCmd 指定正确的子命令码
 func (h *Handlers) ackControlFailure(deviceID string, msgID uint32) {
+	h.ackControlFailureWithSubCmd(deviceID, msgID, 0x07)
+}
+
+// ackControlFailureWithSubCmd 下行/上行控制失败时下发 ACK=失败（用于 0x0015）
+// 参数 subCmd 应为触发失败的实际子命令码，确保设备能正确识别ACK类型
+func (h *Handlers) ackControlFailureWithSubCmd(deviceID string, msgID uint32, subCmd byte) {
 	if h.Outbound == nil {
 		return
 	}
-	// 子命令 0x07 失败 ACK：长度1（sub=0x07） + result(0x00)
-	data := []byte{0x00, 0x02, 0x07, 0x00} // len=2, sub=0x07, result=0x00
+	// ACK格式：长度(2B) + 子命令(1B) + 结果(1B)
+	// 长度字段值为2（子命令+结果），结果0x00表示失败
+	data := []byte{0x00, 0x02, subCmd, 0x00}
 	_ = h.Outbound.SendDownlink(deviceID, 0x0015, msgID, data)
 }
 
@@ -196,25 +204,34 @@ func (h *Handlers) validateControlStart(cmd *BKVControlCommand) error {
 	if cmd.Port > 1 {
 		return fmt.Errorf("invalid port: %d (must be 0 or 1)", cmd.Port)
 	}
-	if cmd.Mode != ChargingModeByTime && cmd.Mode != ChargingModeByEnergy && cmd.Mode != ChargingModeByLevel {
-		return fmt.Errorf("invalid mode: %d", cmd.Mode)
-	}
-	// 按时/按量时，Duration 1-900 分钟
-	if (cmd.Mode == ChargingModeByTime || cmd.Mode == ChargingModeByEnergy) && (cmd.Duration == 0 || cmd.Duration > 900) {
-		return fmt.Errorf("invalid duration_min: %d", cmd.Duration)
-	}
-	// 按量模式要求 Energy >0
-	if cmd.Mode == ChargingModeByEnergy && cmd.Energy == 0 {
-		return fmt.Errorf("invalid energy_wh: %d", cmd.Energy)
-	}
-	// 按功率模式检查档位
-	if cmd.Mode == ChargingModeByLevel {
+	// 协议规范充电模式校验：
+	// 0x00 = 按量充电 (ChargingModeByEnergy)
+	// 0x01 = 按时充电 (ChargingModeByTime)
+	// 0x03 = 按功率充电 (ChargingModeByLevel)
+	// 0x04 = 充满模式/服务费模式 (ChargingModeByFull)
+	switch cmd.Mode {
+	case ChargingModeByTime, ChargingModeByEnergy:
+		// 按时/按量时，Duration 1-900 分钟
+		if cmd.Duration == 0 || cmd.Duration > 900 {
+			return fmt.Errorf("invalid duration_min: %d (must be 1-900)", cmd.Duration)
+		}
+		// 按量模式额外要求 Energy >0
+		if cmd.Mode == ChargingModeByEnergy && cmd.Energy == 0 {
+			return fmt.Errorf("invalid energy_wh: %d (must be > 0 for energy mode)", cmd.Energy)
+		}
+	case ChargingModeByLevel:
+		// 按功率模式检查档位（最多5档）
 		if cmd.LevelCount == 0 || cmd.LevelCount > 5 {
-			return fmt.Errorf("invalid level_count: %d", cmd.LevelCount)
+			return fmt.Errorf("invalid level_count: %d (must be 1-5)", cmd.LevelCount)
 		}
 		if len(cmd.PowerLevels) < int(cmd.LevelCount) {
-			return fmt.Errorf("power level entries mismatch: %d", len(cmd.PowerLevels))
+			return fmt.Errorf("power level entries mismatch: have %d, need %d", len(cmd.PowerLevels), cmd.LevelCount)
 		}
+	case ChargingModeByFull:
+		// 充满模式/服务费模式 (协议文档 按电费+服务费章节)
+		// 此模式由服务费档位信息控制，无需传统的时长/电量约束
+	default:
+		return fmt.Errorf("invalid mode: %d (must be 0=energy, 1=time, 3=power, 4=full)", cmd.Mode)
 	}
 	if cmd.BusinessNo == 0 {
 		return fmt.Errorf("business_no is required")
