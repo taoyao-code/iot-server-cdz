@@ -1,0 +1,5 @@
+- Purpose: IoT server for EV charging piles; handles device connectivity, protocol parsing (AP3000, BKV, GN), session/port status tracking, third-party integrations, metrics, and high-availability features.
+- Core runtime: Go 1.25, Gin HTTP API, TCP gateway for device protocols, Redis for sessions/queues, PostgreSQL via pgx/GORM for persistence, Prometheus metrics, Zap logging.
+- Key flows: TCP gateway dispatches to protocol handlers → normalized CoreEvents → DriverCore writes device/port snapshots and pushes webhook events; outbound queue workers deliver commands to devices; HTTP APIs expose management/third-party endpoints.
+- Config/ops: env via configs/*.yaml and .env, Docker/Docker Compose for local/prod, Makefile orchestrates build/test/deploy; Swagger generation for API docs.
+- Data model highlights: devices table keyed by phy_id; ports table with composite key device_id+port_no storing raw status/power; cmd_log/outbound_queue for messaging logs/queue.

@@ -41,12 +41,34 @@ func sessionKey(phyID string, portNo int32) string {
 	return fmt.Sprintf("%s:%d", phyID, portNo)
 }
 
-// trackSession 记录活跃会话
+// TrackSession 记录活跃会话（公开方法，供 API 层调用）
+// 在发送充电命令后立即调用，确保状态升级验证通过
+func (d *DriverCore) TrackSession(phyID string, portNo int32) {
+	d.trackSession(phyID, portNo)
+	if d.log != nil {
+		d.log.Info("driver core: session tracked",
+			zap.String("device_phy_id", phyID),
+			zap.Int32("port_no", portNo))
+	}
+}
+
+// trackSession 记录活跃会话（内部方法）
 func (d *DriverCore) trackSession(phyID string, portNo int32) {
 	d.sessions.Store(sessionKey(phyID, portNo), time.Now())
 }
 
-// clearSession 清除会话记录
+// ClearSession 清除会话记录（公开方法，供 API 层调用）
+// 在停止充电或充电结束后调用
+func (d *DriverCore) ClearSession(phyID string, portNo int32) {
+	d.clearSession(phyID, portNo)
+	if d.log != nil {
+		d.log.Info("driver core: session cleared",
+			zap.String("device_phy_id", phyID),
+			zap.Int32("port_no", portNo))
+	}
+}
+
+// clearSession 清除会话记录（内部方法）
 func (d *DriverCore) clearSession(phyID string, portNo int32) {
 	d.sessions.Delete(sessionKey(phyID, portNo))
 }

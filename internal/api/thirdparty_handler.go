@@ -27,9 +27,16 @@ type ThirdPartyHandler struct {
 	core       storage.CoreRepo
 	sess       session.SessionManager
 	driverCmd  driverapi.CommandSource
+	driverCore DriverCoreInterface // 新增：用于会话管理
 	eventQueue *thirdparty.EventQueue
 	metrics    *metrics.AppMetrics // 一致性监控指标
 	logger     *zap.Logger
+}
+
+// DriverCoreInterface 定义 DriverCore 的会话管理接口
+type DriverCoreInterface interface {
+	TrackSession(phyID string, portNo int32)
+	ClearSession(phyID string, portNo int32)
 }
 
 // NewThirdPartyHandler 创建第三方API处理器
@@ -38,6 +45,7 @@ func NewThirdPartyHandler(
 	core storage.CoreRepo,
 	sess session.SessionManager,
 	commandSource driverapi.CommandSource,
+	driverCore DriverCoreInterface,
 	eventQueue *thirdparty.EventQueue,
 	metrics *metrics.AppMetrics,
 	logger *zap.Logger,
@@ -47,6 +55,7 @@ func NewThirdPartyHandler(
 		core:       core,
 		sess:       sess,
 		driverCmd:  commandSource,
+		driverCore: driverCore,
 		eventQueue: eventQueue,
 		metrics:    metrics,
 		logger:     logger,
@@ -116,6 +125,13 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		if err := h.dispatchStartChargeCommand(ctx, devicePhyID, 0, socketNo, &req, orderNo); err != nil {
 			return err
 		}
+		
+		// 🔥 关键修复：在发送充电命令后立即创建会话
+		// 确保后续设备状态上报时能通过会话验证
+		if h.driverCore != nil {
+			h.driverCore.TrackSession(devicePhyID, int32(req.PortNo))
+		}
+		
 		h.logger.Info("charge command dispatched",
 			zap.String("order_no", orderNo),
 			zap.String("device_phy_id", devicePhyID),
@@ -357,6 +373,13 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		if dispatchErr != nil {
 			return dispatchErr
 		}
+		
+		// 🔥 关键修复：停止充电后清除会话
+		// 防止后续状态上报时误判为充电中
+		if h.driverCore != nil {
+			h.driverCore.ClearSession(devicePhyID, int32(*req.PortNo))
+		}
+		
 		responseData := map[string]interface{}{
 			"device_id":    devicePhyID,
 			"port_no":      req.PortNo,

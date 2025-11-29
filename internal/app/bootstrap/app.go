@@ -142,7 +142,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 		log.Info("third party api authentication config",
 			zap.Int("api_keys_count", len(thirdpartyAuthCfg.APIKeys)),
 			zap.Bool("enabled", thirdpartyAuthCfg.Enabled))
-		api.RegisterThirdPartyRoutes(r, repo, coreRepo, sess, driverCommandSource, eventQueue, appm, thirdpartyAuthCfg, log)
+		api.RegisterThirdPartyRoutes(r, repo, coreRepo, sess, driverCommandSource, driverCore, eventQueue, appm, thirdpartyAuthCfg, log)
 
 		r.Static("/static", "./web/static")
 		r.GET("/test-console", func(c *gin.Context) {

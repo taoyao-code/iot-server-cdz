@@ -19,13 +19,14 @@ func RegisterThirdPartyRoutes(
 	coreRepo storage.CoreRepo,
 	sess session.SessionManager,
 	commandSource driverapi.CommandSource,
+	driverCore DriverCoreInterface,
 	eventQueue *thirdparty.EventQueue,
 	metrics *metrics.AppMetrics,
 	authCfg middleware.AuthConfig,
 	logger *zap.Logger,
 ) {
 	// 创建处理器
-	handler := NewThirdPartyHandler(repo, coreRepo, sess, commandSource, eventQueue, metrics, logger)
+	handler := NewThirdPartyHandler(repo, coreRepo, sess, commandSource, driverCore, eventQueue, metrics, logger)
 
 	// 第三方API路由组
 	// 使用第三方认证中间件（与内部API认证分开）

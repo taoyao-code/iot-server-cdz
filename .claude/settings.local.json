@@ -3,7 +3,15 @@
     "allow": [
       "mcp__serena__read_memory",
       "Bash(ls:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "SlashCommand(/zcf:workflow)",
+      "mcp__serena__read_file",
+      "mcp__serena__activate_project",
+      "mcp__serena__replace_content",
+      "mcp__serena__find_symbol",
+      "mcp__serena__search_for_pattern",
+      "mcp__serena__list_dir",
+      "mcp__serena__create_text_file"
     ],
     "deny": [],
     "ask": []

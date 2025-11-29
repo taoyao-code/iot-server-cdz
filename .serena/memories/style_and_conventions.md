@@ -1,0 +1,6 @@
+- Language: Go 1.25; format with `gofmt -s` (Makefile target `make fmt`); check formatting with `make fmt-check`.
+- Lint: golangci-lint (`make lint`); enabled linters include gofmt, govet, errcheck, staticcheck, unused, gosimple, ineffassign, typecheck; excludes deadcode/structcheck/varcheck; errcheck enforces type assertion checks.
+- Testing: go test with race/coverage via `make test`, `make test-verbose`, `make test-coverage`; full suite `make test-all`/`test-ci` script wrapper.
+- Architecture conventions: CoreRepo interface mediates storage; driverapi.EventSink for protocol→core events; avoid direct SQL outside storage; EventBuilder/Emitter normalize protocol events.
+- Logging/metrics: Zap for logs; Prometheus metrics via metrics.AppMetrics; use context-aware repo methods.
+- Encoding: repository standard is UTF-8, avoid non-ASCII in code unless required (per project instructions).
