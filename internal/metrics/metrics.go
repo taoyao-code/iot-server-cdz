@@ -64,6 +64,7 @@ type AppMetrics struct {
 	ConsistencyLonelyPortFixTotal prometheus.Counter     // 孤立端口修复计数
 	ConsistencyOrderTimeoutTotal  *prometheus.CounterVec // labels: order_status=cancelling|stopping|interrupted
 	ConsistencyQueueFailureTotal  *prometheus.CounterVec // labels: operation=enqueue|dequeue, reason
+	SessionMappingTotal           *prometheus.CounterVec // labels: operation, status
 }
 
 // NewAppMetrics 注册并返回业务指标
@@ -191,6 +192,10 @@ func NewAppMetrics(reg *prometheus.Registry) *AppMetrics {
 			Name: "consistency_queue_failure_total",
 			Help: "Total queue operation failures by operation and reason.",
 		}, []string{"operation", "reason"}),
+		SessionMappingTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "session_mapping_total",
+			Help: "Order/Business mapping operations by operation and status.",
+		}, []string{"operation", "status"}),
 	}
 	reg.MustRegister(
 		m.TCPAccepted, m.TCPBytesReceived,
@@ -205,6 +210,7 @@ func NewAppMetrics(reg *prometheus.Registry) *AppMetrics {
 		m.ConsistencyEventsTotal, m.ConsistencyAutoFixTotal,
 		m.ConsistencyFallbackStopTotal, m.ConsistencyLonelyPortFixTotal,
 		m.ConsistencyOrderTimeoutTotal, m.ConsistencyQueueFailureTotal,
+		m.SessionMappingTotal,
 	)
 	return m
 }
@@ -232,4 +238,11 @@ func (m *AppMetrics) GetChargeReportEnergyTotal() *prometheus.CounterVec {
 // GetPortStatusQueryResponseTotal 实现 bkv.MetricsAPI 接口（P1-4端口状态查询响应）
 func (m *AppMetrics) GetPortStatusQueryResponseTotal() *prometheus.CounterVec {
 	return m.PortStatusQueryResponseTotal
+}
+
+func (m *AppMetrics) ObserveSessionMapping(operation, status string) {
+	if m == nil || m.SessionMappingTotal == nil {
+		return
+	}
+	m.SessionMappingTotal.WithLabelValues(operation, status).Inc()
 }

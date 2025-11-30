@@ -7,12 +7,12 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/taoyao-code/iot-server/internal/coremodel"
 	"github.com/taoyao-code/iot-server/internal/driverapi"
+	"github.com/taoyao-code/iot-server/internal/ordersession"
 	"github.com/taoyao-code/iot-server/internal/storage"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
 	"go.uber.org/zap"
@@ -52,9 +52,7 @@ type Handlers struct {
 	// CoreEvents 为驱动 -> 核心 的事件上报入口
 	CoreEvents driverapi.EventSink
 
-	// sessions 跟踪活跃充电会话，用于验证充电结束数据包
-	// key: "deviceID:portNo" -> value: businessNo (string, 十六进制格式如 "D3BA")
-	sessions *sync.Map
+	OrderTracker *ordersession.Tracker
 }
 
 // HandleHeartbeat 处理心跳帧 (仅帧命令 cmd=0x0000)
@@ -197,7 +195,14 @@ func (h *Handlers) handleSocketStatusUpdate(ctx context.Context, payload *BKVPay
 			energyKwh := float64(port.Energy) / 100.0  // 0.01kWh -> kWh
 			durationS := int(port.ChargingTime) * 60   // min -> sec
 			businessNo := fmt.Sprintf("%04X", port.BusinessNo)
-			h.pushChargingProgressEvent(ctx, deviceID, int(port.PortNo), businessNo, powerW, currentA, voltageV, energyKwh, durationS, nil)
+			session, lookupSource := h.resolveOrderSession(deviceID, int(port.PortNo), businessNo)
+			orderNo := businessNo
+			if session != nil && session.OrderNo != "" {
+				orderNo = session.OrderNo
+			} else if lookupSource == "" {
+				lookupSource = "business_no"
+			}
+			h.pushChargingProgressEvent(ctx, deviceID, int(port.PortNo), orderNo, businessNo, lookupSource, powerW, currentA, voltageV, energyKwh, durationS, nil)
 		}
 
 		return nil
@@ -302,7 +307,7 @@ func (h *Handlers) handleBKVChargingEnd(ctx context.Context, f *Frame, payload *
 	totalKwh := float64(kwh01) / 100.0 // 0.01kWh -> kWh
 	durationMin := durationSec / 60
 	endReasonMsg := h.getEndReasonDescription(reason)
-	h.pushChargingEndedEvent(ctx, deviceID, orderHex, actualPort, durationMin, totalKwh, fmt.Sprintf("%d", reason), endReasonMsg, nil)
+	h.pushChargingEndedEvent(ctx, deviceID, orderHex, orderHex, actualPort, durationMin, totalKwh, fmt.Sprintf("%d", reason), endReasonMsg, "payload", nil)
 
 	success = true
 	return nil
@@ -427,42 +432,49 @@ func (h *Handlers) handleControlChargingEndUplink(ctx context.Context, f *Frame,
 		return fmt.Errorf("parse charging end failed: %w", err)
 	}
 
-	// 业务号和端口号验证
-	sessionKey := fmt.Sprintf("%s:%d", deviceID, end.Port)
-	expectedBizNo, hasSession := h.sessions.Load(sessionKey)
 	receivedBizNo := fmt.Sprintf("%04X", end.BusinessNo)
-
-	if !hasSession {
-		zap.L().Info("charging end ignored: no active session",
+	session, lookupSource := h.resolveOrderSession(deviceID, int(end.Port), receivedBizNo)
+	if session == nil {
+		lookupSource = "business_no"
+		zap.L().Warn("charging end without active session, fallback to business_no",
 			zap.String("device_id", deviceID),
 			zap.Uint8("port", uint8(end.Port)),
 			zap.String("business_no", receivedBizNo),
 			zap.Uint8("status", end.Status),
 			zap.Uint8("sub_cmd", subCmd))
-		return nil
-	}
-
-	if receivedBizNo != expectedBizNo.(string) {
+	} else if session.BusinessNo != receivedBizNo {
 		zap.L().Warn("charging end ignored: business number mismatch",
 			zap.String("device_id", deviceID),
 			zap.Uint8("port", uint8(end.Port)),
 			zap.String("received_business_no", receivedBizNo),
-			zap.String("expected_business_no", expectedBizNo.(string)),
+			zap.String("mapped_business_no", session.BusinessNo),
+			zap.String("order_no", session.OrderNo),
 			zap.Uint8("status", end.Status))
 		return nil
 	}
 
-	// 触发充电结束流程
-	h.handleControlChargingEnd(ctx, f, deviceID, end)
+	// 触发充电结束流程（无 session 时使用 fallback order_no=biz）
+	h.handleControlChargingEnd(ctx, f, deviceID, end, session, lookupSource)
 
-	// 清理会话记录
-	h.sessions.Delete(sessionKey)
-
-	zap.L().Info("charging end processed and session cleared",
-		zap.String("device_id", deviceID),
-		zap.Uint8("port", uint8(end.Port)),
-		zap.String("business_no", receivedBizNo),
-		zap.Uint8("sub_cmd", subCmd))
+	if session != nil {
+		if tracker := h.tracker(); tracker != nil {
+			tracker.Clear(deviceID, int(end.Port))
+		}
+		zap.L().Info("charging end processed and session cleared",
+			zap.String("device_id", deviceID),
+			zap.Uint8("port", uint8(end.Port)),
+			zap.String("business_no", receivedBizNo),
+			zap.String("order_no", session.OrderNo),
+			zap.Uint8("sub_cmd", subCmd),
+			zap.String("lookup_source", lookupSource))
+	} else {
+		zap.L().Info("charging end processed without mapped session",
+			zap.String("device_id", deviceID),
+			zap.Uint8("port", uint8(end.Port)),
+			zap.String("business_no", receivedBizNo),
+			zap.Uint8("sub_cmd", subCmd),
+			zap.String("lookup_source", lookupSource))
+	}
 	return nil
 }
 
@@ -486,7 +498,17 @@ func (h *Handlers) HandleChargingEnd(ctx context.Context, f *Frame) error {
 	}
 
 	nextStatus := int32(coremodel.RawStatusOnlineNoLoad)
-	h.emitChargingEndEvents(ctx, deviceID, end, &nextStatus, true)
+	orderNo := ""
+	lookupSource := ""
+	if tracker := h.tracker(); tracker != nil {
+		biz := fmt.Sprintf("%04X", end.BusinessNo)
+		if session, source := h.resolveOrderSession(deviceID, int(end.Port), biz); session != nil {
+			orderNo = session.OrderNo
+			lookupSource = source
+			tracker.Clear(deviceID, int(end.Port))
+		}
+	}
+	h.emitChargingEndEvents(ctx, deviceID, end, orderNo, lookupSource, &nextStatus, true)
 
 	return nil
 }
@@ -766,16 +788,18 @@ func (h *Handlers) handleOrderConfirmUplink(ctx context.Context, f *Frame) error
 	event := h.buildSessionStartedEvent(deviceID, 0, conf.OrderNo, "order_confirm", nil, metadata)
 	h.emitter().Emit(ctx, event)
 
-	// 【方案一：会话跟踪】
-	// 记录会话信息，用于后续充电结束验证
-	// 注意：这里假设端口号为 0，因为订单确认中未明确指定端口
-	sessionKey := fmt.Sprintf("%s:%d", deviceID, 0)
-	h.sessions.Store(sessionKey, conf.OrderNo)
-
-	zap.L().Info("session started and tracked",
-		zap.String("device_id", deviceID),
-		zap.Int("port", 0),
-		zap.String("business_no", conf.OrderNo))
+	if tracker := h.tracker(); tracker != nil {
+		tracker.TrackPending(deviceID, 0, 0, conf.OrderNo, "order_confirm")
+		if _, err := tracker.Promote(deviceID, 0, conf.OrderNo); err != nil {
+			zap.L().Warn("order confirm promote failed", zap.String("device_id", deviceID), zap.String("order_no", conf.OrderNo), zap.Error(err))
+		} else {
+			zap.L().Info("session started and tracked",
+				zap.String("device_id", deviceID),
+				zap.Int("port", 0),
+				zap.String("business_no", conf.OrderNo),
+				zap.Bool("from_order_confirm", true))
+		}
+	}
 
 	return nil
 }

@@ -2,11 +2,10 @@ package bkv
 
 import (
 	"context"
-	"fmt"
-	"sync"
 	"testing"
 
 	"github.com/taoyao-code/iot-server/internal/coremodel"
+	"github.com/taoyao-code/iot-server/internal/ordersession"
 )
 
 // TestChargingFlowComplete 测试完整的充电流程
@@ -14,12 +13,13 @@ import (
 func TestChargingFlowComplete(t *testing.T) {
 	sink := &mockEventSink{}
 	h := &Handlers{
-		CoreEvents: sink,
-		sessions:   &sync.Map{},
+		CoreEvents:   sink,
+		OrderTracker: ordersession.NewTracker(),
 	}
 
 	deviceID := "82241218000382"
 	portNo := 0
+	h.OrderTracker.TrackPending(deviceID, portNo, 0, "TEST-ORDER", "unit-test")
 
 	// === 步骤1: 平台下发开始充电命令（模拟API层）===
 	// 注意：根据协议2.2.8，平台不发送业务号，只发送充电参数
@@ -53,16 +53,15 @@ func TestChargingFlowComplete(t *testing.T) {
 	}
 
 	// 验证会话已创建
-	sessionKey := fmt.Sprintf("%s:%d", deviceID, portNo)
-	bizNo, hasSession := h.sessions.Load(sessionKey)
+	session, hasSession := h.OrderTracker.Lookup(deviceID, portNo)
 	if !hasSession {
 		t.Fatal("Session should be created after ACK")
 	}
 	expectedBizNo := "003E"
-	if bizNo.(string) != expectedBizNo {
-		t.Errorf("Business number mismatch: expected=%s, got=%s", expectedBizNo, bizNo.(string))
+	if session.BusinessNo != expectedBizNo {
+		t.Errorf("Business number mismatch: expected=%s, got=%s", expectedBizNo, session.BusinessNo)
 	}
-	t.Logf("✓ Session created: key=%s, business_no=%s", sessionKey, bizNo.(string))
+	t.Logf("✓ Session created: device=%s, port=%d, business_no=%s", deviceID, portNo, session.BusinessNo)
 
 	// === 步骤3: 充电进行中（可选，模拟状态上报）===
 	t.Log("Step 3: Charging in progress...")
@@ -135,8 +134,7 @@ func TestChargingFlowComplete(t *testing.T) {
 		se.BusinessNo, se.EnergyKWh01, se.DurationSec)
 
 	// 3. 验证会话已清理
-	_, stillExists := h.sessions.Load(sessionKey)
-	if stillExists {
+	if _, stillExists := h.OrderTracker.Lookup(deviceID, portNo); stillExists {
 		t.Error("Session should be deleted after charging end")
 	}
 	t.Log("✓ Session cleaned up")
@@ -149,8 +147,8 @@ func TestChargingFlowComplete(t *testing.T) {
 func TestChargingFlowWithMismatchedBusinessNo(t *testing.T) {
 	sink := &mockEventSink{}
 	h := &Handlers{
-		CoreEvents: sink,
-		sessions:   &sync.Map{},
+		CoreEvents:   sink,
+		OrderTracker: ordersession.NewTracker(),
 	}
 
 	deviceID := "82241218000382"
@@ -158,9 +156,11 @@ func TestChargingFlowWithMismatchedBusinessNo(t *testing.T) {
 
 	// === 场景：错误地预先存储了平台生成的业务号 ===
 	t.Log("Scenario: Session pre-stored with platform business number (WRONG!)")
-	sessionKey := fmt.Sprintf("%s:%d", deviceID, portNo)
-	h.sessions.Store(sessionKey, "C4A9") // 平台生成的50345
-	t.Logf("Pre-stored session: key=%s, business_no=C4A9 (platform generated)", sessionKey)
+	h.OrderTracker.TrackPending(deviceID, portNo, 0, "TEST-ORDER", "unit-test")
+	if _, err := h.OrderTracker.Promote(deviceID, portNo, "C4A9"); err != nil {
+		t.Fatalf("failed to promote fake session: %v", err)
+	}
+	t.Log("Pre-stored session with business_no=C4A9 (platform generated)")
 
 	// === 设备上报充电结束，使用设备生成的业务号 ===
 	t.Log("Device reports charging end with device-generated business number")

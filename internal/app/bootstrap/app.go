@@ -16,6 +16,7 @@ import (
 	cfgpkg "github.com/taoyao-code/iot-server/internal/config"
 	"github.com/taoyao-code/iot-server/internal/gateway"
 	"github.com/taoyao-code/iot-server/internal/metrics"
+	"github.com/taoyao-code/iot-server/internal/ordersession"
 	"github.com/taoyao-code/iot-server/internal/protocol/ap3000"
 	"github.com/taoyao-code/iot-server/internal/protocol/bkv"
 	"github.com/taoyao-code/iot-server/internal/service"
@@ -103,9 +104,14 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 
 	// DriverCore: 协议驱动 -> 核心的事件收敛入口
 	driverCore := app.NewDriverCore(coreRepo, eventQueue, log)
+	orderTracker := ordersession.NewTracker(ordersession.WithObserver(ordersession.ObserverFunc(func(operation, status string) {
+		if appm != nil {
+			appm.ObserveSessionMapping(operation, status)
+		}
+	})))
 
 	// v2.1: 注入Metrics支持充电上报监控
-	bkvHandlers := bkv.NewHandlersWithServices(repo, coreRepo, bkvReason, cardService, outboundAdapter, eventQueue, deduper, driverCore)
+	bkvHandlers := bkv.NewHandlersWithServices(repo, coreRepo, bkvReason, cardService, outboundAdapter, eventQueue, deduper, driverCore, orderTracker)
 	bkvHandlers.Metrics = appm // 注入指标采集器
 
 	log.Info("protocol handlers initialized",
@@ -142,7 +148,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 		log.Info("third party api authentication config",
 			zap.Int("api_keys_count", len(thirdpartyAuthCfg.APIKeys)),
 			zap.Bool("enabled", thirdpartyAuthCfg.Enabled))
-		api.RegisterThirdPartyRoutes(r, repo, coreRepo, sess, driverCommandSource, driverCore, eventQueue, appm, thirdpartyAuthCfg, log)
+		api.RegisterThirdPartyRoutes(r, repo, coreRepo, sess, driverCommandSource, driverCore, orderTracker, eventQueue, appm, thirdpartyAuthCfg, log)
 
 		r.Static("/static", "./web/static")
 		r.GET("/test-console", func(c *gin.Context) {

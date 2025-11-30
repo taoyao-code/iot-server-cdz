@@ -12,6 +12,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/coremodel"
 	"github.com/taoyao-code/iot-server/internal/driverapi"
 	"github.com/taoyao-code/iot-server/internal/metrics"
+	"github.com/taoyao-code/iot-server/internal/ordersession"
 	"github.com/taoyao-code/iot-server/internal/session"
 	"github.com/taoyao-code/iot-server/internal/storage"
 	"github.com/taoyao-code/iot-server/internal/storage/models"
@@ -23,14 +24,15 @@ import (
 
 // ThirdPartyHandler 第三方API处理器
 type ThirdPartyHandler struct {
-	repo       *pgstorage.Repository
-	core       storage.CoreRepo
-	sess       session.SessionManager
-	driverCmd  driverapi.CommandSource
-	driverCore DriverCoreInterface // 新增：用于会话管理
-	eventQueue *thirdparty.EventQueue
-	metrics    *metrics.AppMetrics // 一致性监控指标
-	logger     *zap.Logger
+	repo         *pgstorage.Repository
+	core         storage.CoreRepo
+	sess         session.SessionManager
+	driverCmd    driverapi.CommandSource
+	driverCore   DriverCoreInterface // 新增：用于会话管理
+	orderTracker *ordersession.Tracker
+	eventQueue   *thirdparty.EventQueue
+	metrics      *metrics.AppMetrics // 一致性监控指标
+	logger       *zap.Logger
 }
 
 // DriverCoreInterface 定义 DriverCore 的会话管理接口
@@ -46,19 +48,21 @@ func NewThirdPartyHandler(
 	sess session.SessionManager,
 	commandSource driverapi.CommandSource,
 	driverCore DriverCoreInterface,
+	orderTracker *ordersession.Tracker,
 	eventQueue *thirdparty.EventQueue,
 	metrics *metrics.AppMetrics,
 	logger *zap.Logger,
 ) *ThirdPartyHandler {
 	return &ThirdPartyHandler{
-		repo:       repo,
-		core:       core,
-		sess:       sess,
-		driverCmd:  commandSource,
-		driverCore: driverCore,
-		eventQueue: eventQueue,
-		metrics:    metrics,
-		logger:     logger,
+		repo:         repo,
+		core:         core,
+		sess:         sess,
+		driverCmd:    commandSource,
+		driverCore:   driverCore,
+		orderTracker: orderTracker,
+		eventQueue:   eventQueue,
+		metrics:      metrics,
+		logger:       logger,
 	}
 }
 
@@ -122,16 +126,23 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		if err != nil {
 			return err
 		}
+		modeLabel := fmt.Sprintf("mode_%d", req.ChargeMode)
+		if h.orderTracker != nil {
+			h.orderTracker.TrackPending(devicePhyID, req.PortNo, socketNo, orderNo, modeLabel)
+		}
 		if err := h.dispatchStartChargeCommand(ctx, devicePhyID, 0, socketNo, &req, orderNo); err != nil {
+			if h.orderTracker != nil {
+				h.orderTracker.Clear(devicePhyID, req.PortNo)
+			}
 			return err
 		}
-		
+
 		// 🔥 关键修复：在发送充电命令后立即创建会话
 		// 确保后续设备状态上报时能通过会话验证
 		if h.driverCore != nil {
 			h.driverCore.TrackSession(devicePhyID, int32(req.PortNo))
 		}
-		
+
 		h.logger.Info("charge command dispatched",
 			zap.String("order_no", orderNo),
 			zap.String("device_phy_id", devicePhyID),
@@ -373,13 +384,13 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		if dispatchErr != nil {
 			return dispatchErr
 		}
-		
+
 		// 🔥 关键修复：停止充电后清除会话
 		// 防止后续状态上报时误判为充电中
 		if h.driverCore != nil {
 			h.driverCore.ClearSession(devicePhyID, int32(*req.PortNo))
 		}
-		
+
 		responseData := map[string]interface{}{
 			"device_id":    devicePhyID,
 			"port_no":      req.PortNo,

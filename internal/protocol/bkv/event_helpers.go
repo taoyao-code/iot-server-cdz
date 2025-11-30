@@ -73,16 +73,18 @@ func (h *Handlers) pushChargingStartedEvent(ctx context.Context, devicePhyID, or
 }
 
 // pushChargingProgressEvent 推送充电进度事件
-func (h *Handlers) pushChargingProgressEvent(ctx context.Context, devicePhyID string, portNo int, businessNo string, powerW, currentA, voltageV, energyKwh float64, durationS int, logger *zap.Logger) {
+func (h *Handlers) pushChargingProgressEvent(ctx context.Context, devicePhyID string, portNo int, orderNo, businessNo, lookupSource string, powerW, currentA, voltageV, energyKwh float64, durationS int, logger *zap.Logger) {
 	eventData := &thirdparty.ChargingProgressData{
-		PortNo:     portNo,
-		BusinessNo: businessNo,
-		PowerW:     powerW,
-		CurrentA:   currentA,
-		VoltageV:   voltageV,
-		EnergyKwh:  energyKwh,
-		DurationS:  durationS,
-		UpdatedAt:  time.Now().Unix(),
+		OrderNo:      orderNo,
+		PortNo:       portNo,
+		BusinessNo:   businessNo,
+		LookupSource: lookupSource,
+		PowerW:       powerW,
+		CurrentA:     currentA,
+		VoltageV:     voltageV,
+		EnergyKwh:    energyKwh,
+		DurationS:    durationS,
+		UpdatedAt:    time.Now().Unix(),
 	}
 
 	event := thirdparty.NewEvent(
@@ -118,15 +120,17 @@ func (h *Handlers) pushChargingCompletedEvent(ctx context.Context, devicePhyID, 
 }
 
 // pushChargingEndedEvent 推送充电结束事件
-func (h *Handlers) pushChargingEndedEvent(ctx context.Context, devicePhyID, orderNo string, portNo int, duration int, totalKwh float64, endReason, endReasonMsg string, logger *zap.Logger) {
+func (h *Handlers) pushChargingEndedEvent(ctx context.Context, devicePhyID, orderNo, businessNo string, portNo int, duration int, totalKwh float64, endReason, endReasonMsg, lookupSource string, logger *zap.Logger) {
 	eventData := &thirdparty.ChargingEndedData{
 		OrderNo:      orderNo,
+		BusinessNo:   businessNo,
 		PortNo:       portNo,
 		Duration:     duration,
 		TotalKwh:     totalKwh,
 		EndReason:    endReason,
 		EndReasonMsg: endReasonMsg,
 		EndedAt:      time.Now().Unix(),
+		LookupSource: lookupSource,
 	}
 
 	event := thirdparty.NewEvent(

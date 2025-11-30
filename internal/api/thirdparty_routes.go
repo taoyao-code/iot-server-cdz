@@ -5,6 +5,7 @@ import (
 	"github.com/taoyao-code/iot-server/internal/api/middleware"
 	"github.com/taoyao-code/iot-server/internal/driverapi"
 	"github.com/taoyao-code/iot-server/internal/metrics"
+	"github.com/taoyao-code/iot-server/internal/ordersession"
 	"github.com/taoyao-code/iot-server/internal/session"
 	"github.com/taoyao-code/iot-server/internal/storage"
 	pgstorage "github.com/taoyao-code/iot-server/internal/storage/pg"
@@ -20,13 +21,14 @@ func RegisterThirdPartyRoutes(
 	sess session.SessionManager,
 	commandSource driverapi.CommandSource,
 	driverCore DriverCoreInterface,
+	orderTracker *ordersession.Tracker,
 	eventQueue *thirdparty.EventQueue,
 	metrics *metrics.AppMetrics,
 	authCfg middleware.AuthConfig,
 	logger *zap.Logger,
 ) {
 	// 创建处理器
-	handler := NewThirdPartyHandler(repo, coreRepo, sess, commandSource, driverCore, eventQueue, metrics, logger)
+	handler := NewThirdPartyHandler(repo, coreRepo, sess, commandSource, driverCore, orderTracker, eventQueue, metrics, logger)
 
 	// 第三方API路由组
 	// 使用第三方认证中间件（与内部API认证分开）

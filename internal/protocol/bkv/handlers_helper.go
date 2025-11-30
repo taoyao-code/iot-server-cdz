@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sync"
 	"time"
 
 	"github.com/taoyao-code/iot-server/internal/coremodel"
+	"github.com/taoyao-code/iot-server/internal/ordersession"
 	"go.uber.org/zap"
 )
 
@@ -33,6 +33,32 @@ func (h *Handlers) replyHeartbeatACK(deviceID string, msgID uint32) {
 // (h *Handlers) shouldPushHeartbeat 判断是否应该推送心跳（采样）
 func (h *Handlers) shouldPushHeartbeat(msgID uint32) bool {
 	return h.EventQueue != nil && msgID%10 == 0
+}
+
+func (h *Handlers) tracker() *ordersession.Tracker {
+	if h == nil {
+		return nil
+	}
+	if h.OrderTracker == nil {
+		h.OrderTracker = ordersession.NewTracker()
+	}
+	return h.OrderTracker
+}
+
+func (h *Handlers) resolveOrderSession(deviceID string, port int, businessNo string) (*ordersession.ActiveSession, string) {
+	tracker := h.tracker()
+	if tracker == nil {
+		return nil, ""
+	}
+	if businessNo != "" {
+		if session, ok := tracker.LookupByBusiness(deviceID, businessNo); ok {
+			return session, "business_no"
+		}
+	}
+	if session, ok := tracker.Lookup(deviceID, port); ok {
+		return session, "port_fallback"
+	}
+	return nil, ""
 }
 
 // resolveDeviceID 确保帧中包含合法的网关ID
@@ -317,6 +343,8 @@ func (h *Handlers) emitChargingEndEvents(
 	ctx context.Context,
 	deviceID string,
 	end *BKVChargingEnd,
+	orderNo string,
+	lookupSource string,
 	nextStatusOverride *int32,
 	collectMetrics bool,
 ) {
@@ -349,6 +377,10 @@ func (h *Handlers) emitChargingEndEvents(
 	}
 
 	bizNo := fmt.Sprintf("%04X", end.BusinessNo)
+	finalOrder := orderNo
+	if finalOrder == "" {
+		finalOrder = bizNo
+	}
 	var powerW *int32
 	if end.InstantPower > 0 {
 		p := int32(math.Round(float64(end.InstantPower) / 10.0))
@@ -371,12 +403,18 @@ func (h *Handlers) emitChargingEndEvents(
 	totalKwh := float64(end.EnergyUsed) / 100.0
 	durationMin := int(end.ChargingTime)
 	endReasonMsg := h.getEndReasonDescription(int(end.EndReason))
-	h.pushChargingEndedEvent(ctx, deviceID, bizNo, int(end.Port), durationMin, totalKwh, fmt.Sprintf("%d", end.EndReason), endReasonMsg, nil)
+	h.pushChargingEndedEvent(ctx, deviceID, finalOrder, bizNo, int(end.Port), durationMin, totalKwh, fmt.Sprintf("%d", end.EndReason), endReasonMsg, lookupSource, nil)
+	zap.L().Debug("charging end order mapping",
+		zap.String("device_id", deviceID),
+		zap.Uint8("port", uint8(end.Port)),
+		zap.String("order_no", finalOrder),
+		zap.String("business_no", bizNo),
+		zap.String("lookup_source", lookupSource))
 }
 
 // (h *Handlers) handleControlChargingEnd 处理控制帧中的充电结束上报
 // 规范：端口收敛仅依赖 SessionEnded.NextPortStatus，不在充电结束路径发送 PortSnapshot
-func (h *Handlers) handleControlChargingEnd(ctx context.Context, f *Frame, deviceID string, end *BKVChargingEnd) {
+func (h *Handlers) handleControlChargingEnd(ctx context.Context, f *Frame, deviceID string, end *BKVChargingEnd, session *ordersession.ActiveSession, lookupSource string) {
 	if err := h.validateChargingEnd(end); err != nil {
 		// 解析到结束帧但字段非法，回复失败 ACK 并返回错误
 		h.sendChargingEndAck(ctx, f, nil, int(end.SocketNo), int(end.Port), false)
@@ -406,7 +444,14 @@ func (h *Handlers) handleControlChargingEnd(ctx context.Context, f *Frame, devic
 	}
 
 	nextStatus := int32(coremodel.RawStatusOnlineNoLoad)
-	h.emitChargingEndEvents(ctx, deviceID, end, &nextStatus, false)
+	orderNo := ""
+	if session != nil {
+		orderNo = session.OrderNo
+	}
+	if orderNo == "" {
+		lookupSource = "business_no"
+	}
+	h.emitChargingEndEvents(ctx, deviceID, end, orderNo, lookupSource, &nextStatus, false)
 
 	// 3. 回复 ACK
 	h.sendChargingEndAck(ctx, f, nil, int(end.SocketNo), int(end.Port), true)
@@ -425,6 +470,13 @@ func (h *Handlers) handleControlChargingProgress(ctx context.Context, deviceID s
 	}
 
 	bizNo := fmt.Sprintf("%04X", end.BusinessNo)
+	session, lookupSource := h.resolveOrderSession(deviceID, int(end.Port), bizNo)
+	orderNo := bizNo
+	if session != nil && session.OrderNo != "" {
+		orderNo = session.OrderNo
+	} else if lookupSource == "" {
+		lookupSource = "business_no"
+	}
 
 	evPS := NewEventBuilder(deviceID).
 		WithPort(int(end.Port)).
@@ -439,7 +491,7 @@ func (h *Handlers) handleControlChargingProgress(ctx context.Context, deviceID s
 		currentA := float64(end.InstantCurrent) / 1000.0 // 0.001A -> A
 		energyKwh := float64(end.EnergyUsed) / 100.0     // 0.01kWh -> kWh
 		durationS := int(end.ChargingTime) * 60          // min -> sec
-		h.pushChargingProgressEvent(ctx, deviceID, int(end.Port), bizNo, powerWVal, currentA, 0, energyKwh, durationS, nil)
+		h.pushChargingProgressEvent(ctx, deviceID, int(end.Port), orderNo, bizNo, lookupSource, powerWVal, currentA, 0, energyKwh, durationS, nil)
 	}
 }
 
@@ -469,8 +521,6 @@ func (h *Handlers) handleControlUplinkStatus(ctx context.Context, deviceID strin
 		return
 	}
 
-	sessionKey := fmt.Sprintf("%s:%d", deviceID, portNo)
-
 	// switchFlag: 1=命令成功, 0=命令失败
 	// 注意：这不是端口状态位图！
 	if switchFlag == 0x00 {
@@ -499,16 +549,18 @@ func (h *Handlers) handleControlUplinkStatus(ctx context.Context, deviceID strin
 		h.emitter().Emit(ctx, event)
 	}
 
-	// 只在命令成功时记录会话
-	if h.sessions == nil {
-		h.sessions = &sync.Map{}
+	if tracker := h.tracker(); tracker != nil {
+		bizHex := fmt.Sprintf("%04X", businessNo)
+		if session, err := tracker.Promote(deviceID, portNo, bizHex); err != nil {
+			zap.L().Warn("session promote failed", zap.String("device_id", deviceID), zap.Int("port_no", portNo), zap.String("business_no", bizHex), zap.Error(err))
+		} else {
+			zap.L().Info("session tracked from control uplink (command success)",
+				zap.String("device_id", deviceID),
+				zap.Int("port_no", portNo),
+				zap.String("business_no", bizHex),
+				zap.String("order_no", session.OrderNo))
+		}
 	}
-	h.sessions.Store(sessionKey, fmt.Sprintf("%04X", businessNo))
-
-	zap.L().Info("session tracked from control uplink (command success)",
-		zap.String("device_id", deviceID),
-		zap.Int("port_no", portNo),
-		zap.String("business_no", fmt.Sprintf("%04X", businessNo)))
 }
 
 // (h *Handlers) validateChargingEnd 字段校验（插座/端口/时长/能量等基本范围）

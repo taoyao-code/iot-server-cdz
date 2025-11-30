@@ -139,25 +139,30 @@ type ChargingStartedData struct {
 
 // ChargingEndedData 充电结束事件数据
 type ChargingEndedData struct {
-	OrderNo      string  `json:"order_no"`       // 订单号
-	PortNo       int     `json:"port_no"`        // 端口号
-	Duration     int     `json:"duration"`       // 时长(秒)
-	TotalKwh     float64 `json:"total_kwh"`      // 总电量(kWh)
-	EndReason    string  `json:"end_reason"`     // 结束原因
-	EndReasonMsg string  `json:"end_reason_msg"` // 结束原因说明
-	EndedAt      int64   `json:"ended_at"`       // 结束时间
+	OrderNo      string  `json:"order_no"`                // 订单号
+	BusinessNo   string  `json:"business_no,omitempty"`   // 协议业务号（用于排障）
+	PortNo       int     `json:"port_no"`                 // 端口号
+	Duration     int     `json:"duration"`                // 时长(秒)
+	TotalKwh     float64 `json:"total_kwh"`               // 总电量(kWh)
+	EndReason    string  `json:"end_reason"`              // 结束原因
+	EndReasonMsg string  `json:"end_reason_msg"`          // 结束原因说明
+	EndedAt      int64   `json:"ended_at"`                // 结束时间
+	LookupSource string  `json:"lookup_source,omitempty"` // order_no 来源: business_no|port_fallback
 }
 
 // ChargingProgressData 充电进度事件数据
+
 type ChargingProgressData struct {
-	PortNo     int     `json:"port_no"`     // 端口号
-	BusinessNo string  `json:"business_no"` // 业务号
-	PowerW     float64 `json:"power_w"`     // 瞬时功率(W)
-	CurrentA   float64 `json:"current_a"`   // 瞬时电流(A)
-	VoltageV   float64 `json:"voltage_v"`   // 电压(V)
-	EnergyKwh  float64 `json:"energy_kwh"`  // 已用电量(kWh)
-	DurationS  int     `json:"duration_s"`  // 已充时长(秒)
-	UpdatedAt  int64   `json:"updated_at"`  // 更新时间
+	OrderNo      string  `json:"order_no"`                // 订单号
+	PortNo       int     `json:"port_no"`                 // 端口号
+	BusinessNo   string  `json:"business_no,omitempty"`   // 协议业务号
+	LookupSource string  `json:"lookup_source,omitempty"` // order_no 来源
+	PowerW       float64 `json:"power_w"`                 // 瞬时功率(W)
+	CurrentA     float64 `json:"current_a"`               // 瞬时电流(A)
+	VoltageV     float64 `json:"voltage_v"`               // 电压(V)
+	EnergyKwh    float64 `json:"energy_kwh"`              // 已用电量(kWh)
+	DurationS    int     `json:"duration_s"`              // 已充时长(秒)
+	UpdatedAt    int64   `json:"updated_at"`              // 更新时间
 }
 
 // DeviceAlarmData 设备告警事件数据
@@ -269,7 +274,7 @@ func (d *ChargingStartedData) ToMap() map[string]interface{} {
 }
 
 func (d *ChargingEndedData) ToMap() map[string]interface{} {
-	return map[string]interface{}{
+	m := map[string]interface{}{
 		"order_no":       d.OrderNo,
 		"port_no":        d.PortNo,
 		"duration":       d.Duration,
@@ -278,19 +283,33 @@ func (d *ChargingEndedData) ToMap() map[string]interface{} {
 		"end_reason_msg": d.EndReasonMsg,
 		"ended_at":       d.EndedAt,
 	}
+	if d.BusinessNo != "" {
+		m["business_no"] = d.BusinessNo
+	}
+	if d.LookupSource != "" {
+		m["lookup_source"] = d.LookupSource
+	}
+	return m
 }
 
 func (d *ChargingProgressData) ToMap() map[string]interface{} {
-	return map[string]interface{}{
-		"port_no":     d.PortNo,
-		"business_no": d.BusinessNo,
-		"power_w":     d.PowerW,
-		"current_a":   d.CurrentA,
-		"voltage_v":   d.VoltageV,
-		"energy_kwh":  d.EnergyKwh,
-		"duration_s":  d.DurationS,
-		"updated_at":  d.UpdatedAt,
+	m := map[string]interface{}{
+		"order_no":   d.OrderNo,
+		"port_no":    d.PortNo,
+		"power_w":    d.PowerW,
+		"current_a":  d.CurrentA,
+		"voltage_v":  d.VoltageV,
+		"energy_kwh": d.EnergyKwh,
+		"duration_s": d.DurationS,
+		"updated_at": d.UpdatedAt,
 	}
+	if d.BusinessNo != "" {
+		m["business_no"] = d.BusinessNo
+	}
+	if d.LookupSource != "" {
+		m["lookup_source"] = d.LookupSource
+	}
+	return m
 }
 
 func (d *DeviceAlarmData) ToMap() map[string]interface{} {

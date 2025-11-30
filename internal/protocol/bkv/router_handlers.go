@@ -2,9 +2,9 @@ package bkv
 
 import (
 	"context"
-	"sync"
 
 	"github.com/taoyao-code/iot-server/internal/coremodel"
+	"github.com/taoyao-code/iot-server/internal/ordersession"
 )
 
 // RegisterHandlers 注册BKV协议的所有指令处理器
@@ -138,9 +138,9 @@ func RegisterHandlers(adapter *Adapter, handlers *Handlers) {
 func NewBKVProtocol(reasonMap *ReasonMap) *Adapter {
 	adapter := NewAdapter()
 	handlers := &Handlers{
-		Reason:     reasonMap,
-		CoreEvents: &nopEventSink{},
-		sessions:   &sync.Map{}, // 避免控制/订单确认路径的 nil panic
+		Reason:       reasonMap,
+		CoreEvents:   &nopEventSink{},
+		OrderTracker: ordersession.NewTracker(),
 	}
 
 	RegisterHandlers(adapter, handlers)
