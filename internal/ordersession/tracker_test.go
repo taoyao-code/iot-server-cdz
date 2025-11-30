@@ -75,3 +75,18 @@ func TestTrackerTTLExpiry(t *testing.T) {
 		t.Fatalf("session should expire after active TTL")
 	}
 }
+
+func TestTrackerClearPendingDoesNotRemoveActive(t *testing.T) {
+	tracker := NewTracker()
+	tracker.TrackPending("dev", 0, 0, "ORDER-A", "mode")
+	if _, err := tracker.Promote("dev", 0, "00AA"); err != nil {
+		t.Fatalf("promote failed: %v", err)
+	}
+
+	tracker.TrackPending("dev", 0, 0, "ORDER-B", "mode")
+	tracker.ClearPending("dev", 0)
+
+	if session, ok := tracker.Lookup("dev", 0); !ok || session.BusinessNo != "00AA" {
+		t.Fatalf("active session should remain after clearing pending")
+	}
+}

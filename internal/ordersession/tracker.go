@@ -1,17 +1,23 @@
 package ordersession
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	redis "github.com/redis/go-redis/v9"
 )
 
 var (
-	ErrPendingNotFound = errors.New("pending session not found")
-	ErrPendingExpired  = errors.New("pending session expired")
+	ErrPendingNotFound  = errors.New("pending session not found")
+	ErrPendingExpired   = errors.New("pending session expired")
+	errRedisUnavailable = errors.New("ordersession redis unavailable")
 )
 
 type Observer interface {
@@ -60,9 +66,11 @@ func (a *ActiveSession) expired(ttl time.Duration, now time.Time) bool {
 }
 
 type Tracker struct {
-	pending  sync.Map
-	active   sync.Map
-	bizIndex sync.Map
+	pending     sync.Map
+	active      sync.Map
+	bizIndex    sync.Map
+	redis       redis.UniversalClient
+	redisPrefix string
 
 	pendingTTL time.Duration
 	activeTTL  time.Duration
@@ -82,10 +90,11 @@ const (
 
 func NewTracker(opts ...Option) *Tracker {
 	t := &Tracker{
-		pendingTTL: defaultPendingTTL,
-		activeTTL:  defaultActiveTTL,
-		observer:   NopObserver(),
-		now:        time.Now,
+		pendingTTL:  defaultPendingTTL,
+		activeTTL:   defaultActiveTTL,
+		observer:    NopObserver(),
+		now:         time.Now,
+		redisPrefix: "ordersession",
 	}
 	for _, opt := range opts {
 		opt(t)
@@ -120,6 +129,19 @@ func WithNow(now func() time.Time) Option {
 	}
 }
 
+func WithRedisClient(client redis.UniversalClient, prefix string) Option {
+	return func(t *Tracker) {
+		if client == nil {
+			return
+		}
+		t.redis = client
+		t.redisPrefix = strings.TrimSpace(prefix)
+		if t.redisPrefix == "" {
+			t.redisPrefix = "ordersession"
+		}
+	}
+}
+
 func (t *Tracker) TrackPending(deviceID string, portNo, socketNo int, orderNo, chargeMode string) *PendingSession {
 	now := t.now()
 	t.maybeSweepPending(now)
@@ -132,6 +154,9 @@ func (t *Tracker) TrackPending(deviceID string, portNo, socketNo int, orderNo, c
 		ChargeMode: chargeMode,
 		CreatedAt:  now,
 	}
+	if err := t.storePendingRedis(session); err != nil {
+		t.observer.Record("pending_track", "redis_error")
+	}
 	key := sessionKey(deviceID, portNo)
 	t.pending.Store(key, session)
 	t.observer.Record("pending_track", "ok")
@@ -141,8 +166,31 @@ func (t *Tracker) TrackPending(deviceID string, portNo, socketNo int, orderNo, c
 func (t *Tracker) Promote(deviceID string, portNo int, businessNo string) (*ActiveSession, error) {
 	now := t.now()
 	t.maybeSweepActive(now)
-
 	key := sessionKey(deviceID, portNo)
+	if t.useRedis() {
+		if active, err := t.promoteRedis(deviceID, portNo, businessNo, now); err != errRedisUnavailable {
+			if err == nil {
+				t.pending.Delete(key)
+				t.maybeSweepPending(now)
+				t.cacheActive(deviceID, portNo, active)
+				t.observer.Record("promote", "ok")
+				return active, nil
+			}
+			if errors.Is(err, ErrPendingNotFound) {
+				t.maybeSweepPending(now)
+				t.observer.Record("promote", "missing")
+				return nil, err
+			}
+			if errors.Is(err, ErrPendingExpired) {
+				t.pending.Delete(key)
+				t.maybeSweepPending(now)
+				t.observer.Record("promote", "expired")
+				return nil, err
+			}
+			return nil, err
+		}
+	}
+
 	pendingVal, ok := t.pending.Load(key)
 	if !ok {
 		t.maybeSweepPending(now)
@@ -163,8 +211,7 @@ func (t *Tracker) Promote(deviceID string, portNo int, businessNo string) (*Acti
 		BusinessNo:     normalizeBusinessNo(businessNo),
 		AckAt:          now,
 	}
-	t.active.Store(key, active)
-	t.bizIndex.Store(bizKey(deviceID, active.BusinessNo), key)
+	t.cacheActive(deviceID, portNo, active)
 	t.observer.Record("promote", "ok")
 	return active, nil
 }
@@ -172,6 +219,25 @@ func (t *Tracker) Promote(deviceID string, portNo int, businessNo string) (*Acti
 func (t *Tracker) Lookup(deviceID string, portNo int) (*ActiveSession, bool) {
 	now := t.now()
 	t.maybeSweepActive(now)
+	if t.useRedis() {
+		if session, status, err := t.lookupRedis(deviceID, portNo, now); err != errRedisUnavailable {
+			if err != nil {
+				return nil, false
+			}
+			switch status {
+			case "hit":
+				t.cacheActive(deviceID, portNo, session)
+				t.observer.Record("lookup_port", "hit")
+				return session, true
+			case "expired":
+				t.observer.Record("lookup_port", "expired")
+				return nil, false
+			default:
+				t.observer.Record("lookup_port", "miss")
+				return nil, false
+			}
+		}
+	}
 
 	key := sessionKey(deviceID, portNo)
 	val, ok := t.active.Load(key)
@@ -192,6 +258,25 @@ func (t *Tracker) Lookup(deviceID string, portNo int) (*ActiveSession, bool) {
 func (t *Tracker) LookupByBusiness(deviceID, businessNo string) (*ActiveSession, bool) {
 	now := t.now()
 	t.maybeSweepActive(now)
+	if t.useRedis() {
+		if session, status, err := t.lookupByBizRedis(deviceID, businessNo, now); err != errRedisUnavailable {
+			if err != nil {
+				return nil, false
+			}
+			switch status {
+			case "hit":
+				t.cacheActive(deviceID, int(session.PortNo), session)
+				t.observer.Record("lookup_biz", "hit")
+				return session, true
+			case "expired":
+				t.observer.Record("lookup_biz", "expired")
+				return nil, false
+			default:
+				t.observer.Record("lookup_biz", "miss")
+				return nil, false
+			}
+		}
+	}
 
 	bizKey := bizKey(deviceID, businessNo)
 	rawKey, ok := t.bizIndex.Load(bizKey)
@@ -217,24 +302,50 @@ func (t *Tracker) LookupByBusiness(deviceID, businessNo string) (*ActiveSession,
 }
 
 func (t *Tracker) Clear(deviceID string, portNo int) {
+	removedActive := false
+	if t.useRedis() && t.clearActiveRedis(deviceID, portNo) {
+		removedActive = true
+	}
 	key := sessionKey(deviceID, portNo)
 	if val, ok := t.active.Load(key); ok {
 		t.deleteActive(key, val.(*ActiveSession))
+		removedActive = true
+	}
+	if removedActive {
 		t.observer.Record("clear", "active")
 	}
-	if _, ok := t.pending.Load(key); ok {
-		t.pending.Delete(key)
-		t.observer.Record("clear", "pending")
-	}
+	t.ClearPending(deviceID, portNo)
 }
 
 func (t *Tracker) ClearByBusiness(deviceID, businessNo string) {
+	removedActive := false
+	if t.useRedis() && t.clearBizRedis(deviceID, businessNo) {
+		removedActive = true
+	}
 	bizKey := bizKey(deviceID, businessNo)
 	if rawKey, ok := t.bizIndex.Load(bizKey); ok {
 		if val, ok := t.active.Load(rawKey.(string)); ok {
 			t.deleteActive(rawKey.(string), val.(*ActiveSession))
-			t.observer.Record("clear", "active")
+			removedActive = true
 		}
+	}
+	if removedActive {
+		t.observer.Record("clear", "active")
+	}
+}
+
+func (t *Tracker) ClearPending(deviceID string, portNo int) {
+	removed := false
+	if t.useRedis() && t.clearPendingRedis(deviceID, portNo) {
+		removed = true
+	}
+	key := sessionKey(deviceID, portNo)
+	if _, ok := t.pending.Load(key); ok {
+		t.pending.Delete(key)
+		removed = true
+	}
+	if removed {
+		t.observer.Record("clear", "pending")
 	}
 }
 
@@ -281,6 +392,22 @@ func (t *Tracker) maybeSweepActive(now time.Time) {
 	atomic.StoreInt64(&t.lastActiveSweep, now.UnixNano())
 }
 
+func (t *Tracker) useRedis() bool {
+	return t != nil && t.redis != nil
+}
+
+func (t *Tracker) redisPendingKey(deviceID string, portNo int) string {
+	return fmt.Sprintf("%s:pending:%s", t.redisPrefix, sessionKey(deviceID, portNo))
+}
+
+func (t *Tracker) redisActiveKey(deviceID string, portNo int) string {
+	return fmt.Sprintf("%s:active:%s", t.redisPrefix, sessionKey(deviceID, portNo))
+}
+
+func (t *Tracker) redisBizKey(deviceID, business string) string {
+	return fmt.Sprintf("%s:biz:%s", t.redisPrefix, bizKey(deviceID, business))
+}
+
 func sessionKey(deviceID string, portNo int) string {
 	return fmt.Sprintf("%s:%d", strings.TrimSpace(deviceID), portNo)
 }
@@ -295,4 +422,176 @@ func normalizeBusinessNo(biz string) string {
 		return ""
 	}
 	return strings.ToUpper(s)
+}
+
+func (t *Tracker) cacheActive(deviceID string, portNo int, active *ActiveSession) {
+	if active == nil {
+		return
+	}
+	key := sessionKey(deviceID, portNo)
+	t.active.Store(key, active)
+	t.bizIndex.Store(bizKey(deviceID, active.BusinessNo), key)
+}
+
+func (t *Tracker) storePendingRedis(session *PendingSession) error {
+	if !t.useRedis() || session == nil {
+		return nil
+	}
+	payload, err := json.Marshal(session)
+	if err != nil {
+		return err
+	}
+	ttl := t.pendingTTL
+	if ttl < 0 {
+		ttl = 0
+	}
+	return t.redis.Set(context.Background(), t.redisPendingKey(session.DeviceID, session.PortNo), payload, ttl).Err()
+}
+
+func (t *Tracker) promoteRedis(deviceID string, portNo int, businessNo string, now time.Time) (*ActiveSession, error) {
+	if !t.useRedis() {
+		return nil, errRedisUnavailable
+	}
+	ctx := context.Background()
+	key := t.redisPendingKey(deviceID, portNo)
+	data, err := t.redis.Get(ctx, key).Bytes()
+	if err == redis.Nil {
+		return nil, ErrPendingNotFound
+	}
+	if err != nil {
+		return nil, errRedisUnavailable
+	}
+	var pending PendingSession
+	if unmarshalErr := json.Unmarshal(data, &pending); unmarshalErr != nil {
+		_ = t.redis.Del(ctx, key)
+		return nil, ErrPendingNotFound
+	}
+	if pending.expired(t.pendingTTL, now) {
+		_ = t.redis.Del(ctx, key)
+		return nil, ErrPendingExpired
+	}
+	active := &ActiveSession{
+		PendingSession: pending,
+		BusinessNo:     normalizeBusinessNo(businessNo),
+		AckAt:          now,
+	}
+	payload, err := json.Marshal(active)
+	if err != nil {
+		return nil, errRedisUnavailable
+	}
+	activeKey := t.redisActiveKey(deviceID, portNo)
+	biz := t.redisBizKey(deviceID, active.BusinessNo)
+	_, err = t.redis.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.Del(ctx, key)
+		pipe.Set(ctx, activeKey, payload, t.activeTTL)
+		pipe.Set(ctx, biz, sessionKey(deviceID, portNo), t.activeTTL)
+		return nil
+	})
+	if err != nil {
+		return nil, errRedisUnavailable
+	}
+	return active, nil
+}
+
+func (t *Tracker) lookupRedis(deviceID string, portNo int, now time.Time) (*ActiveSession, string, error) {
+	if !t.useRedis() {
+		return nil, "", errRedisUnavailable
+	}
+	ctx := context.Background()
+	key := t.redisActiveKey(deviceID, portNo)
+	data, err := t.redis.Get(ctx, key).Bytes()
+	if err == redis.Nil {
+		return nil, "miss", nil
+	}
+	if err != nil {
+		return nil, "", errRedisUnavailable
+	}
+	var session ActiveSession
+	if unmarshalErr := json.Unmarshal(data, &session); unmarshalErr != nil {
+		_ = t.redis.Del(ctx, key)
+		_ = t.redis.Del(ctx, t.redisBizKey(deviceID, session.BusinessNo))
+		return nil, "miss", nil
+	}
+	if session.expired(t.activeTTL, now) {
+		_ = t.redis.Del(ctx, key)
+		_ = t.redis.Del(ctx, t.redisBizKey(deviceID, session.BusinessNo))
+		return nil, "expired", nil
+	}
+	return &session, "hit", nil
+}
+
+func (t *Tracker) lookupByBizRedis(deviceID, businessNo string, now time.Time) (*ActiveSession, string, error) {
+	if !t.useRedis() {
+		return nil, "", errRedisUnavailable
+	}
+	ctx := context.Background()
+	bizKey := t.redisBizKey(deviceID, businessNo)
+	sKey, err := t.redis.Get(ctx, bizKey).Result()
+	if err == redis.Nil {
+		return nil, "miss", nil
+	}
+	if err != nil {
+		return nil, "", errRedisUnavailable
+	}
+	port := parsePortFromSessionKey(sKey)
+	return t.lookupRedis(deviceID, port, now)
+}
+
+func (t *Tracker) clearActiveRedis(deviceID string, portNo int) bool {
+	if !t.useRedis() {
+		return false
+	}
+	ctx := context.Background()
+	activeKey := t.redisActiveKey(deviceID, portNo)
+	existed := false
+	if data, err := t.redis.Get(ctx, activeKey).Bytes(); err == nil {
+		existed = true
+		var session ActiveSession
+		if json.Unmarshal(data, &session) == nil {
+			_ = t.redis.Del(ctx, t.redisBizKey(deviceID, session.BusinessNo))
+		}
+	}
+	_ = t.redis.Del(ctx, activeKey)
+	return existed
+}
+
+func (t *Tracker) clearBizRedis(deviceID, business string) bool {
+	if !t.useRedis() {
+		return false
+	}
+	ctx := context.Background()
+	biz := t.redisBizKey(deviceID, business)
+	sKey, err := t.redis.Get(ctx, biz).Result()
+	if err == redis.Nil {
+		_ = t.redis.Del(ctx, biz)
+		return false
+	}
+	if err != nil {
+		return false
+	}
+	port := parsePortFromSessionKey(sKey)
+	_ = t.redis.Del(ctx, t.redisActiveKey(deviceID, port))
+	_ = t.redis.Del(ctx, biz)
+	return true
+}
+
+func parsePortFromSessionKey(key string) int {
+	idx := strings.LastIndex(key, ":")
+	if idx < 0 {
+		return 0
+	}
+	port, err := strconv.Atoi(key[idx+1:])
+	if err != nil {
+		return 0
+	}
+	return port
+}
+
+func (t *Tracker) clearPendingRedis(deviceID string, portNo int) bool {
+	if !t.useRedis() {
+		return false
+	}
+	ctx := context.Background()
+	res, err := t.redis.Del(ctx, t.redisPendingKey(deviceID, portNo)).Result()
+	return err == nil && res > 0
 }

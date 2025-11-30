@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -122,6 +123,9 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		if err != nil {
 			return err
 		}
+		if req.PortNo < 0 || req.PortNo > 1 {
+			return fmt.Errorf("端口号仅支持A/B端口，请确认端口参数: port_no=%d", req.PortNo)
+		}
 		orderNo, err := h.prepareOrderInfo(req.OrderNo)
 		if err != nil {
 			return err
@@ -132,7 +136,7 @@ func (h *ThirdPartyHandler) StartCharge(c *gin.Context) {
 		}
 		if err := h.dispatchStartChargeCommand(ctx, devicePhyID, 0, socketNo, &req, orderNo); err != nil {
 			if h.orderTracker != nil {
-				h.orderTracker.Clear(devicePhyID, req.PortNo)
+				h.orderTracker.ClearPending(devicePhyID, req.PortNo)
 			}
 			return err
 		}
@@ -531,6 +535,54 @@ func buildPortData(portNo int, rawStatus int, powerW int) map[string]interface{}
 		"display_color": statusInfo.DisplayColor, // 显示颜色: gray/green/yellow/red
 		"power":         powerW,
 	}
+}
+
+func (h *ThirdPartyHandler) collectActiveOrders(devicePhyID string, ports []models.Port) []map[string]interface{} {
+	if h.orderTracker == nil {
+		return []map[string]interface{}{}
+	}
+	portSet := map[int]struct{}{}
+	for _, port := range ports {
+		portSet[int(port.PortNo)] = struct{}{}
+	}
+	if len(portSet) == 0 {
+		portSet[0] = struct{}{}
+		portSet[1] = struct{}{}
+	}
+	type entry struct {
+		port    int
+		session *ordersession.ActiveSession
+	}
+	seen := map[string]struct{}{}
+	entries := make([]entry, 0)
+	for portNo := range portSet {
+		session, ok := h.orderTracker.Lookup(devicePhyID, portNo)
+		if !ok || session == nil {
+			continue
+		}
+		key := fmt.Sprintf("%s:%d", session.OrderNo, portNo)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		entries = append(entries, entry{port: portNo, session: session})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].session.AckAt.Before(entries[j].session.AckAt)
+	})
+	result := make([]map[string]interface{}, 0, len(entries))
+	for _, e := range entries {
+		result = append(result, map[string]interface{}{
+			"order_no":    e.session.OrderNo,
+			"business_no": e.session.BusinessNo,
+			"port_no":     e.port,
+			"socket_no":   e.session.SocketNo,
+			"charge_mode": e.session.ChargeMode,
+			"tracked_at":  e.session.CreatedAt,
+			"ack_at":      e.session.AckAt,
+		})
+	}
+	return result
 }
 
 // ListDevices 查询设备列表

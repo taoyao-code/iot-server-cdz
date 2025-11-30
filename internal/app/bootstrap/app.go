@@ -104,11 +104,14 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 
 	// DriverCore: 协议驱动 -> 核心的事件收敛入口
 	driverCore := app.NewDriverCore(coreRepo, eventQueue, log)
-	orderTracker := ordersession.NewTracker(ordersession.WithObserver(ordersession.ObserverFunc(func(operation, status string) {
-		if appm != nil {
-			appm.ObserveSessionMapping(operation, status)
-		}
-	})))
+	orderTracker := ordersession.NewTracker(
+		ordersession.WithObserver(ordersession.ObserverFunc(func(operation, status string) {
+			if appm != nil {
+				appm.ObserveSessionMapping(operation, status)
+			}
+		})),
+		ordersession.WithRedisClient(redisClient, "ordersession"),
+	)
 
 	// v2.1: 注入Metrics支持充电上报监控
 	bkvHandlers := bkv.NewHandlersWithServices(repo, coreRepo, bkvReason, cardService, outboundAdapter, eventQueue, deduper, driverCore, orderTracker)
