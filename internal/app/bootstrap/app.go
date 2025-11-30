@@ -112,6 +112,7 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 		})),
 		ordersession.WithRedisClient(redisClient, "ordersession"),
 	)
+	driverCore.SetOrderTracker(orderTracker)
 
 	// v2.1: 注入Metrics支持充电上报监控
 	bkvHandlers := bkv.NewHandlersWithServices(repo, coreRepo, bkvReason, cardService, outboundAdapter, eventQueue, deduper, driverCore, orderTracker)

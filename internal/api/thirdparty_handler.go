@@ -721,22 +721,9 @@ func isBKVChargingStatus(status int) bool {
 	return normalizedPortStatusCode(status) == coremodel.StatusCodeCharging
 }
 
-// normalizedPortStatusCode 将端口状态映射到 API 的 2 态模型：
-// 1=空闲/可充电，2=充电中。
-// 无论数据库中存的是原始位图还是旧的 0~3 状态码，只要检测到“充电”位即返回 2，其余一律返回 1。
+// normalizedPortStatusCode 使用核心层统一的 NormalizePortStatus，将数据库中的 0~3 或协议位图还原为标准状态码。
 func normalizedPortStatusCode(status int) coremodel.PortStatusCode {
-	if status >= int(coremodel.StatusCodeOffline) && status <= int(coremodel.StatusCodeFault) {
-		if status == int(coremodel.StatusCodeCharging) {
-			return coremodel.StatusCodeCharging
-		}
-		return coremodel.StatusCodeIdle
-	}
-
-	raw := coremodel.RawPortStatus(uint8(status))
-	if raw.IsCharging() {
-		return coremodel.StatusCodeCharging
-	}
-	return coremodel.StatusCodeIdle
+	return coremodel.NormalizePortStatus(int32(status))
 }
 
 // GetStatusDefinitions 获取状态定义

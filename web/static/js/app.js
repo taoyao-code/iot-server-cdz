@@ -319,8 +319,6 @@ createApp({
                     const responseData = response.data.data || {};
                     rememberOrder(responseData.order_no || orderNo);
                     addLog('成功', '充电启动成功', responseData);
-                    // 刷新设备信息
-                    await refreshData();
                 } else {
                     addLog('错误', `启动充电失败: ${response.data.message}`);
                 }
@@ -328,6 +326,8 @@ createApp({
                 console.error('Failed to start charging:', error);
                 addLog('错误', `启动充电失败: ${error.response?.data?.message || error.message}`);
             } finally {
+                // 点击启动后立即刷新设备状态，确保 third/devices 数据及时更新
+                await refreshData();
                 loading.value = false;
             }
         };
@@ -361,8 +361,6 @@ createApp({
 
                 if (response.data.code === 0) {
                     addLog('成功', '充电已停止', response.data.data || {});
-                    // 刷新设备信息
-                    await refreshData();
                 } else {
                     addLog('错误', `停止充电失败: ${response.data.message}`);
                 }
@@ -370,6 +368,8 @@ createApp({
                 console.error('Failed to stop charging:', error);
                 addLog('错误', `停止充电失败: ${error.response?.data?.message || error.message}`);
             } finally {
+                // 停止充电后立即刷新设备状态，确保 third/devices 数据更新
+                await refreshData();
                 loading.value = false;
             }
         };

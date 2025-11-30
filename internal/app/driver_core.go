@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/taoyao-code/iot-server/internal/coremodel"
+	"github.com/taoyao-code/iot-server/internal/ordersession"
 	"github.com/taoyao-code/iot-server/internal/storage"
 	"github.com/taoyao-code/iot-server/internal/thirdparty"
 	"go.uber.org/zap"
@@ -18,9 +19,10 @@ import (
 // DriverCore 实现 driverapi.EventSink，将协议驱动上报的规范化事件
 // 映射到 CoreRepo / 一致性视图上。当前实现聚焦充电结束事件。
 type DriverCore struct {
-	core   storage.CoreRepo
-	events *thirdparty.EventQueue
-	log    *zap.Logger
+	core         storage.CoreRepo
+	events       *thirdparty.EventQueue
+	log          *zap.Logger
+	orderTracker *ordersession.Tracker
 
 	// sessions 跟踪活跃充电会话，用于防止无效状态升级
 	// key: "devicePhyID:portNo" -> value: sessionStartTime (time.Time)
@@ -34,6 +36,10 @@ func NewDriverCore(core storage.CoreRepo, events *thirdparty.EventQueue, log *za
 		events: events,
 		log:    log,
 	}
+}
+
+func (d *DriverCore) SetOrderTracker(tracker *ordersession.Tracker) {
+	d.orderTracker = tracker
 }
 
 // sessionKey 生成会话跟踪键
@@ -76,6 +82,11 @@ func (d *DriverCore) clearSession(phyID string, portNo int32) {
 // hasActiveSession 检查是否有活跃会话
 // 会话有效期为 chargingSessionTimeout，超时后视为无效
 func (d *DriverCore) hasActiveSession(phyID string, portNo int32) bool {
+	if d.orderTracker != nil {
+		if _, ok := d.orderTracker.Lookup(phyID, int(portNo)); ok {
+			return true
+		}
+	}
 	val, ok := d.sessions.Load(sessionKey(phyID, portNo))
 	if !ok {
 		return false

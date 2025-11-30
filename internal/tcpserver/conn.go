@@ -130,7 +130,7 @@ func (cc *ConnContext) run() {
 
 			// 记录接收到的数据
 			if cc.s.logger != nil {
-				cc.s.logger.Debug("TCP data received",
+				cc.s.logger.Debug("接收到的 TCP 数据",
 					zap.String("remote_addr", cc.c.RemoteAddr().String()),
 					zap.Int("bytes", n),
 				)
