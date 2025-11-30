@@ -468,14 +468,16 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 		if port.PowerW != nil {
 			powerW = *port.PowerW
 		}
-
-		portData := buildPortData(port.PortNo, port.Status, powerW)
+		statusCode := normalizedPortStatusCode(port.Status)
+		portData := buildPortData(port.PortNo, statusCode, powerW)
 		portList = append(portList, portData)
-
-		// 检查是否有充电中的端口
-		if portData["status"] == coremodel.StatusCodeCharging {
+		if statusCode == coremodel.StatusCodeCharging {
 			hasChargingPort = true
 		}
+	}
+	activeOrders := h.collectActiveOrders(devicePhyID, ports)
+	if len(activeOrders) > 0 {
+		hasChargingPort = true
 	}
 
 	// 6. 确定设备整体状态
@@ -493,7 +495,7 @@ func (h *ThirdPartyHandler) GetDevice(c *gin.Context) {
 		"is_online":     isOnline,
 		"status":        deviceStatus,
 		"ports":         portList,
-		"active_orders": []map[string]interface{}{}, // 占位，后续可扩展
+		"active_orders": activeOrders,
 		"registered_at": device.CreatedAt,
 	}
 	if device.LastSeenAt != nil {
@@ -522,13 +524,12 @@ func portMappingStatus(status int) int {
 
 // buildPortData 构建端口完整数据（包含状态信息）
 // 返回的数据直接可供前端使用，无需额外判断
-func buildPortData(portNo int, rawStatus int, powerW int) map[string]interface{} {
-	statusCode := normalizedPortStatusCode(rawStatus)
+func buildPortData(portNo int, statusCode coremodel.PortStatusCode, powerW int) map[string]interface{} {
 	statusInfo := statusCode.ToInfo()
 
 	return map[string]interface{}{
 		"port_no":       portNo,
-		"status":        statusInfo.Code,         // 状态码: 0=离线, 1=空闲, 2=充电中, 3=故障
+		"status":        statusCode,              // 状态码: 0=离线, 1=空闲, 2=充电中, 3=故障
 		"status_name":   statusInfo.Name,         // 状态名: offline/idle/charging/fault
 		"status_text":   statusInfo.DisplayText,  // 显示文本: 设备离线/空闲可用/使用中/故障
 		"can_charge":    statusInfo.CanCharge,    // 能否充电: 只有 status=1 时为 true
@@ -537,7 +538,7 @@ func buildPortData(portNo int, rawStatus int, powerW int) map[string]interface{}
 	}
 }
 
-func (h *ThirdPartyHandler) collectActiveOrders(devicePhyID string, ports []models.Port) []map[string]interface{} {
+func (h *ThirdPartyHandler) collectActiveOrders(devicePhyID string, ports []pgstorage.Port) []map[string]interface{} {
 	if h.orderTracker == nil {
 		return []map[string]interface{}{}
 	}
@@ -634,14 +635,16 @@ func (h *ThirdPartyHandler) ListDevices(c *gin.Context) {
 			if port.PowerW != nil {
 				powerW = *port.PowerW
 			}
-
-			portData := buildPortData(port.PortNo, port.Status, powerW)
+			statusCode := normalizedPortStatusCode(port.Status)
+			portData := buildPortData(port.PortNo, statusCode, powerW)
 			portList = append(portList, portData)
-
-			// 检查是否有充电中的端口
-			if portData["status"] == coremodel.StatusCodeCharging {
+			if statusCode == coremodel.StatusCodeCharging {
 				hasChargingPort = true
 			}
+		}
+		activeOrders := h.collectActiveOrders(device.PhyID, ports)
+		if len(activeOrders) > 0 {
+			hasChargingPort = true
 		}
 
 		// 确定设备状态
@@ -659,7 +662,7 @@ func (h *ThirdPartyHandler) ListDevices(c *gin.Context) {
 			"is_online":     isOnline,
 			"status":        deviceStatus,
 			"ports":         portList,
-			"active_orders": []map[string]interface{}{}, // 占位，后续可扩展
+			"active_orders": activeOrders,
 		}
 		if device.LastSeenAt != nil {
 			deviceData["last_seen_at"] = *device.LastSeenAt
