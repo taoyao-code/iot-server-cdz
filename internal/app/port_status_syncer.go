@@ -102,7 +102,7 @@ func (s *PortStatusSyncer) queryOnlineDevicesPorts(ctx context.Context) {
 	defer rows.Close()
 
 	now := time.Now()
-	devicesQueried := 0
+	portQueries := 0
 
 	for rows.Next() {
 		var deviceID int64
@@ -119,46 +119,76 @@ func (s *PortStatusSyncer) queryOnlineDevicesPorts(ctx context.Context) {
 			continue
 		}
 
-		// 为每个设备下发端口状态查询命令（0x1D）
-		// 注意：这里只查询端口1作为示例，实际应查询所有端口
-		if err := s.queryDevicePort(ctx, deviceID, phyID, 1); err != nil {
-			s.logger.Warn("P1-4: failed to query device port",
+		sockets, err := s.listDeviceSockets(ctx, phyID)
+		if err != nil {
+			s.logger.Warn("P1-4: failed to list device sockets",
 				zap.Int64("device_id", deviceID),
 				zap.String("phy_id", phyID),
 				zap.Error(err))
-		} else {
-			devicesQueried++
+			continue
+		}
+		if len(sockets) == 0 {
+			s.logger.Debug("P1-4: skip query due to missing sockets",
+				zap.Int64("device_id", deviceID),
+				zap.String("phy_id", phyID))
+			continue
+		}
+		for _, socketNo := range sockets {
+			if err := s.queryDeviceSocket(ctx, deviceID, phyID, socketNo); err != nil {
+				s.logger.Warn("P1-4: failed to query device socket",
+					zap.Int64("device_id", deviceID),
+					zap.String("phy_id", phyID),
+					zap.Int("socket_no", socketNo),
+					zap.Error(err))
+				continue
+			}
+			portQueries++
 		}
 	}
 
-	if devicesQueried > 0 {
-		s.statsDeviceQuery += int64(devicesQueried)
-		s.logger.Debug("P1-4: queried online devices ports",
-			zap.Int("devices_queried", devicesQueried))
+	if portQueries > 0 {
+		s.statsDeviceQuery += int64(portQueries)
+		s.logger.Debug("P1-4: queried online device ports",
+			zap.Int("port_queries", portQueries))
 	}
 }
 
-// queryDevicePort 查询单个设备的端口状态
-func (s *PortStatusSyncer) queryDevicePort(ctx context.Context, deviceID int64, phyID string, portNo int) error {
+func (s *PortStatusSyncer) listDeviceSockets(ctx context.Context, phyID string) ([]int, error) {
+	sockets, err := s.repo.ListSocketNosByPhyID(ctx, phyID)
+	if err != nil {
+		return nil, err
+	}
+	return sockets, nil
+}
+
+// queryDeviceSocket 查询单个插座的状态
+func (s *PortStatusSyncer) queryDeviceSocket(ctx context.Context, deviceID int64, phyID string, socketNo int) error {
 	if s.commands == nil {
 		return fmt.Errorf("driver command source not configured")
 	}
 
-	socketNo := int32(portNo)
+	socket := int32(socketNo)
 	biz := coremodel.BusinessNo(fmt.Sprintf("SYNC-%d", time.Now().UnixNano()))
 
 	cmd := &coremodel.CoreCommand{
 		Type:       coremodel.CommandQueryPortStatus,
 		DeviceID:   coremodel.DeviceID(phyID),
-		PortNo:     coremodel.PortNo(portNo),
+		PortNo:     0,
 		BusinessNo: &biz,
 		IssuedAt:   time.Now(),
 		QueryPortStatus: &coremodel.QueryPortStatusPayload{
-			SocketNo: &socketNo,
+			SocketNo: &socket,
 		},
 	}
 
-	if err := s.commands.SendCoreCommand(ctx, cmd); err != nil {
+	commandCtx := ctx
+	var cancel func()
+	if s.queryTimeout > 0 {
+		commandCtx, cancel = context.WithTimeout(ctx, s.queryTimeout)
+		defer cancel()
+	}
+
+	if err := s.commands.SendCoreCommand(commandCtx, cmd); err != nil {
 		return fmt.Errorf("send driver query command: %w", err)
 	}
 

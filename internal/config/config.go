@@ -309,7 +309,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("logging.file.maxAge", 30)
 	v.SetDefault("logging.file.compress", true)
 
-	v.SetDefault("metrics.enable", true)
+	v.SetDefault("metrics.enable", false)
 	v.SetDefault("metrics.path", "/metrics")
 
 	v.SetDefault("database.dsn", "postgres://postgres:postgres@localhost:5432/iot?sslmode=disable")

@@ -141,6 +141,27 @@ func (r *Repository) ListPortsByPhyID(ctx context.Context, phyID string) ([]Port
 	return res, rows.Err()
 }
 
+// ListSocketNosByPhyID 按设备物理ID列出所有插座编号
+func (r *Repository) ListSocketNosByPhyID(ctx context.Context, phyID string) ([]int, error) {
+	rows, err := r.Pool.Query(ctx, `SELECT socket_no FROM gateway_sockets WHERE gateway_id = $1 ORDER BY socket_no`, phyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	sockets := make([]int, 0)
+	for rows.Next() {
+		var socket int
+		if err := rows.Scan(&socket); err != nil {
+			return nil, err
+		}
+		if socket <= 0 {
+			continue
+		}
+		sockets = append(sockets, socket)
+	}
+	return sockets, rows.Err()
+}
+
 // GetOrderByID 根据ID查询订单，包含设备phy_id
 
 func (r *Repository) GetOrderByID(ctx context.Context, id int64) (*Order, error) {

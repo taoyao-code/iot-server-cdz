@@ -141,6 +141,19 @@ func (h *Handlers) sendStatusAck(ctx context.Context, f *Frame, payload *BKVPayl
 
 // (h *Handlers) sendChargingEndAck 发送充电结束ACK
 func (h *Handlers) sendChargingEndAck(ctx context.Context, f *Frame, payload *BKVPayload, socketNo, portNo int, success bool) {
+	if h == nil {
+		return
+	}
+
+	// 控制通道(0x0015)的充电结束上行没有 BKV payload，需直接回复 0x0f ACK
+	if payload == nil {
+		if h.Outbound == nil || f == nil {
+			return
+		}
+		h.send0x0fControlAck(extractDeviceIDOrDefault(f), f.MsgID, success)
+		return
+	}
+
 	var socketPtr *int
 	if socketNo >= 0 {
 		s := socketNo
@@ -208,15 +221,42 @@ func (h *Handlers) ackControlFailure(deviceID string, msgID uint32) {
 }
 
 // ackControlFailureWithSubCmd 下行/上行控制失败时下发 ACK=失败（用于 0x0015）
-// 参数 subCmd 应为触发失败的实际子命令码，确保设备能正确识别ACK类型
+// 参数 subCmd 为触发失败的实际子命令码；协议期望平台回复子命令0x0F的ACK
 func (h *Handlers) ackControlFailureWithSubCmd(deviceID string, msgID uint32, subCmd byte) {
 	if h.Outbound == nil {
 		return
 	}
-	// ACK格式：长度(2B) + 子命令(1B) + 结果(1B)
+	// ACK格式：长度(2B) + 子命令(1B=0x0F) + 结果(1B)
 	// 长度字段值为2（子命令+结果），结果0x00表示失败
-	data := []byte{0x00, 0x02, subCmd, 0x00}
+	const ackSubCmd byte = 0x0F
+	data := []byte{0x00, 0x02, ackSubCmd, 0x00}
 	_ = h.Outbound.SendDownlink(deviceID, 0x0015, msgID, data)
+}
+
+// ackControlSuccessWithSubCmd 上行控制类命令处理成功后回复 ACK=成功（用于 0x0015）
+func (h *Handlers) ackControlSuccessWithSubCmd(deviceID string, msgID uint32, subCmd byte) {
+	if h.Outbound == nil {
+		return
+	}
+	// 长度字段值为2（子命令+结果），子命令按协议固定0x0F，结果0x01表示成功
+	const ackSubCmd byte = 0x0F
+	data := []byte{0x00, 0x02, ackSubCmd, 0x01}
+	_ = h.Outbound.SendDownlink(deviceID, 0x0015, msgID, data)
+}
+
+// send0x0fControlAck 发送控制通道 0x0015 的统一 0x0f ACK
+// success: true=0x01 成功, false=0x00 失败
+func (h *Handlers) send0x0fControlAck(deviceID string, msgID uint32, success bool) {
+	if h.Outbound == nil {
+		return
+	}
+	ack := byte(0x00)
+	if success {
+		ack = 0x01
+	}
+	// 长度(2B) + 子命令(1B) + ACK(1B)
+	data := []byte{0x00, 0x02, 0x0f, ack}
+	h.sendDownlinkReply(deviceID, 0x0015, msgID, data)
 }
 
 // (h *Handlers) validateControlStart 校验 0x07 开始/停止控制参数范围
@@ -506,7 +546,7 @@ func (h *Handlers) handleControlChargingProgress(ctx context.Context, deviceID s
 //
 // 重要：switchFlag=0x01 表示命令执行成功，switchFlag=0x00 表示失败
 // 不能将 switchFlag 当作端口状态位图处理！
-func (h *Handlers) handleControlUplinkStatus(ctx context.Context, deviceID string, socketNo, portNo int, switchFlag byte, businessNo uint16) {
+func (h *Handlers) handleControlUplinkStatus(ctx context.Context, msgID uint32, deviceID string, socketNo, portNo int, switchFlag byte, businessNo uint16) {
 	if deviceID == "" {
 		return
 	}
@@ -524,6 +564,7 @@ func (h *Handlers) handleControlUplinkStatus(ctx context.Context, deviceID strin
 	// switchFlag: 1=命令成功, 0=命令失败
 	// 注意：这不是端口状态位图！
 	if switchFlag == 0x00 {
+		h.send0x0fControlAck(deviceID, msgID, false)
 		// 命令执行失败，记录警告日志，不更新状态，不记录会话
 		zap.L().Warn("control command failed (ACK result=0)",
 			zap.String("device_id", deviceID),
@@ -561,6 +602,8 @@ func (h *Handlers) handleControlUplinkStatus(ctx context.Context, deviceID strin
 				zap.String("order_no", session.OrderNo))
 		}
 	}
+
+	h.send0x0fControlAck(deviceID, msgID, true)
 }
 
 // (h *Handlers) validateChargingEnd 字段校验（插座/端口/时长/能量等基本范围）

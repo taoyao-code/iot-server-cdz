@@ -12,6 +12,7 @@ import (
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 )
 
 var (
@@ -303,12 +304,14 @@ func (t *Tracker) LookupByBusiness(deviceID, businessNo string) (*ActiveSession,
 
 func (t *Tracker) Clear(deviceID string, portNo int) {
 	removedActive := false
-	if t.useRedis() && t.clearActiveRedis(deviceID, portNo) {
-		removedActive = true
-	}
 	key := sessionKey(deviceID, portNo)
 	if val, ok := t.active.Load(key); ok {
-		t.deleteActive(key, val.(*ActiveSession))
+		session := val.(*ActiveSession)
+		t.active.Delete(key)
+		t.bizIndex.Delete(bizKey(session.DeviceID, session.BusinessNo))
+		removedActive = true
+	}
+	if t.useRedis() && t.clearActiveRedis(deviceID, portNo) {
 		removedActive = true
 	}
 	if removedActive {
@@ -347,6 +350,65 @@ func (t *Tracker) ClearPending(deviceID string, portNo int) {
 	if removed {
 		t.observer.Record("clear", "pending")
 	}
+}
+
+func (t *Tracker) LoadPendingFromRedis() error {
+	if !t.useRedis() {
+		return nil
+	}
+	ctx := context.Background()
+	iter := t.redis.Scan(ctx, 0, fmt.Sprintf("%s:pending:*", t.redisPrefix), 0).Iterator()
+	for iter.Next(ctx) {
+		key := iter.Val()
+		data, err := t.redis.Get(ctx, key).Bytes()
+		if err != nil {
+			if err == redis.Nil {
+				continue
+			}
+			return err
+		}
+		session := new(PendingSession)
+		if err := json.Unmarshal(data, session); err != nil {
+			zap.L().Warn("ordersession: skip invalid pending session from redis", zap.String("key", key), zap.Error(err))
+			continue
+		}
+		t.pending.Store(sessionKey(session.DeviceID, session.PortNo), session)
+	}
+	if err := iter.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (t *Tracker) LoadActiveFromRedis() error {
+	if !t.useRedis() {
+		return nil
+	}
+	ctx := context.Background()
+	iter := t.redis.Scan(ctx, 0, fmt.Sprintf("%s:active:*", t.redisPrefix), 0).Iterator()
+	for iter.Next(ctx) {
+		key := iter.Val()
+		data, err := t.redis.Get(ctx, key).Bytes()
+		if err != nil {
+			if err == redis.Nil {
+				continue
+			}
+			return err
+		}
+		session := new(ActiveSession)
+		if err := json.Unmarshal(data, session); err != nil {
+			zap.L().Warn("ordersession: skip invalid active session from redis", zap.String("key", key), zap.Error(err))
+			continue
+		}
+		session.BusinessNo = normalizeBusinessNo(session.BusinessNo)
+		sKey := sessionKey(session.DeviceID, session.PortNo)
+		t.active.Store(sKey, session)
+		t.bizIndex.Store(bizKey(session.DeviceID, session.BusinessNo), sKey)
+	}
+	if err := iter.Err(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (t *Tracker) deleteActive(key string, session *ActiveSession) {

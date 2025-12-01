@@ -341,53 +341,92 @@ func (h *Handlers) HandleControl(ctx context.Context, f *Frame) error {
 
 	if f.IsUplink() {
 		// === 上行命令分发 ===
+		ackSuccess := func() { h.ackControlSuccessWithSubCmd(deviceID, f.MsgID, subCmd) }
+		ackFailure := func() { h.ackControlFailureWithSubCmd(deviceID, f.MsgID, subCmd) }
 		switch subCmd {
 		case 0x02, 0x18:
 			// 充电结束上报（0x02=按时/按量，0x18=按功率）
-			return h.handleControlChargingEndUplink(ctx, f, deviceID, subCmd)
+			if err := h.handleControlChargingEndUplink(ctx, f, deviceID, subCmd); err != nil {
+				ackFailure()
+				return err
+			}
+			ackSuccess()
+			return nil
 
 		case 0x07, 0x17:
 			// 控制命令ACK上行（0x07=按时/按量，0x17=按功率）
 			if len(payload) < 5 {
-				h.ackControlFailureWithSubCmd(deviceID, f.MsgID, subCmd)
+				ackFailure()
 				return fmt.Errorf("control uplink sub_cmd 0x%02x too short: %d", subCmd, len(payload))
 			}
 			switchFlag := payload[0]
 			socketNo := int(payload[1])
 			portNo := int(payload[2])
 			businessNo := binary.BigEndian.Uint16(payload[3:5])
-			h.handleControlUplinkStatus(ctx, deviceID, socketNo, portNo, switchFlag, businessNo)
+			h.handleControlUplinkStatus(ctx, f.MsgID, deviceID, socketNo, portNo, switchFlag, businessNo)
+			ackSuccess()
 			return nil
 
 		case 0x0B:
 			// 刷卡上报
-			return h.handleCardSwipeUplink(ctx, f)
+			if err := h.handleCardSwipeUplink(ctx, f); err != nil {
+				ackFailure()
+				return err
+			}
+			ackSuccess()
+			return nil
 
 		case 0x0C:
 			// 刷卡充电结束
-			return h.handleChargeEndUplink(ctx, f)
+			if err := h.handleChargeEndUplink(ctx, f); err != nil {
+				ackFailure()
+				return err
+			}
+			ackSuccess()
+			return nil
 
 		case 0x0F:
 			// 订单确认
-			return h.handleOrderConfirmUplink(ctx, f)
+			if err := h.handleOrderConfirmUplink(ctx, f); err != nil {
+				ackFailure()
+				return err
+			}
+			ackSuccess()
+			return nil
 
 		case 0x1A:
 			// 余额查询
-			return h.handleBalanceQueryUplink(ctx, f)
+			if err := h.handleBalanceQueryUplink(ctx, f); err != nil {
+				ackFailure()
+				return err
+			}
+			ackSuccess()
+			return nil
 
 		case 0x1B:
 			// 语音配置响应
-			return h.HandleVoiceConfigResponse(ctx, f)
+			if err := h.HandleVoiceConfigResponse(ctx, f); err != nil {
+				ackFailure()
+				return err
+			}
+			ackSuccess()
+			return nil
 
 		case 0x1D:
 			// 查询插座状态响应
-			return h.HandleSocketStateResponse(ctx, f)
+			if err := h.HandleSocketStateResponse(ctx, f); err != nil {
+				ackFailure()
+				return err
+			}
+			ackSuccess()
+			return nil
 
 		default:
 			zap.L().Debug("unknown control uplink sub_cmd",
 				zap.String("device_id", deviceID),
 				zap.Uint8("sub_cmd", subCmd),
 				zap.Int("payload_len", len(payload)))
+			ackFailure()
 			return nil
 		}
 	} else {
@@ -755,7 +794,9 @@ func (h *Handlers) HandleCardSwipe(ctx context.Context, f *Frame) error {
 
 // handleCardSwipeUplink 处理刷卡上报上行
 func (h *Handlers) handleCardSwipeUplink(ctx context.Context, f *Frame) error {
-	// TODO 暂时不需要实现
+	deviceID := extractDeviceIDOrDefault(f)
+	// TODO: 解析刷卡数据并触发业务事件，目前先回 ACK 保证设备不重试
+	h.send0x0fControlAck(deviceID, f.MsgID, true)
 	return nil
 }
 
@@ -801,6 +842,7 @@ func (h *Handlers) handleOrderConfirmUplink(ctx context.Context, f *Frame) error
 		}
 	}
 
+	h.send0x0fControlAck(deviceID, f.MsgID, true)
 	return nil
 }
 
@@ -853,7 +895,9 @@ func (h *Handlers) HandleBalanceQuery(ctx context.Context, f *Frame) error {
 
 // handleBalanceQueryUplink 处理余额查询上行
 func (h *Handlers) handleBalanceQueryUplink(ctx context.Context, f *Frame) error {
-	// TODO 暂时不需要实现
+	deviceID := extractDeviceIDOrDefault(f)
+	// TODO: 解析余额查询数据并回业务，当前先统一回复 ACK
+	h.send0x0fControlAck(deviceID, f.MsgID, true)
 	return nil
 }
 

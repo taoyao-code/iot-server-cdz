@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/taoyao-code/iot-server/internal/api"
 	"github.com/taoyao-code/iot-server/internal/api/middleware"
 	"github.com/taoyao-code/iot-server/internal/app"
@@ -32,8 +34,18 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 	log.Info("starting IOT server", zap.String("version", "1.0.0"))
 
 	// ========== 阶段1: 初始化基础组件 ==========
-	reg, appm := app.NewMetrics()
-	metricsHandler := metrics.Handler(reg)
+	var (
+		reg            *prometheus.Registry
+		appm           *metrics.AppMetrics
+		metricsHandler http.Handler
+	)
+	if cfg.Metrics.Enable {
+		reg, appm = app.NewMetrics()
+		metricsHandler = metrics.Handler(reg)
+		log.Info("metrics enabled", zap.String("path", cfg.Metrics.Path))
+	} else {
+		log.Info("metrics disabled by config")
+	}
 	ready := app.NewReady()
 
 	// 生成服务器实例ID（用于Redis会话管理）
@@ -112,6 +124,13 @@ func Run(cfg *cfgpkg.Config, log *zap.Logger) error {
 		})),
 		ordersession.WithRedisClient(redisClient, "ordersession"),
 	)
+	if err := orderTracker.LoadPendingFromRedis(); err != nil {
+		log.Warn("failed to load pending sessions from redis", zap.Error(err))
+	}
+	if err := orderTracker.LoadActiveFromRedis(); err != nil {
+		log.Warn("failed to load active sessions from redis", zap.Error(err))
+	}
+	log.Info("order sessions loaded from redis")
 	driverCore.SetOrderTracker(orderTracker)
 
 	// v2.1: 注入Metrics支持充电上报监控

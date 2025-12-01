@@ -211,6 +211,13 @@ func (h *ThirdPartyHandler) sendStartChargeViaDriver(
 	durationSec := int32(durationMin) * 60
 	socket := int32(socketNo)
 
+	bizStr, _ := h.resolveBusinessNoForCommand(devicePhyID, portNo, orderNo)
+	var businessPtr *coremodel.BusinessNo
+	if bizStr != "" {
+		biz := coremodel.BusinessNo(bizStr)
+		businessPtr = &biz
+	}
+
 	cmd := &coremodel.CoreCommand{
 		Type:      coremodel.CommandStartCharge,
 		CommandID: fmt.Sprintf("start:%s:%d", orderNo, time.Now().UnixNano()),
@@ -219,7 +226,8 @@ func (h *ThirdPartyHandler) sendStartChargeViaDriver(
 		SocketNo: func() *int32 {
 			return &socket
 		}(),
-		IssuedAt: time.Now(),
+		IssuedAt:   time.Now(),
+		BusinessNo: businessPtr,
 		StartCharge: &coremodel.StartChargePayload{
 			Mode:              fmt.Sprintf("mode_%d", chargeMode),
 			ModeCode:          &modeCode,
@@ -254,6 +262,12 @@ func (h *ThirdPartyHandler) sendStopChargeViaDriver(
 		return fmt.Errorf("驱动程序命令源未配置")
 	}
 	socket := int32(socketNo)
+	orderPort := portNo
+	bizStr, fromTracker := h.resolveBusinessNoForCommand(devicePhyID, orderPort, orderNo)
+	if bizStr == "" || !fromTracker {
+		return fmt.Errorf("未找到订单对应的会话, device=%s port=%d order=%s", devicePhyID, orderPort, orderNo)
+	}
+	biz := coremodel.BusinessNo(bizStr)
 
 	cmd := &coremodel.CoreCommand{
 		Type:      coremodel.CommandStopCharge,
@@ -263,7 +277,8 @@ func (h *ThirdPartyHandler) sendStopChargeViaDriver(
 		SocketNo: func() *int32 {
 			return &socket
 		}(),
-		IssuedAt: time.Now(),
+		IssuedAt:   time.Now(),
+		BusinessNo: &biz,
 		StopCharge: &coremodel.StopChargePayload{
 			Reason: "api_stop_charge",
 		},
@@ -374,6 +389,10 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 		h.respondWithError(c, http.StatusBadRequest, requestID, "port_no 是必填项", nil)
 		return
 	}
+	if *req.PortNo < 0 || *req.PortNo > 1 {
+		h.respondWithError(c, http.StatusBadRequest, requestID, fmt.Sprintf("端口号仅支持A/B端口，请确认端口参数: port_no=%d", *req.PortNo), nil)
+		return
+	}
 
 	run := func() error {
 		socketNo, err := h.resolveSocketNo(ctx, devicePhyID, req.SocketUID)
@@ -389,15 +408,9 @@ func (h *ThirdPartyHandler) StopCharge(c *gin.Context) {
 			return dispatchErr
 		}
 
-		// 🔥 关键修复：停止充电后清除会话
-		// 防止后续状态上报时误判为充电中
-		if h.driverCore != nil {
-			h.driverCore.ClearSession(devicePhyID, int32(*req.PortNo))
-		}
-
 		responseData := map[string]interface{}{
 			"device_id":    devicePhyID,
-			"port_no":      req.PortNo,
+			"port_no":      *req.PortNo,
 			"command_sent": stopSent,
 			"order_no":     orderNo,
 			"status":       "stopping",
@@ -714,6 +727,22 @@ func deriveBusinessNo(orderNo string) uint16 {
 		sum = 1
 	}
 	return uint16(sum)
+}
+
+// resolveBusinessNoForCommand 获取指定端口的业务号，优先使用活跃会话，其次退化为 hash 推导
+func (h *ThirdPartyHandler) resolveBusinessNoForCommand(devicePhyID string, portNo int, orderNo string) (string, bool) {
+	trimmedOrder := strings.TrimSpace(orderNo)
+	if trimmedOrder == "" {
+		return "", false
+	}
+	if h.orderTracker != nil && portNo >= 0 {
+		if session, ok := h.orderTracker.Lookup(devicePhyID, portNo); ok {
+			if session.OrderNo == trimmedOrder && session.BusinessNo != "" {
+				return session.BusinessNo, true
+			}
+		}
+	}
+	return fmt.Sprintf("%04X", deriveBusinessNo(trimmedOrder)), false
 }
 
 // isBKVChargingStatus 判断端口状态位图是否表示充电中
