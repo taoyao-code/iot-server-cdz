@@ -14,8 +14,8 @@ import (
 // @contact.name API Support
 // @contact.email support@example.com
 
-// @license.name Apache 2.0
-// @license.url http://www.apache.org/licenses/LICENSE-2.0.html
+// @license.name MIT
+// @license.url https://opensource.org/licenses/MIT
 
 // @host 182.43.177.92:7055
 // @BasePath /

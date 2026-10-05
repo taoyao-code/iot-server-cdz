@@ -84,7 +84,7 @@ internal/docs
 # 可执行文件
 /bin/
 /cmd/*/main
-./gateway
+/gateway
 gateway.exe
 
 # 二进制文件
@@ -106,7 +106,7 @@ vendor/
 # 构建输出
 dist/
 build/
-server
+/server
 
 # IDE文件
 .vscode/
